@@ -22,6 +22,7 @@ from urllib.parse import parse_qs, quote, urlencode
 from src.paths import kittyhack_root
 
 USERS_FILE = os.path.join(kittyhack_root(), "users_auth.json")
+SESSIONS_FILE = os.path.join(kittyhack_root(), "sessions.json")
 SESSION_COOKIE = "kittyhack_session"
 SESSION_TTL_S = 12 * 3600  # 12 hours
 
@@ -31,8 +32,37 @@ _AUTH_FAIL_MAX = 10
 _auth_fail_log: dict[str, list[float]] = {}
 _auth_fail_lock = threading.Lock()
 
-_sessions: dict[str, dict] = {}
+# 07.09, Sid: kept in memory only at first - every container restart (and
+# there were many, while iterating on other fixes) silently logged everyone
+# out with no explanation. Persisted to SESSIONS_FILE (gitignored, wall-clock
+# timestamps so expiry survives a restart) so a restart no longer forces a
+# fresh login.
 _sessions_lock = threading.Lock()
+
+
+def _load_sessions() -> dict[str, dict]:
+    if not os.path.exists(SESSIONS_FILE):
+        return {}
+    try:
+        with open(SESSIONS_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:
+        logging.warning(f"[WEBAUTH] Failed to read {SESSIONS_FILE}: {e}")
+        return {}
+
+
+def _save_sessions(sessions: dict[str, dict]) -> None:
+    tmp = SESSIONS_FILE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(sessions, f)
+    os.replace(tmp, SESSIONS_FILE)
+    try:
+        os.chmod(SESSIONS_FILE, 0o600)
+    except Exception:
+        pass
+
+
+_sessions: dict[str, dict] = _load_sessions()
 
 PBKDF2_ITERATIONS = 600_000
 
@@ -124,7 +154,8 @@ def _record_fail(ip: str) -> None:
 def _new_session(username: str) -> str:
     token = secrets.token_urlsafe(32)
     with _sessions_lock:
-        _sessions[token] = {"username": username, "created_at": time.monotonic()}
+        _sessions[token] = {"username": username, "created_at": time.time()}
+        _save_sessions(_sessions)
     return token
 
 
@@ -135,8 +166,9 @@ def _session_username(token: str | None) -> str | None:
         session = _sessions.get(token)
         if not session:
             return None
-        if time.monotonic() - session["created_at"] > SESSION_TTL_S:
+        if time.time() - session["created_at"] > SESSION_TTL_S:
             del _sessions[token]
+            _save_sessions(_sessions)
             return None
         return session["username"]
 
@@ -145,7 +177,8 @@ def _drop_session(token: str | None) -> None:
     if not token:
         return
     with _sessions_lock:
-        _sessions.pop(token, None)
+        if _sessions.pop(token, None) is not None:
+            _save_sessions(_sessions)
 
 
 def _parse_cookies(scope) -> dict[str, str]:

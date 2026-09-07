@@ -19,6 +19,7 @@ notifications.json
 api_tokens.json
 users_auth.json
 watchdog_token.json
+sessions.json
 ignore_*
 .vscode/settings.json
 config.remote.ini

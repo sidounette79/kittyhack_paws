@@ -1424,10 +1424,27 @@ def backend_main(
             
             manual_door_override['unlock_outside'] = False
 
+        # 07.09, Sid: manual_door_override['lock_outside'] was set by the REST
+        # API/MQTT (src/api.py's door_lock_outside) but never read anywhere in
+        # this loop - the flag was set and silently forgotten, so "lock
+        # outside" from the UI/API never actually reached the magnet. Only
+        # the automatic max-unlock-time timeout (below) ever locked it.
+        if manual_door_override['lock_outside']:
+            if magnets.get_outside_state():
+                logging.info("[BACKEND] Manual override: Locking outside door")
+                magnets.empty_queue()
+                magnets.queue_command("lock_outside")
+                _timeline_log_outside_close()
+            else:
+                logging.info("[BACKEND] Manual override: Outside door is already locked.")
+
+            manual_door_override['lock_outside'] = False
+
         if manual_door_override['lock_inside']:
             if magnets.get_inside_state():
                 logging.info("[BACKEND] Manual override: Locking inside door")
                 magnets.empty_queue()
+                magnets.queue_command("lock_inside")
                 _timeline_log_inside_close(TimelineAction.INSIDE_CLOSED_MANUAL)
             else:
                 logging.info("[BACKEND] Manual override: Inside door is already locked.")
