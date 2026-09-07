@@ -32,6 +32,12 @@ class RemoteStates:
 class RemoteControlClient:
     _instance: "RemoteControlClient | None" = None
 
+    # State frames arrive at ~10Hz when connected, so a genuinely-delivered
+    # magnet command is confirmed within ~100-200ms. Anything still "pending"
+    # well past that has been lost in transit, not just slow - treat it as
+    # failed and allow a resend instead of silently ignoring the next click.
+    PENDING_MAGNET_COMMAND_STALE_S = 2.0
+
     def __init__(self) -> None:
         self._thread: threading.Thread | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -45,7 +51,13 @@ class RemoteControlClient:
         self._control_acquired = False
         self._client_id = f"remote_{int(time.time())}"
         self._missing_target_host_logged = False
-        self._pending_magnet_commands: set[str] = set()
+        # cmd -> monotonic time it was queued. A plain set here silently
+        # swallowed retries forever if the very first send never reached the
+        # target (07.09, Sid: clicked "close", nothing happened for 10s+ -
+        # the lock command had been dropped in transit and, since it was
+        # already marked pending, every later click was a no-op with no
+        # retry and no error shown). See PENDING_MAGNET_COMMAND_STALE_S below.
+        self._pending_magnet_commands: dict[str, float] = {}
         self._manual_disconnect = threading.Event()
 
         self._sync_tmp_path: str | None = None
@@ -167,10 +179,17 @@ class RemoteControlClient:
         if cmd not in {"unlock_inside", "lock_inside", "unlock_outside", "lock_outside"}:
             return
 
+        now = monotonic_time()
         with self._lock:
-            if cmd in self._pending_magnet_commands:
+            queued_at = self._pending_magnet_commands.get(cmd)
+            if queued_at is not None and (now - queued_at) < self.PENDING_MAGNET_COMMAND_STALE_S:
                 return
-            self._pending_magnet_commands.add(cmd)
+            if queued_at is not None:
+                logging.warning(
+                    f"[REMOTE_CTRL] Magnet command '{cmd}' was still pending after "
+                    f"{now - queued_at:.1f}s with no confirmation - resending."
+                )
+            self._pending_magnet_commands[cmd] = now
 
         self._send_async({"type": "magnet", "command": cmd})
 
@@ -528,14 +547,14 @@ class RemoteControlClient:
 
                 # Resolve local pending magnet commands once target state reflects them.
                 if self._states.lock_inside_unlocked:
-                    self._pending_magnet_commands.discard("unlock_inside")
+                    self._pending_magnet_commands.pop("unlock_inside", None)
                 else:
-                    self._pending_magnet_commands.discard("lock_inside")
+                    self._pending_magnet_commands.pop("lock_inside", None)
 
                 if self._states.lock_outside_unlocked:
-                    self._pending_magnet_commands.discard("unlock_outside")
+                    self._pending_magnet_commands.pop("unlock_outside", None)
                 else:
-                    self._pending_magnet_commands.discard("lock_outside")
+                    self._pending_magnet_commands.pop("lock_outside", None)
 
                 tag = data.get("rfid_tag")
                 ts = data.get("rfid_timestamp")
