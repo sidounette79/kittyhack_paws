@@ -4,6 +4,7 @@ from src.server import server
 import os
 from src.paths import pictures_thumbnails_dir, pictures_original_dir
 from src.api import ApiMiddleware
+from src.webauth import WebAuthMiddleware
 
 path_www = os.path.join(os.path.dirname(__file__), "www")
 path_doc_diagrams = os.path.join(os.path.dirname(__file__), "doc", "diagrams")
@@ -61,7 +62,17 @@ shiny_app = App(
 )
 
 # Middleware chain (outermost first, evaluated top-down on each request):
-#   ApiMiddleware       -> captures /api/v1/* and serves the REST API
+#   WebAuthMiddleware    -> username/password session gate for the human UI
+#                           (passes /api/v1/* straight through, untouched)
+#   ApiMiddleware        -> captures /api/v1/* and serves the REST API
 #   TabRoutingMiddleware -> rewrites tab paths (/pictures/..., /system/...) to "/"
-#   shiny_app           -> the SPA + static asset mounts
-app = ApiMiddleware(TabRoutingMiddleware(shiny_app))
+#   shiny_app            -> the SPA + static asset mounts
+#
+# 07.09, Sid: Kittyhack ships with no UI login at all — anyone who can reach
+# the URL can view the camera and control the flap. Temporary passwords
+# ("admin") are seeded on first run only (users_auth.json, gitignored) —
+# change them from day one via src.webauth.set_password().
+app = WebAuthMiddleware(
+    ApiMiddleware(TabRoutingMiddleware(shiny_app)),
+    seed_users={"sidounette": "admin", "xacarr": "admin"},
+)
