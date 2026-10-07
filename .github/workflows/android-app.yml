@@ -65,7 +65,29 @@ jobs:
 
       - name: Decode signing keystore
         if: ${{ env.KITTYHACK_KEYSTORE_BASE64 != '' }}
-        run: echo "$KITTYHACK_KEYSTORE_BASE64" | base64 -d > android/app/kittyhack-release.jks
+        env:
+          KITTYHACK_KEY_ALIAS: ${{ secrets.KITTYHACK_KEY_ALIAS }}
+          KITTYHACK_KEYSTORE_PASSWORD: ${{ secrets.KITTYHACK_KEYSTORE_PASSWORD }}
+        # 07.10, Sid (first real attempt after she added the 4 secrets
+        # failed right here): the secret is almost certainly fine - the
+        # most common real cause is copy-paste whitespace (a trailing
+        # newline, or line-wrapping) in the pasted base64, which GNU
+        # base64 -d normally tolerates but is worth stripping defensively
+        # anyway. The actual fix is verifying the decode succeeded at all,
+        # with a clear message, instead of silently producing a 0-byte or
+        # garbage file that only fails much later at the Gradle signing
+        # step with a far less obvious error.
+        run: |
+          echo "$KITTYHACK_KEYSTORE_BASE64" | tr -d '[:space:]' | base64 -d > android/app/kittyhack-release.jks
+          size=$(stat -c%s android/app/kittyhack-release.jks 2>/dev/null || echo 0)
+          echo "Decoded keystore size: ${size} bytes"
+          if [ "$size" -lt 100 ]; then
+            echo "::error::Decoded keystore is suspiciously small (${size} bytes) - KITTYHACK_KEYSTORE_BASE64 secret is likely wrong/corrupted."
+            exit 1
+          fi
+          keytool -list -keystore android/app/kittyhack-release.jks \
+            -storepass "$KITTYHACK_KEYSTORE_PASSWORD" -alias "$KITTYHACK_KEY_ALIAS" \
+            || { echo "::error::keytool could not read the decoded keystore with the given alias/password - check KITTYHACK_KEYSTORE_PASSWORD/KITTYHACK_KEY_ALIAS secrets."; exit 1; }
 
       - name: Sync Capacitor
         run: node node_modules/.bin/cap sync android
