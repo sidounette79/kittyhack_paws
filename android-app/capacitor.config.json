@@ -1,0 +1,12 @@
+{
+  "appId": "ch.sidounette.kittyhack",
+  "appName": "Kittyhack",
+  "webDir": "www",
+  "server": {
+    "url": "https://paws.sidounette.ch",
+    "cleartext": false
+  },
+  "android": {
+    "allowMixedContent": false
+  }
+}

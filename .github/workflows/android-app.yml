@@ -1,0 +1,58 @@
+name: Build Kittyhack Android app
+
+# 07.10, Sid: real native Android builds (Gradle/Android SDK) must never run
+# on the NAS - same lesson already learned the hard way with Moonfin/CARBA
+# TV, which build via GitHub Actions exclusively. This workflow is the only
+# place `gradlew assembleDebug` should ever run for this project.
+
+on:
+  push:
+    paths:
+      - "android-app/**"
+      - ".github/workflows/android-app.yml"
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: android-app
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install JS dependencies
+        run: npm ci
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "21"
+
+      - name: Decode google-services.json
+        # Requires a repo secret GOOGLE_SERVICES_JSON holding the base64
+        # content of the Firebase-generated google-services.json (Settings
+        # > Secrets and variables > Actions). Firebase project setup itself
+        # is a manual step Sid has to do in the Firebase console - see the
+        # project README/report for exact steps.
+        if: ${{ env.GOOGLE_SERVICES_JSON != '' }}
+        env:
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+        run: echo "$GOOGLE_SERVICES_JSON" | base64 -d > android/app/google-services.json
+
+      - name: Sync Capacitor
+        run: node node_modules/.bin/cap sync android
+
+      - name: Build debug APK
+        working-directory: android-app/android
+        run: ./gradlew assembleDebug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: kittyhack-debug-apk
+          path: android-app/android/app/build/outputs/apk/debug/app-debug.apk

@@ -23,6 +23,8 @@ sessions.json
 watchdog_secrets.json
 vapid_private_key.pem
 webpush_subscriptions.json
+fcm_service_account.json
+fcm_tokens.json
 ignore_*
 .vscode/settings.json
 config.remote.ini
