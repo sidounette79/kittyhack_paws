@@ -8,6 +8,21 @@ If you find bugs or have ideas, please use the GitHub issue tracker.
 
 ---
 
+## About this fork
+
+This is a personal fork of the original [floppyFK/kittyhack](https://github.com/floppyFK/kittyhack), built in **remote mode** for daily real-world use. On top of upstream, it adds:
+
+- **Native Web Push notifications** (entry/exit/prey, with a captured photo) straight from the browser/PWA — works without Home Assistant.
+- **Username/password login** for the web UI.
+- **Retroactive AI model review**: re-runs the active model against already-tagged photos and flags disagreements for review, so a newly trained model can be audited instead of trusted blindly.
+- **Multi-camera outdoor watchdog**: correlates up to several external IP cameras with flap events into one combined timeline ("Parcours"), plus a simpler flat "Chronology" view and per-cat filtered history (entries, exits, prey blocked, glances...).
+- **Mobile-first UI pass**: a fixed bottom navigation bar, direct in-place photo correction (click a detection to confirm/correct it), and various real bug fixes around cat identity detection (a cat with per-cat prey detection disabled was silently excluded from several views) and notification wording.
+- **French translation**, in addition to the existing English/German.
+
+Everything above is specific to this fork and not part of upstream Kittyhack - no pull requests are planned against the original project, this is kept as an independent, personal branch. Expect the setup instructions below (written for upstream) to need adapting if you want to run this fork specifically.
+
+---
+
 ## What you can do with Kittyhack
 
 - **Control who may enter/exit** (global rules or **individual rules per cat**)
