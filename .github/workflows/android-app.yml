@@ -38,8 +38,10 @@ jobs:
         # content of the Firebase-generated google-services.json (Settings
         # > Secrets and variables > Actions). Firebase project setup itself
         # is a manual step Sid has to do in the Firebase console - see the
-        # project README/report for exact steps.
-        if: ${{ env.GOOGLE_SERVICES_JSON != '' }}
+        # project README/report for exact steps. Skipped (not failed) until
+        # that secret exists - the build will still run, just without a
+        # working push-notifications plugin until Firebase is wired in.
+        if: ${{ secrets.GOOGLE_SERVICES_JSON != '' }}
         env:
           GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
         run: echo "$GOOGLE_SERVICES_JSON" | base64 -d > android/app/google-services.json
@@ -49,7 +51,13 @@ jobs:
 
       - name: Build debug APK
         working-directory: android-app/android
-        run: ./gradlew assembleDebug
+        # chmod defensively - a committed gradlew losing +x (e.g. a NAS
+        # filesystem not preserving the bit, or a git clone on a mode-
+        # insensitive filesystem) is a real failure mode already hit once
+        # setting this up, not a hypothetical.
+        run: |
+          chmod +x ./gradlew
+          ./gradlew assembleDebug
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
