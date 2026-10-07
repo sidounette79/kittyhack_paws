@@ -190,11 +190,15 @@ class RemoteModelTrainer:
         url = f"{RemoteModelTrainer.BASE_URL}/upload"
         files = {'file': open(zip_file_path, 'rb')}
         variant = str(yolo_model_variant or "n").strip().lower()
-        if variant not in {"n", "s", "m", "l", "x"}:
+        if variant not in {"n", "s", "m", "l", "x", "26n", "26s", "26m", "26l", "26x"}:
             variant = "n"
 
         image_size_int = YoloModel._normalize_model_image_size(image_size)
-        pretrained_model = f"yolov8{variant}.pt"
+        # "26n".."26x" -> yolo26n.pt.."yolo26x.pt" (new generation); "n".."x" -> yolov8n.pt.."yolov8x.pt".
+        if variant.startswith("26"):
+            pretrained_model = f"yolo{variant}.pt"
+        else:
+            pretrained_model = f"yolov8{variant}.pt"
 
         data = {
             'username': user_name,
@@ -510,12 +514,51 @@ class RemoteModelTrainer:
                         update_single_config_parameter("MODEL_TRAINING")
                     except Exception as e:
                         logging.warning(f"[MODEL_TRAINING] Failed to clear MODEL_TRAINING after download: {e}")
+
+                    # 05.10, Sid ("j'oublie de changer"): auto-activate the
+                    # model that was JUST extracted - it's unambiguously the
+                    # newest directory under models_yolo_root() right now,
+                    # since extraction only just finished. Same sequence as
+                    # the manual "Activate" button (yolo_modules.py's
+                    # activate_yolo_model_server): set YOLO_MODEL + clear any
+                    # TFLITE_MODEL_VERSION override, persist both, hot-reload.
+                    activated_ok = False
                     try:
+                        # Deferred import - src.backend pulls in src.model at
+                        # import time (model_runtime.py), and src.model.__init__
+                        # imports THIS module (RemoteModelTrainer) - a top-level
+                        # import here would be circular and crash the app at
+                        # startup (confirmed for real: ImportError at boot,
+                        # 05.10). By the time this function actually runs,
+                        # both modules are already fully loaded.
+                        from src.backend import reload_model_handler_runtime
+                        models = sorted(
+                            YoloModel.get_model_list() or [],
+                            key=lambda m: m.get("directory") or "",
+                        )
+                        newest = models[-1] if models else None
+                        new_unique_id = (newest or {}).get("unique_id")
+                        if new_unique_id:
+                            CONFIG["YOLO_MODEL"] = new_unique_id
+                            CONFIG["TFLITE_MODEL_VERSION"] = ""
+                            update_single_config_parameter("YOLO_MODEL")
+                            update_single_config_parameter("TFLITE_MODEL_VERSION")
+                            activated_ok, _handler = reload_model_handler_runtime()
+                    except Exception as e:
+                        logging.warning(f"[MODEL_TRAINING] Auto-activation of the new model failed: {e}")
+
+                    try:
+                        if activated_ok:
+                            msg = _(
+                                "Model training completed - the new model was downloaded and activated automatically."
+                            )
+                        else:
+                            msg = _(
+                                "Model training completed and the new model was downloaded successfully. You can activate it right here in the 'Model Management' section below."
+                            )
                         UserNotifications.add(
                             header=_("Model downloaded"),
-                            message=_(
-                                "Model training completed and the new model was downloaded successfully. You can select it now in the 'Configuration' section."
-                            ),
+                            message=msg,
                             type="message",
                             id=f"model_download_success_{dl_state.get('result_id')}",
                             skip_if_id_exists=True,

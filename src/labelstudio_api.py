@@ -18,9 +18,12 @@ from src.baseconfig import CONFIG
 class LabelStudioAPI:
     """Token-authenticated client for a local Label Studio instance."""
     
-    # Default Label Studio instance on localhost
-    DEFAULT_HOST = "127.0.0.1"
-    DEFAULT_PORT = 8080
+    # Default Label Studio instance on localhost. Overridable via env vars so
+    # a remote-mode Docker deployment can point at a sibling container
+    # (e.g. KITTYHACK_LABELSTUDIO_HOST=labelstudio) instead of 127.0.0.1,
+    # since Label Studio isn't installed in-process there (no systemd).
+    DEFAULT_HOST = os.environ.get("KITTYHACK_LABELSTUDIO_HOST", "127.0.0.1")
+    DEFAULT_PORT = int(os.environ.get("KITTYHACK_LABELSTUDIO_PORT", "8080"))
     DEFAULT_TOKEN_ENV_VARS = (
         "KITTYHACK_LABELSTUDIO_API_TOKEN",
         "LABEL_STUDIO_API_KEY",
@@ -362,10 +365,19 @@ class LabelStudioAPI:
         return None
 
     def _get_all_tasks(self, project_id: int) -> List[Dict[str, Any]]:
-        """Fetch all tasks for a project (paginated)."""
+        """Fetch all tasks for a project (paginated).
+
+        05.10, Sid ("images manquantes dans l'export YOLO" - only 98/1507
+        bundled): confirmed live that this project's /api/tasks response
+        never populates "next" (always None, even with 1506 total and only
+        100 returned) - the old loop treated that as "no more pages" and
+        silently stopped after the first one every time. Pacing by `total`
+        instead, which this endpoint does populate correctly.
+        """
         tasks: List[Dict[str, Any]] = []
         page = 1
         page_size = 100
+        total = None
         while True:
             resp = self.session.get(
                 f"{self.base_url}/api/tasks",
@@ -381,9 +393,22 @@ class LabelStudioAPI:
             if not chunk:
                 break
             tasks.extend(chunk)
-            if isinstance(body, dict) and body.get("next"):
-                page += 1
+            if isinstance(body, dict):
+                if total is None:
+                    total = body.get("total")
+                if total is not None and len(tasks) >= total:
+                    break
+                if body.get("next"):
+                    page += 1
+                    continue
+                if total is not None and len(tasks) < total:
+                    # "next" absent/false but we're still short of the known
+                    # total (this endpoint's actual behavior) - keep going.
+                    page += 1
+                    continue
+                break
             else:
+                # Plain list response, no pagination metadata at all.
                 break
         logging.debug(f"[LABELSTUDIO] Fetched {len(tasks)} tasks")
         return tasks
@@ -572,6 +597,165 @@ class LabelStudioAPI:
             logging.error(f"[LABELSTUDIO] Error getting project details: {e}")
             return None
     
+    def upload_image_with_correction(
+        self,
+        project_id: int,
+        image_bytes: bytes,
+        filename: str,
+        label: Optional[str],
+        x: float,
+        y: float,
+        width: float,
+        height: float,
+    ) -> bool:
+        """Upload one image as a task, then attach a real annotation (box) if
+        ``label`` is given (matches this project's RectangleLabels config:
+        from_name="label", to_name="image" - see ai_training.py export button).
+
+        04.10, Sid ("le bouton pour envoyer les corrections"): tested live against
+        the real project - the import endpoint doesn't return a task id directly,
+        so the created task is found by asking for the single last page (the import
+        above is synchronous, so it's reliably the newest task at that point).
+
+        05.10, Sid ("le non besoin de les valider" / "208 images sans
+        etiquette"): ``label`` is None for a "none"/false-positive
+        correction. Used to still upload the image with no box - tested
+        live and confirmed Label Studio NEVER counts a task as "annotated"
+        for its training-readiness gate unless it has at least one
+        non-empty annotation result, even for a human-submitted empty
+        annotation. A false-positive correction can therefore never satisfy
+        that gate no matter what gets posted - so it's not uploaded to
+        Label Studio at all; the correction is already fully recorded in
+        Kittyhack's own detection_feedback table, which is what matters.
+        """
+        if label is None:
+            return True
+
+        if not self.is_authenticated():
+            logging.error("[LABELSTUDIO] Not authenticated")
+            return False
+
+        try:
+            import_url = f"{self.base_url}/api/projects/{int(project_id)}/import"
+            files = {"file": (filename, image_bytes, "image/jpeg")}
+            response = self.session.post(
+                import_url,
+                headers=self._auth_headers(),
+                files=files,
+                timeout=max(self.timeout, 30),
+            )
+            if response.status_code not in (200, 201):
+                logging.warning(
+                    f"[LABELSTUDIO] Upload failed: HTTP {response.status_code} — {response.text[:200]}"
+                )
+                return False
+
+            # 05.10, Sid ("les non étiquetées augmentent" - the earlier
+            # file_upload_id fix never actually worked, confirmed live: 100%
+            # of a 50-item batch logged "could not locate its task", and the
+            # two real causes were found by testing directly against this
+            # Label Studio instance's API, not assumed:
+            #   1) `ordering`/plain field filters on /api/tasks are silently
+            #      ignored here (verified: -id, -created_at, id, and a
+            #      file_upload= filter all returned the identical task 1-3,
+            #      while `page=` DOES work) - so "the last page" was always
+            #      the FIRST page, never the newest task.
+            #   2) file_upload_ids[0] is a numeric id (e.g. 2037); the
+            #      task's own `file_upload` field is a STRING filename
+            #      ("313024ec-20241113_190045.jpg") - comparing them was
+            #      comparing an int to a string, which can never match even
+            #      when the right page is fetched.
+            # Fix: resolve the numeric id to its real filename via the
+            # file-uploads endpoint, and fetch the TRUE last page (computed
+            # from the live `total`, since page_size/ordering don't lie -
+            # only `ordering` is the broken one) rather than trusting
+            # `ordering=-id` to put it on page 1.
+            file_upload_ids = response.json().get("file_upload_ids") or []
+            if not file_upload_ids:
+                logging.warning("[LABELSTUDIO] Uploaded image but got no file_upload_id back.")
+                return True
+            target_file_upload_id = file_upload_ids[0]
+
+            fu_resp = self.session.get(
+                f"{self.base_url}/api/projects/{int(project_id)}/file-uploads",
+                headers=self._auth_headers(),
+                params={"ids": f"[{target_file_upload_id}]"},
+                timeout=self.timeout,
+            )
+            fu_list = fu_resp.json() if fu_resp.status_code == 200 else []
+            target_filename = None
+            if fu_list:
+                target_filename = fu_list[0].get("file", "").rsplit("/", 1)[-1]
+            if not target_filename:
+                logging.warning("[LABELSTUDIO] Uploaded image but could not resolve its file-upload filename.")
+                return True
+
+            page_size = 20
+            task_id = None
+            for _attempt in range(5):
+                count_resp = self.session.get(
+                    f"{self.base_url}/api/tasks",
+                    headers=self._auth_headers(),
+                    params={"project": int(project_id), "page": 1, "page_size": 1},
+                    timeout=self.timeout,
+                )
+                total = count_resp.json().get("total", 0) if count_resp.status_code == 200 else 0
+                last_page = max(1, -(-total // page_size))  # ceil division
+                tresp = self.session.get(
+                    f"{self.base_url}/api/tasks",
+                    headers=self._auth_headers(),
+                    params={"project": int(project_id), "page": last_page, "page_size": page_size, "fields": "all"},
+                    timeout=self.timeout,
+                )
+                tasks = tresp.json().get("tasks", []) if tresp.status_code == 200 else []
+                match = next((t for t in tasks if t.get("file_upload") == target_filename), None)
+                if match:
+                    task_id = match["id"]
+                    break
+                time.sleep(0.3)
+
+            if task_id is None:
+                logging.warning("[LABELSTUDIO] Uploaded image but could not locate its task afterwards.")
+                return True  # image is in Label Studio either way
+            # 05.10, Sid ("introduire comme deja validee dans Label Studio" -
+            # the per-task review queue was the slow part): post a real
+            # ANNOTATION, not a prediction. A prediction is a suggestion she
+            # still has to open and accept one by one; an annotation is what
+            # upload_augmented.py/augment_recent_rebalance.py already post
+            # directly for the rebalancing batches (295/295, 0 failures) -
+            # Label Studio treats the task as done immediately, no review
+            # queue. The human correction IS the ground truth already, so
+            # there's nothing left to "predict".
+            annotation_payload = {
+                "result": [{
+                    "from_name": "label",
+                    "to_name": "image",
+                    "type": "rectanglelabels",
+                    "value": {
+                        "x": float(x), "y": float(y),
+                        "width": float(width), "height": float(height),
+                        "rotation": 0,
+                        "rectanglelabels": [label],
+                    },
+                }],
+            }
+            ann_resp = self.session.post(
+                f"{self.base_url}/api/tasks/{task_id}/annotations/",
+                headers=self._auth_headers(),
+                json=annotation_payload,
+                timeout=self.timeout,
+            )
+            if ann_resp.status_code not in (200, 201):
+                logging.warning(
+                    f"[LABELSTUDIO] Image uploaded but attaching the correction box failed: "
+                    f"HTTP {ann_resp.status_code} — {ann_resp.text[:200]}"
+                )
+            return True
+
+        except Exception as e:
+            logging.error(f"[LABELSTUDIO] Error uploading corrected image: {e}")
+            return False
+
     def upload_image(self, project_id: int, image_bytes: bytes, filename: str) -> bool:
         """Upload one image as a new task in the project."""
         if not self.is_authenticated():
@@ -725,3 +909,50 @@ def upload_image_to_labelstudio_project(
     except Exception as e:
         logging.error(f"[LABELSTUDIO] Error uploading image to project: {e}")
         return False
+
+
+def export_corrections_to_labelstudio(
+    corrections: List[Dict[str, Any]],
+    project_id: int,
+    host: str = LabelStudioAPI.DEFAULT_HOST,
+    port: int = LabelStudioAPI.DEFAULT_PORT,
+    token: Optional[str] = None,
+) -> List[int]:
+    """04.10, Sid ("le bouton pour envoyer les corrections"): push a batch of
+    human-reviewed detections to Label Studio as pre-annotated tasks, one
+    authenticated session for the whole batch. Each item in ``corrections``:
+    {"id": detection_feedback.id, "image_bytes": bytes, "filename": str,
+    "label": str | None, "x", "y", "width", "height": float}. Returns the
+    ``id``s that uploaded successfully, so the caller can mark only those as
+    exported - a failure partway through still leaves a correct retry queue.
+    """
+    succeeded: List[int] = []
+    if not corrections:
+        return succeeded
+
+    if not LabelStudioAPI.is_labelstudio_available(host, port):
+        logging.warning("[LABELSTUDIO] Label Studio is not available")
+        return succeeded
+
+    api = LabelStudioAPI(host=host, port=port)
+    if not api.authenticate(token=token):
+        logging.error("[LABELSTUDIO] Failed to authenticate with Label Studio")
+        return succeeded
+
+    try:
+        for item in corrections:
+            ok = api.upload_image_with_correction(
+                project_id,
+                item["image_bytes"],
+                item["filename"],
+                item.get("label"),
+                item["x"], item["y"], item["width"], item["height"],
+            )
+            if ok:
+                succeeded.append(item["id"])
+            else:
+                logging.warning(f"[LABELSTUDIO] Export failed for correction id {item['id']}, will retry later.")
+    finally:
+        api.close()
+
+    return succeeded

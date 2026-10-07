@@ -3,6 +3,8 @@
 import os
 import time as tm
 import tempfile
+import threading
+import pandas as pd
 from src.clock import monotonic_time
 from shiny import render, ui, reactive
 import logging
@@ -24,8 +26,11 @@ from src.labelstudio_api import (
     get_labelstudio_projects_list,
     export_labelstudio_project_as_zip,
     get_labelstudio_project_task_summary,
+    export_corrections_to_labelstudio,
 )
+from src.database import DetectionFeedbackRepo, EventsRepo, ModelReviewRepo, CatsRepo
 from src.model import YoloModel, RemoteModelTrainer
+from src.model.retroactive_review import run_retroactive_review_batch
 from src.shiny_wrappers import uix
 from src.server_ui.state import (
     reload_trigger_ai,
@@ -49,10 +54,35 @@ from src.server_ui.yolo_modules import (
     manage_yolo_model_server,
     activate_yolo_model_server,
 )
+from src.server_ui.model_review_modules import (
+    btn_model_review_keep_old,
+    btn_model_review_confirm_new,
+    picker_model_review_other,
+    model_review_row_server,
+)
+
+
+# 06.10, Sid ("4 passages de chatière sans aucune notif"): module-level,
+# process-wide lock - NOT the per-session reactive.Value below. Confirmed
+# live in the logs: 5 "Loading a standalone copy of the active model"
+# launches stacked up between 06:20 and 07:20 with only ONE "Pilot done" in
+# between, almost certainly because reloading the page (or a second tab)
+# gets a brand-new Shiny session, and model_review_running is re-created
+# False for that new session even while the OLD session's scan is still
+# running in its own background thread - the per-session guard genuinely
+# cannot see across sessions. 5 full YOLO model instances fighting for 4
+# CPU cores for an hour is a very plausible reason real-time detection (and
+# therefore notifications) got starved. This lock is shared by every
+# session in the process, so a second "Scan everything" click from ANY tab
+# is refused outright instead of stacking.
+_model_review_process_lock = threading.Lock()
 
 
 def register_ai_training(input, output, session, ctx: SessionContext):
     """Register AI Training / Label Studio tab handlers."""
+
+    model_review_running = reactive.Value(False)
+    model_review_last_result = reactive.Value(None)
 
     @output
     @render.ui
@@ -78,8 +108,14 @@ def register_ai_training(input, output, session, ctx: SessionContext):
                             icon=icon_svg("stop"),
                         ),
                         ui.HTML(
-                            ' <a href="http://{}:8080" target="_blank" class="btn btn-default">{}</a>'.format(
-                                SystemInfo.get_current_ip(), _("Open Label Studio")
+                            ' <a href="http://{}:{}" target="_blank" class="btn btn-default">{}</a>'.format(
+                                # get_current_ip() reads the wlan0 interface, which only
+                                # exists on the physical Kittyflap - meaningless inside
+                                # this Docker container, so prefer the explicit override.
+                                os.environ.get("KITTYHACK_LABELSTUDIO_EXTERNAL_HOST")
+                                or SystemInfo.get_current_ip(),
+                                os.environ.get("KITTYHACK_LABELSTUDIO_EXTERNAL_PORT", "8080"),
+                                _("Open Label Studio"),
                             )
                         ),
                         class_="d-flex gap-2 justify-content-center flex-wrap",
@@ -396,13 +432,18 @@ def register_ai_training(input, output, session, ctx: SessionContext):
                 # Show the original upload form
                 model_training_base_model_input = ui.input_select(
                     "model_training_base_model",
-                    _("YOLOv8 model"),
+                    _("Base model"),
                     {
                         "n": "YOLOv8n",
                         "s": "YOLOv8s",
                         "m": "YOLOv8m",
                         "l": "YOLOv8l",
                         "x": "YOLOv8x",
+                        "26n": "YOLO26n (expérimental - pas garanti côté serveur)",
+                        "26s": "YOLO26s (expérimental)",
+                        "26m": "YOLO26m (expérimental)",
+                        "26l": "YOLO26l (expérimental)",
+                        "26x": "YOLO26x (expérimental)",
                     },
                     selected="n",
                     width="90%",
@@ -625,6 +666,16 @@ def register_ai_training(input, output, session, ctx: SessionContext):
                     ),
                 ),
                 collapsible_section(
+                    "ai_corrections_export",
+                    _("Human Corrections"),
+                    _("Send your validated/corrected detections (Photos tab) to Label Studio as pre-annotated tasks."),
+                    ui.div(
+                        ui.output_ui("ui_corrections_export"),
+                        class_="generic-container align-left",
+                        style_="padding-left:1rem !important; padding-right:1rem !important;",
+                    ),
+                ),
+                collapsible_section(
                     "ai_model_training",
                     _("Model Training"),
                     (
@@ -648,6 +699,16 @@ def register_ai_training(input, output, session, ctx: SessionContext):
                         style_="padding-left:1rem !important; padding-right:1rem !important;",
                     ),
                 ),
+                collapsible_section(
+                    "ai_model_review",
+                    _("Retroactive Model Review"),
+                    _("Re-run the active model on already-tagged photos and review where it disagrees with what's stored."),
+                    ui.div(
+                        ui.output_ui("ui_model_review"),
+                        class_="generic-container align-left",
+                        style_="padding-left:1rem !important; padding-right:1rem !important;",
+                    ),
+                ),
                 class_="generic-container align-left",
                 style_="padding-left:1rem !important; padding-right:1rem !important;",
             ),
@@ -656,6 +717,152 @@ def register_ai_training(input, output, session, ctx: SessionContext):
             ui.br(),
         )
         return ui_ai_training
+
+    @render.ui
+    @reactive.event(reload_trigger_ai, ignore_none=True)
+    def ui_corrections_export():
+        """04.10, Sid ("le bouton pour envoyer les corrections"): pending-count +
+        export button for human-reviewed detections (Photos tab) -> Label Studio."""
+        pending = DetectionFeedbackRepo.get_pending_export_count(CONFIG["KITTYHACK_DATABASE_PATH"])
+        ls_ready = (
+            CONFIG["LABELSTUDIO_VERSION"] is not None
+            and CONFIG.get("LABELSTUDIO_API_TOKEN")
+            and CONFIG.get("LABELSTUDIO_PROJECT")
+        )
+        if not ls_ready:
+            return ui.p(
+                _("Configure Label Studio above first (install, token, project) to send corrections."),
+                class_="text-muted",
+            )
+        status_text = (
+            _("{n} correction(s) waiting to be sent.").format(n=pending)
+            if pending
+            else _("No corrections waiting - everything you've reviewed on the Photos tab is already in Label Studio.")
+        )
+        # 04.10, Sid ("j'ai cliqué, rien ne s'est passe"): always render the
+        # button (just disabled at 0) instead of conditionally omitting it -
+        # simpler, standard Shiny practice, no element appearing/disappearing
+        # across re-renders to go wrong.
+        return ui.div(
+            ui.p(status_text),
+            ui.input_action_button(
+                "btn_export_corrections",
+                _("Send to Label Studio"),
+                icon=icon_svg("upload"),
+                disabled=(pending == 0),
+                class_="btn-primary",
+            ),
+        )
+
+    def _export_corrections_blocking(batch_size: int) -> tuple[int, int, int]:
+        """All the blocking HTTP/file I/O for one export batch - runs off the
+        event loop (see asyncio.to_thread below). Returns (sent, failed, remaining).
+
+        04.10, Sid ("Connection lost" on every click, only 1-2 corrections going
+        through): running this synchronously inside the reactive effect blocked
+        Shiny's single event loop long enough that the websocket heartbeat
+        starved and the browser saw it as a dropped connection - the container
+        itself never crashed (confirmed via docker inspect, RestartCount stayed
+        0). Same asyncio.to_thread pattern already used for the Label Studio
+        project list fetch above.
+        """
+        database = CONFIG["KITTYHACK_DATABASE_PATH"]
+        df = DetectionFeedbackRepo.get_pending_corrections(database, limit=batch_size)
+        if df.empty:
+            return 0, 0, 0
+
+        from src.labelstudio_api import LabelStudioAPI
+        api = LabelStudioAPI()
+        if not api.authenticate(token=CONFIG.get("LABELSTUDIO_API_TOKEN")):
+            logging.error("[AI_TRAINING] Could not authenticate with Label Studio for export.")
+            return 0, len(df), DetectionFeedbackRepo.get_pending_export_count(database)
+
+        project_id = int(CONFIG["LABELSTUDIO_PROJECT"])
+        succeeded_ids = []
+        try:
+            for i, (_, row) in enumerate(df.iterrows()):
+                row_id = int(row["id"])
+                logging.info(f"[AI_TRAINING] Exporting correction {i + 1}/{len(df)} (id={row_id})...")
+
+                corrected = (row.get("corrected_name") or "").strip()
+                if corrected and corrected.lower() != "none":
+                    label = corrected
+                elif row.get("confirmed"):
+                    label = row.get("original_name")
+                else:
+                    # "none" (false positive) or un-reviewed original - no valid
+                    # label in this project's config, upload the image with no box.
+                    label = None
+
+                # 04.10, Sid ("je fais 12x les memes photos"): old corrections
+                # whose original image file no longer exists on disk were being
+                # skipped but left pending - since there's nothing more we can
+                # ever do for them, they permanently clogged every batch (same
+                # 14 unexportable rows reprocessed, max 1 new one through per
+                # click). Mark them exported too so the queue actually drains.
+                img_path = EventsRepo._original_image_path(int(row["photo_id"]))
+                if not os.path.exists(img_path):
+                    logging.warning(f"[AI_TRAINING] Image gone for correction {row_id}, giving up on it: {img_path}")
+                    DetectionFeedbackRepo.mark_exported(database, [row_id])
+                    continue
+                try:
+                    with open(img_path, "rb") as f:
+                        image_bytes = f.read()
+                except Exception as e:
+                    logging.warning(f"[AI_TRAINING] Could not read image for correction {row_id}: {e}")
+                    DetectionFeedbackRepo.mark_exported(database, [row_id])
+                    continue
+
+                ok = api.upload_image_with_correction(
+                    project_id, image_bytes,
+                    f"correction_{int(row['photo_id'])}_{int(row['object_index'])}.jpg",
+                    label,
+                    float(row["x"]), float(row["y"]), float(row["width"]), float(row["height"]),
+                )
+                logging.info(f"[AI_TRAINING] Correction {row_id}: {'OK' if ok else 'FAILED'}")
+                if ok:
+                    succeeded_ids.append(row_id)
+                    # Incremental, not batched at the end - a stall here still keeps this.
+                    DetectionFeedbackRepo.mark_exported(database, [row_id])
+        finally:
+            api.close()
+
+        failed = len(df) - len(succeeded_ids)
+        remaining = DetectionFeedbackRepo.get_pending_export_count(database)
+        return len(succeeded_ids), failed, remaining
+
+    @reactive.effect
+    @reactive.event(input.btn_export_corrections, ignore_none=True)
+    async def on_export_corrections():
+        logging.info("[AI_TRAINING] Export-corrections button clicked.")
+        sent, failed, remaining = await asyncio.to_thread(_export_corrections_blocking, 50)
+        logging.info(f"[AI_TRAINING] Batch done: sent={sent} failed={failed} remaining={remaining}")
+
+        # 04.10, Sid: a translation-call TypeError here once killed the whole
+        # effect silently after a successful upload (never root-caused - not
+        # reproducible in isolation - but the upload itself is unaffected, so
+        # a failure to show the toast must never look like the export failed).
+        try:
+            if sent == 0 and failed == 0:
+                msg, kind = _("Nothing to export."), "message"
+            elif failed:
+                msg = _("Sent {ok}, {fail} failed (will retry next time). {rem} still waiting.").format(
+                    ok=sent, fail=failed, rem=remaining
+                )
+                kind = "warning"
+            elif remaining:
+                msg = _("Sent {ok} correction(s). {rem} still waiting - click again to continue.").format(
+                    ok=sent, rem=remaining
+                )
+                kind = "message"
+            else:
+                msg = _("Sent {ok} correction(s) to Label Studio.").format(ok=sent)
+                kind = "message"
+            ui.notification_show(msg, duration=8, type=kind)
+        except Exception as e:
+            logging.warning(f"[AI_TRAINING] Could not build the result notification (export itself still ran fine): {e}")
+            ui.notification_show(f"Sent {sent}, {failed} failed, {remaining} remaining.", duration=8)
+        reload_trigger_ai.set(reload_trigger_ai.get() + 1)
 
     @render.ui
     @reactive.event(reload_trigger_ai, ignore_none=True)
@@ -817,6 +1024,221 @@ def register_ai_training(input, output, session, ctx: SessionContext):
                 _("Nothing here yet. Please train a model first."),
                 class_="text-muted small",
             )
+
+    def _run_model_review_blocking(num_events: int) -> dict:
+        """Blocking - see _export_corrections_blocking above for why this
+        must go through asyncio.to_thread rather than run inline."""
+        return run_retroactive_review_batch(num_events)
+
+    @reactive.effect
+    @reactive.event(input.btn_run_model_review, ignore_none=True)
+    async def on_run_model_review():
+        if model_review_running.get():
+            return
+        # 06.10: process-wide lock, not just this session's Value - see the
+        # comment on _model_review_process_lock above for why the
+        # per-session guard alone let 5 scans stack up for an hour.
+        if not _model_review_process_lock.acquire(blocking=False):
+            ui.notification_show(
+                _("A scan is already running (maybe from another tab/device) - wait for it to finish first."),
+                duration=10, type="warning",
+            )
+            return
+        model_review_running.set(True)
+        reload_trigger_ai.set(reload_trigger_ai.get() + 1)
+        try:
+            # 06.10, Sid ("il faut quand même que je puisse lancer un scan
+            # de tout"): her whole history is currently 71 events total -
+            # 1000 comfortably covers everything in one click, room to grow,
+            # still bounded so a single run can't run forever.
+            result = await asyncio.to_thread(_run_model_review_blocking, 1000)
+        except Exception as e:
+            logging.error(f"[MODEL_REVIEW] Pilot run failed: {e}")
+            result = {"error": "exception"}
+        finally:
+            _model_review_process_lock.release()
+        model_review_last_result.set(result)
+        model_review_running.set(False)
+
+        if result.get("error"):
+            ui.notification_show(
+                _("The review could not run (no active model or inference failed - check the logs)."),
+                duration=8, type="error",
+            )
+        elif result.get("all_scanned"):
+            ui.notification_show(
+                _("Every event has already been scanned with this model. Train and activate a new model to get a fresh batch."),
+                duration=10, type="message",
+            )
+        else:
+            ui.notification_show(
+                _("Reviewed {scanned} photo(s) from {events} event(s): {flagged} disagreement(s) to check.").format(
+                    scanned=result.get("scanned", 0),
+                    events=result.get("events", 0),
+                    flagged=result.get("flagged", 0),
+                ),
+                duration=10, type="message",
+            )
+        reload_trigger_ai.set(reload_trigger_ai.get() + 1)
+
+    @render.ui
+    @reactive.event(reload_trigger_ai, ignore_none=True)
+    def ui_model_review():
+        pending = ModelReviewRepo.get_pending_count(CONFIG["KITTYHACK_DATABASE_PATH"])
+        # 06.10: also check the process-wide lock, not just this session's
+        # own flag - a fresh reload/second tab must see "Running..." too
+        # when a DIFFERENT session's scan is still in flight.
+        running = model_review_running.get() or _model_review_process_lock.locked()
+        last_result = model_review_last_result.get()
+
+        intro = ui.p(
+            _(
+                "Runs the currently active model again on photos from N events, and flags only the "
+                "ones where it now disagrees with what's stored. Each run advances to the next, older "
+                "batch of events (never the same ones twice) - nothing is overwritten automatically, "
+                "you confirm or dismiss each one below."
+            ),
+            class_="text-muted small",
+        )
+
+        run_button = ui.input_action_button(
+            "btn_run_model_review",
+            _("Scan everything with the active model") if not running else _("Running..."),
+            icon=icon_svg("arrows-rotate"),
+            disabled=running,
+            class_="btn-primary",
+        )
+
+        status_bits = [intro, run_button]
+
+        if last_result and not last_result.get("error"):
+            status_bits.append(
+                ui.p(
+                    _("Last run: {scanned} photo(s) from {events} event(s) scanned in {elapsed:.0f}s, {flagged} flagged.").format(
+                        scanned=last_result.get("scanned", 0),
+                        events=last_result.get("events", 0),
+                        elapsed=last_result.get("elapsed_s", 0.0),
+                        flagged=last_result.get("flagged", 0),
+                    ),
+                    class_="text-muted small mt-2",
+                )
+            )
+
+        if pending == 0:
+            status_bits.append(
+                ui.p(_("No disagreements waiting for review right now."), class_="text-muted small mt-2")
+            )
+            return ui.div(*status_bits)
+
+        # 05.10, Sid ("ça se ferme toujours + écran gris" at 2812 pending
+        # items): rendering up to 200 full row cards - each previously
+        # running its own DB query just for the cat-name dropdown - on
+        # EVERY click was slow enough to starve the websocket heartbeat and
+        # trigger Shiny's disconnect overlay. Small, fixed-size page instead,
+        # and cat_names fetched once here, not per row.
+        REVIEW_PAGE_SIZE = 50
+        rows = []
+        cat_names = CatsRepo.get_cat_names_list(CONFIG["KITTYHACK_DATABASE_PATH"])
+        cat_name_dict = CatsRepo.get_cat_name_rfid_dict(CONFIG["KITTYHACK_DATABASE_PATH"])
+        df = ModelReviewRepo.get_pending(CONFIG["KITTYHACK_DATABASE_PATH"], limit=REVIEW_PAGE_SIZE)
+        # 06.10, Sid ("deux événements quasi similaires, avec un autre chat -
+        # je peine à les distinguer en mode nuit"): toggle the row background
+        # every time the underlying event (block_id) changes, so consecutive
+        # rows from the SAME passage share a color and a new passage stands
+        # out immediately - same "fond actuel / fond bleu, en alternance" she
+        # asked for.
+        prev_block_id = None
+        alt_row = False
+        for __, review in df.iterrows():
+            review_id = int(review["id"])
+            photo_id = int(review["photo_id"])
+            unique_btn_id = hashlib.md5(os.urandom(16)).hexdigest()
+
+            block_id = review.get("event_block_id")
+            if block_id is not None and not pd.isna(block_id):
+                block_id = int(block_id)
+            if block_id != prev_block_id:
+                alt_row = not alt_row
+                prev_block_id = block_id
+            row_class = "d-flex gap-3 align-items-center kh-model-review-row" + (
+                " kh-model-review-row-alt" if alt_row else ""
+            )
+
+            rfid = review.get("event_rfid")
+            if rfid:
+                rfid_label = cat_name_dict.get(rfid, _("Unknown RFID: {}").format(rfid))
+            else:
+                rfid_label = _("No RFID found")
+
+            # 05.10, Sid ("j'espère surtout que mes chats seront des chats
+            # et pas des proies"): "prey" is the one label worth making
+            # unmistakable here - everything else is already a raw cat name.
+            def _display_name(n):
+                if not n:
+                    return _("nothing")
+                return _("prey") if n == "prey" else n
+
+            old_label = _display_name(review.get("old_name"))
+            old_prob = review.get("old_probability") or 0
+            new_label = _display_name(review.get("new_name"))
+            new_prob = review.get("new_probability") or 0
+
+            model_review_row_server(f"model_review_row_{unique_btn_id}", review_id, photo_id)
+
+            rows.append(
+                ui.div(
+                    # 05.10, Sid ("je vois rien, un moyen d'agrandir?"): same
+                    # markup the Photos tab uses (kh-photo-thumb +
+                    # data-orig-src) - app.js already has a global delegated
+                    # click handler that opens any such thumb in a lightbox
+                    # at full size, no extra wiring needed here.
+                    ui.tags.div(
+                        {"class": "kh-photo-thumb kh-model-review-thumb", "data-orig-src": f"/orig/{photo_id}.jpg"},
+                        ui.img(src=f"/thumb/{photo_id}.jpg", loading="lazy", decoding="async"),
+                    ),
+                    ui.div(
+                        ui.div(
+                            ui.span(_("Before: "), class_="text-muted"),
+                            ui.strong(f"{old_label} ({old_prob:.0f}%)"),
+                        ),
+                        ui.div(
+                            ui.span(_("After: "), class_="text-muted"),
+                            ui.strong(f"{new_label} ({new_prob:.0f}%)"),
+                        ),
+                        ui.div(
+                            ui.span(_("RFID: "), class_="text-muted"),
+                            ui.strong(rfid_label),
+                            class_="small",
+                        ),
+                        ui.div(
+                            btn_model_review_keep_old(f"model_review_row_{unique_btn_id}"),
+                            btn_model_review_confirm_new(f"model_review_row_{unique_btn_id}"),
+                            class_="d-flex gap-2 mt-1 flex-wrap",
+                        ),
+                        ui.div(
+                            picker_model_review_other(f"model_review_row_{unique_btn_id}", cat_names),
+                            class_="mt-1",
+                        ),
+                        class_="flex-grow-1",
+                    ),
+                    class_=row_class,
+                )
+            )
+
+        heading_text = (
+            _("Showing the first {shown} of {n} disagreement(s) waiting for review (most recent handled first):").format(
+                shown=len(rows), n=pending
+            )
+            if pending > REVIEW_PAGE_SIZE
+            else _("{n} disagreement(s) waiting for review:").format(n=pending)
+        )
+        status_bits.append(
+            ui.div(
+                ui.p(heading_text, class_="fw-bold mt-3"),
+                ui.div(*rows, class_="d-flex flex-column gap-2"),
+            )
+        )
+        return ui.div(*status_bits)
 
     @reactive.Effect
     @reactive.event(input.btn_reload_model_training_status)
@@ -1153,9 +1575,9 @@ def register_ai_training(input, output, session, ctx: SessionContext):
             model_variant = "n"
             image_size_raw = "320"
 
-        if model_variant not in {"n", "s", "m", "l", "x"}:
+        if model_variant not in {"n", "s", "m", "l", "x", "26n", "26s", "26m", "26l", "26x"}:
             ui.notification_show(
-                _("Invalid YOLOv8 model selection."), duration=10, type="error"
+                _("Invalid base model selection."), duration=10, type="error"
             )
             return
 
