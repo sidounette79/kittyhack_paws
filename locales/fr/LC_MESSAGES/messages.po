@@ -1,0 +1,4374 @@
+# French translations for kittyhack.
+# Copyright (C) 2026 FloppyFK
+# This file is distributed under the same license as kittyhack.
+# Automatically generated, 2026.
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: kittyhack\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2026-09-08 23:06+0200\n"
+"PO-Revision-Date: 2026-09-07 22:14+0200\n"
+"Last-Translator: Automatically generated\n"
+"Language-Team: none\n"
+"Language: fr\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n > 1);\n"
+
+msgid "Unknown RFID"
+msgstr "RFID inconnu"
+
+msgid "No RFID found"
+msgstr "Aucun RFID détecté"
+
+msgid "Unknown cat"
+msgstr "Chat inconnu"
+
+msgid "RFID"
+msgstr "RFID"
+
+msgid "video"
+msgstr "vidéo"
+
+#, python-brace-format
+msgid "{cat} is back inside!"
+msgstr "{cat} est rentré(e) !"
+
+msgid "A cat came inside."
+msgstr "Un chat est rentré."
+
+msgid "Kittyhack"
+msgstr "Kittyhack"
+
+#, python-brace-format
+msgid "{cat} went outside!"
+msgstr "{cat} est sorti(e) !"
+
+msgid "A cat went outside."
+msgstr "Un chat est sorti."
+
+msgid "Motion detected outside"
+msgstr "Mouvement détecté à l'extérieur"
+
+msgid "Motion outside ended"
+msgstr "Fin du mouvement à l'extérieur"
+
+msgid "Motion detected inside"
+msgstr "Mouvement détecté à l'intérieur"
+
+#, python-brace-format
+msgid "{cat} detected via video"
+msgstr "{cat} détecté(e) par la caméra"
+
+#, python-brace-format
+msgid "{cat} detected via RFID"
+msgstr "{cat} détecté(e) par RFID"
+
+#, python-brace-format
+msgid "RFID identification ({rfid_cat}) overrides video ({video_cat})"
+msgstr "L'identification RFID ({rfid_cat}) prévaut sur la caméra ({video_cat})"
+
+#, python-brace-format
+msgid "Entry allowed for {cat}"
+msgstr "Entrée autorisée pour {cat}"
+
+#, python-brace-format
+msgid "Entry denied for {cat}"
+msgstr "Entrée refusée pour {cat}"
+
+msgid "Prey detected"
+msgstr "Proie détectée"
+
+msgid "No prey detected"
+msgstr "Aucune proie détectée"
+
+#, python-brace-format
+msgid "Prey detection disabled for {cat}"
+msgstr "Détection de proie désactivée pour {cat}"
+
+msgid "Inside opened"
+msgstr "Intérieur ouvert"
+
+msgid "Inside opened (manual)"
+msgstr "Intérieur ouvert (manuel)"
+
+msgid "Inside closed"
+msgstr "Intérieur fermé"
+
+msgid "Inside closed (prey detected)"
+msgstr "Intérieur fermé (proie détectée)"
+
+msgid "Inside closed (entry denied)"
+msgstr "Intérieur fermé (entrée refusée)"
+
+msgid "Inside closed (motion ended)"
+msgstr "Intérieur fermé (fin du mouvement)"
+
+msgid "Inside closed (maximum unlock time exceeded)"
+msgstr "Intérieur fermé (durée maximale de déverrouillage dépassée)"
+
+msgid "Inside closed (manual)"
+msgstr "Intérieur fermé (manuel)"
+
+msgid "Outside opened"
+msgstr "Extérieur ouvert"
+
+msgid "Outside closed"
+msgstr "Extérieur fermé"
+
+msgid "Entry decision skipped (exit in progress)"
+msgstr "Décision d'entrée ignorée (sortie en cours)"
+
+msgid "Cat crossed the flap"
+msgstr "Le chat a franchi la chatière"
+
+msgid "Inside locked (after passage)"
+msgstr "Intérieur verrouillé (après passage)"
+
+msgid "Outside locked (after passage)"
+msgstr "Extérieur verrouillé (après passage)"
+
+msgid "No detailed timeline recorded for this event."
+msgstr "Aucune chronologie détaillée enregistrée pour cet événement."
+
+msgid "Motion outside only"
+msgstr "Mouvement extérieur uniquement"
+
+msgid "Motion outside with mouse"
+msgstr "Mouvement extérieur avec souris"
+
+msgid "Cat went inside"
+msgstr "Le chat est entré"
+
+msgid ""
+"Cat went probably inside (no motion inside detected, but the flap was "
+"unlocked)"
+msgstr ""
+"Le chat est probablement entré (aucun mouvement intérieur détecté, mais la "
+"chatière était déverrouillée)"
+
+msgid "Cat went inside with mouse"
+msgstr "Le chat est entré avec une souris"
+
+msgid "Cat went outside"
+msgstr "Le chat est sorti"
+
+msgid "Manually unlocked flap"
+msgstr "Chatière déverrouillée manuellement"
+
+msgid "Manually locked flap"
+msgstr "Chatière verrouillée manuellement"
+
+msgid "Maximum unlock time exceeded"
+msgstr "Durée maximale de déverrouillage dépassée"
+
+msgid "Per-cat mode: prey detection disabled for this cat"
+msgstr "Mode par chat : détection de proie désactivée pour ce chat"
+
+msgid "Per-cat mode: entry allowed for this cat"
+msgstr "Mode par chat : entrée autorisée pour ce chat"
+
+msgid "Per-cat mode: entry denied for this cat"
+msgstr "Mode par chat : entrée refusée pour ce chat"
+
+msgid "Per-cat mode: exit allowed for this cat"
+msgstr "Mode par chat : sortie autorisée pour ce chat"
+
+msgid "Per-cat mode: exit denied for this cat"
+msgstr "Mode par chat : sortie refusée pour ce chat"
+
+msgid "Unknown event"
+msgstr "Événement inconnu"
+
+msgid "Model download failed"
+msgstr "Échec du téléchargement du modèle"
+
+msgid ""
+"Model training completed, but the model could not be downloaded. Please "
+"retry later."
+msgstr ""
+"Entraînement du modèle terminé, mais le modèle n'a pas pu être téléchargé. "
+"Veuillez réessayer plus tard."
+
+msgid "Model downloaded"
+msgstr "Modèle téléchargé"
+
+msgid ""
+"Model training completed and the new model was downloaded successfully. You "
+"can activate it right here in the 'Model Management' section below."
+msgstr ""
+"Entraînement du modèle terminé et le nouveau modèle a été téléchargé avec "
+"succès. Vous pouvez l'activer directement ici, dans la section « Gestion "
+"des modèles » ci-dessous."
+
+msgid "Model Training Aborted"
+msgstr "Entraînement du modèle interrompu"
+
+msgid ""
+"The model training was aborted. This can happen if the provided training "
+"data was not correct. Please ensure you have exported the data from Label "
+"Studio as **'YOLO with Images'** and that your labels are set correctly in "
+"the images."
+msgstr ""
+"L'entraînement du modèle a été interrompu. Cela peut arriver si les données "
+"d'entraînement fournies n'étaient pas correctes. Veuillez vous assurer "
+"d'avoir exporté les données depuis Label Studio au format **« YOLO with "
+"Images »** et que vos étiquettes sont correctement définies sur les images."
+
+msgid "Model training is in progress. Please check back later."
+msgstr "L'entraînement du modèle est en cours. Veuillez revenir plus tard."
+
+msgid "The training is pending and will start soon."
+msgstr "L'entraînement est en attente et démarrera bientôt."
+
+msgid "The training is queued and waiting for resources."
+msgstr "L'entraînement est en file d'attente et attend des ressources."
+
+msgid "The training has been successfully completed."
+msgstr "L'entraînement s'est terminé avec succès."
+
+msgid "Training completed. Downloading the model…"
+msgstr "Entraînement terminé. Téléchargement du modèle…"
+
+msgid "Training completed. Installing the model…"
+msgstr "Entraînement terminé. Installation du modèle…"
+
+msgid "Training completed. Model downloaded and installed."
+msgstr "Entraînement terminé. Modèle téléchargé et installé."
+
+msgid "Training completed, but the model download failed."
+msgstr "Entraînement terminé, mais le téléchargement du modèle a échoué."
+
+msgid "The training was aborted. Please try again."
+msgstr "L'entraînement a été interrompu. Veuillez réessayer."
+
+msgid "The training status is unknown. Please check back later."
+msgstr "Le statut de l'entraînement est inconnu. Veuillez revenir plus tard."
+
+msgid "No model training is in progress."
+msgstr "Aucun entraînement de modèle en cours."
+
+msgid "unknown"
+msgstr "inconnu"
+
+msgid "Stop Label Studio"
+msgstr "Arrêter Label Studio"
+
+msgid "Open Label Studio"
+msgstr "Ouvrir Label Studio"
+
+msgid "Label Studio Version: {}"
+msgstr "Version de Label Studio : {}"
+
+msgid "Latest: {}"
+msgstr "Dernière version : {}"
+
+msgid "Start Label Studio"
+msgstr "Démarrer Label Studio"
+
+msgid "Label Studio is not running."
+msgstr "Label Studio n'est pas en cours d'exécution."
+
+msgid "Version: {}"
+msgstr "Version : {}"
+
+msgid "Update Label Studio"
+msgstr "Mettre à jour Label Studio"
+
+msgid "#### API Token"
+msgstr "#### Jeton API"
+
+msgid "Required to access Label Studio projects from this page."
+msgstr "Requis pour accéder aux projets Label Studio depuis cette page."
+
+msgid "How to create an API token"
+msgstr "Comment créer un jeton API"
+
+msgid "**Option 1: Legacy Token (preferred)**"
+msgstr "**Option 1 : jeton hérité (recommandé)**"
+
+msgid "1. Open Label Studio in your browser (button above)"
+msgstr "1. Ouvrez Label Studio dans votre navigateur (bouton ci-dessus)"
+
+msgid "2. In Label Studio, go to 'burger menu' → Organization"
+msgstr "2. Dans Label Studio, allez dans le menu (icône ☰) → Organization"
+
+msgid "3. Click on 'API Tokens Settings' and enable 'Legacy Tokens'"
+msgstr "3. Cliquez sur « API Tokens Settings » et activez « Legacy Tokens »"
+
+msgid "4. Click your user icon → Account & Settings"
+msgstr "4. Cliquez sur votre icône utilisateur → Account & Settings"
+
+msgid "5. Find 'Legacy Token' section and copy the 'Access Token'"
+msgstr "5. Trouvez la section « Legacy Token » et copiez le « Access Token »"
+
+msgid ""
+"6. Important: the 'Copy token' button in Label Studio does NOT work. Please "
+"copy the token manually."
+msgstr ""
+"6. Important : le bouton « Copy token » de Label Studio ne fonctionne PAS. "
+"Veuillez copier le jeton manuellement."
+
+msgid "7. Paste it below and click Save"
+msgstr "7. Collez-le ci-dessous et cliquez sur Enregistrer"
+
+msgid "**Option 2: Personal Access Token**"
+msgstr "**Option 2 : jeton d'accès personnel**"
+
+msgid "2. Click on your user icon (top right) → Account & Settings"
+msgstr ""
+"2. Cliquez sur votre icône utilisateur (en haut à droite) → Account & "
+"Settings"
+
+msgid "3. Scroll to 'Personal Access Tokens' section"
+msgstr "3. Faites défiler jusqu'à la section « Personal Access Tokens »"
+
+msgid "4. Click 'Create new token'"
+msgstr "4. Cliquez sur « Create new token »"
+
+msgid ""
+"5. Important: the 'Copy token' button in Label Studio does NOT work. Please "
+"copy the token manually."
+msgstr ""
+"5. Important : le bouton « Copy token » de Label Studio ne fonctionne PAS. "
+"Veuillez copier le jeton manuellement."
+
+msgid "6. Paste it below and click Save"
+msgstr "6. Collez-le ci-dessous et cliquez sur Enregistrer"
+
+msgid "Label Studio API Token"
+msgstr "Jeton API Label Studio"
+
+msgid "Paste Personal Access Token or Legacy Token here"
+msgstr "Collez ici le jeton d'accès personnel ou le jeton hérité"
+
+msgid "Save Token"
+msgstr "Enregistrer le jeton"
+
+msgid "#### Project"
+msgstr "#### Projet"
+
+msgid "Remove Label Studio"
+msgstr "Supprimer Label Studio"
+
+msgid "Your project data will not be deleted."
+msgstr "Les données de votre projet ne seront pas supprimées."
+
+msgid "**Option 1** – Install on the Kittyflap (easy, limited resources)"
+msgstr ""
+"**Option 1** – Installer sur la Kittyflap (simple, ressources limitées)"
+
+msgid ""
+"**Option 2** – Install on your own computer ([labelstud.io](https://"
+"labelstud.io/))"
+msgstr ""
+"**Option 2** – Installer sur votre propre ordinateur ([labelstud.io](https://"
+"labelstud.io/))"
+
+msgid ""
+"> Some Kittyflaps have only 1 GB RAM. Stop Label Studio when not in use."
+msgstr ""
+"> Certaines Kittyflaps n'ont que 1 Go de RAM. Arrêtez Label Studio lorsque "
+"vous ne l'utilisez pas."
+
+msgid "Install Label Studio on the Kittyflap"
+msgstr "Installer Label Studio sur la Kittyflap"
+
+msgid ""
+"This will take 5–10 minutes. The Kittyflap may not be reachable during "
+"installation."
+msgstr ""
+"Cela prendra 5 à 10 minutes. La Kittyflap peut être inaccessible pendant "
+"l'installation."
+
+msgid "A model training is currently in progress."
+msgstr "Un entraînement de modèle est actuellement en cours."
+
+msgid "You will be notified by email when the training is finished."
+msgstr "Vous serez averti(e) par e-mail lorsque l'entraînement sera terminé."
+
+msgid "Current status: {}"
+msgstr "Statut actuel : {}"
+
+msgid "Reload Model Training Status"
+msgstr "Actualiser le statut de l'entraînement"
+
+msgid "Your individual Training ID:"
+msgstr "Votre identifiant d'entraînement personnel :"
+
+msgid "(use this ID for support requests)"
+msgstr "(utilisez cet identifiant pour les demandes de support)"
+
+msgid "Cancel Model Training"
+msgstr "Annuler l'entraînement du modèle"
+
+msgid ""
+"Unable to reach the model training server right now. Please check your "
+"network or try again later."
+msgstr ""
+"Impossible de joindre le serveur d'entraînement pour le moment. Vérifiez "
+"votre connexion réseau ou réessayez plus tard."
+
+msgid "If the issue persists, the server may be temporarily unavailable."
+msgstr ""
+"Si le problème persiste, le serveur est peut-être temporairement "
+"indisponible."
+
+msgid ""
+"The model training server is currently in maintenance. Please try again "
+"later."
+msgstr ""
+"Le serveur d'entraînement est actuellement en maintenance. Veuillez "
+"réessayer plus tard."
+
+msgid "Base model"
+msgstr "Modèle de base"
+
+msgid "Image size"
+msgstr "Taille d'image"
+
+msgid "Export from Label Studio project"
+msgstr "Exporter depuis un projet Label Studio"
+
+msgid "Upload project zip manually"
+msgstr "Importer un fichier ZIP de projet manuellement"
+
+msgid "### Training Data"
+msgstr "### Données d'entraînement"
+
+msgid "Training data source"
+msgstr "Source des données d'entraînement"
+
+msgid "Model Name (optional)"
+msgstr "Nom du modèle (optionnel)"
+
+msgid "Enter a name for your model"
+msgstr "Saisissez un nom pour votre modèle"
+
+msgid "Username (optional)"
+msgstr "Nom d'utilisateur (optionnel)"
+
+msgid "Enter your name"
+msgstr "Saisissez votre nom"
+
+msgid "Email for Notification (optional)"
+msgstr "E-mail de notification (optionnel)"
+
+msgid "Enter your email address"
+msgstr "Saisissez votre adresse e-mail"
+
+msgid ""
+"If you provide an email address, you will be notified when the model "
+"training is finished."
+msgstr ""
+"Si vous fournissez une adresse e-mail, vous serez averti(e) lorsque "
+"l'entraînement du modèle sera terminé."
+
+msgid "Advanced options"
+msgstr "Options avancées"
+
+msgid ""
+"Base model (YOLOv8n/s/m/l/x): larger variants are usually more accurate, but "
+"they run slower and need more CPU/RAM. Choose smaller variants (e.g. 'n') if "
+"your device struggles to keep up in real-time."
+msgstr ""
+"Modèle de base (YOLOv8n/s/m/l/x) : les variantes plus grandes sont "
+"généralement plus précises, mais s'exécutent plus lentement et nécessitent "
+"plus de CPU/RAM. Choisissez une variante plus petite (par ex. « n ») si "
+"votre appareil peine à suivre en temps réel."
+
+msgid ""
+"Image size (imgsz): higher values can improve detection of small objects, "
+"but increase computation and can reduce FPS."
+msgstr ""
+"Taille d'image (imgsz) : des valeurs plus élevées peuvent améliorer la "
+"détection des petits objets, mais augmentent le calcul et peuvent réduire "
+"les FPS."
+
+msgid "Defaults: YOLOv8n and image size 320."
+msgstr "Valeurs par défaut : YOLOv8n et taille d'image 320."
+
+msgid ""
+"Advanced model options are only available if you run Kittyhack on a separate "
+"server (remote mode)."
+msgstr ""
+"Les options avancées du modèle ne sont disponibles que si vous exécutez "
+"Kittyhack sur un serveur séparé (mode distant)."
+
+msgid "Submit Model for Training"
+msgstr "Soumettre le modèle pour l'entraînement"
+
+msgid ""
+"Train your own AI model: label images with Label Studio, then submit them "
+"for training."
+msgstr ""
+"Entraînez votre propre modèle d'IA : étiquetez des images avec Label Studio, "
+"puis soumettez-les pour l'entraînement."
+
+msgid "Read the instructions before starting:"
+msgstr "Lisez les instructions avant de commencer :"
+
+msgid "Instructions for training your own model"
+msgstr "Instructions pour entraîner votre propre modèle"
+
+msgid "Manage Label Studio, configure API access, and select a project."
+msgstr "Gérez Label Studio, configurez l'accès API et sélectionnez un projet."
+
+msgid "Install Label Studio to start labeling your images."
+msgstr "Installez Label Studio pour commencer à étiqueter vos images."
+
+msgid "Model Training"
+msgstr "Entraînement du modèle"
+
+msgid "A model training is in progress."
+msgstr "Un entraînement de modèle est en cours."
+
+msgid "Upload labeled data and submit for model training."
+msgstr ""
+"Importez des données étiquetées et soumettez-les pour l'entraînement du "
+"modèle."
+
+msgid "Model Management"
+msgstr "Gestion des modèles"
+
+msgid "Rename, activate, or remove your trained models."
+msgstr "Renommez, activez ou supprimez vos modèles entraînés."
+
+msgid "Nothing here yet. Please train a model first."
+msgstr "Rien ici pour l'instant. Veuillez d'abord entraîner un modèle."
+
+msgid "YOLO v8 Nano"
+msgstr "YOLO v8 Nano"
+
+msgid "YOLO v8 Small"
+msgstr "YOLO v8 Small"
+
+msgid "YOLO v8 Medium"
+msgstr "YOLO v8 Medium"
+
+msgid "YOLO v8 Large"
+msgstr "YOLO v8 Large"
+
+msgid "YOLO v8 Extra Large"
+msgstr "YOLO v8 Extra Large"
+
+msgid "YOLO v8 model"
+msgstr "Modèle YOLO v8"
+
+msgid "Model image size: {}px"
+msgstr "Taille d'image du modèle : {}px"
+
+msgid "Average FPS with this model"
+msgstr "FPS moyen avec ce modèle"
+
+msgid "Active"
+msgstr "Actif"
+
+msgid "Currently active model"
+msgstr "Modèle actuellement actif"
+
+msgid "Use this model now"
+msgstr "Utiliser ce modèle maintenant"
+
+msgid "Modify or delete this model"
+msgstr "Modifier ou supprimer ce modèle"
+
+msgid "No model training in progress."
+msgstr "Aucun entraînement de modèle en cours."
+
+msgid "Do you really want to cancel the model training?"
+msgstr "Voulez-vous vraiment annuler l'entraînement du modèle ?"
+
+msgid "OK"
+msgstr "OK"
+
+msgid "Cancel"
+msgstr "Annuler"
+
+msgid "Model training cancelled."
+msgstr "Entraînement du modèle annulé."
+
+msgid "Upload Label-Studio Training Data (ZIP file)"
+msgstr "Importer les données d'entraînement Label Studio (fichier ZIP)"
+
+msgid ""
+"No Label Studio API token configured. If you want to train a model directly "
+"from a Label Studio project, please add your API token in the Label Studio "
+"card above."
+msgstr ""
+"Aucun jeton API Label Studio configuré. Pour entraîner un modèle directement "
+"depuis un projet Label Studio, ajoutez votre jeton API dans la carte Label "
+"Studio ci-dessus."
+
+msgid ""
+"No Label Studio project selected. Please select a project in the Label "
+"Studio card above."
+msgstr ""
+"Aucun projet Label Studio sélectionné. Sélectionnez un projet dans la carte "
+"Label Studio ci-dessus."
+
+msgid ""
+"Label Studio is not running. Please start it in the Label Studio card above."
+msgstr ""
+"Label Studio n'est pas en cours d'exécution. Démarrez-le dans la carte Label "
+"Studio ci-dessus."
+
+msgid "Could not retrieve picture information for the selected project."
+msgstr ""
+"Impossible de récupérer les informations des images du projet sélectionné."
+
+msgid ""
+"The selected project has no pictures. Please add and label images in Label "
+"Studio first."
+msgstr ""
+"Le projet sélectionné ne contient aucune image. Ajoutez et étiquetez des "
+"images dans Label Studio d'abord."
+
+#, python-brace-format
+msgid ""
+"The selected project has {unlabeled} of {total} pictures without labels. "
+"Please complete all labels before training."
+msgstr ""
+"Le projet sélectionné a {unlabeled} image(s) sur {total} sans étiquette. "
+"Complétez toutes les étiquettes avant l'entraînement."
+
+#, python-brace-format
+msgid "Project ready: {labeled} labeled pictures."
+msgstr "Projet prêt : {labeled} image(s) étiquetée(s)."
+
+msgid "Exporting Label Studio project..."
+msgstr "Exportation du projet Label Studio..."
+
+msgid "Downloading project data..."
+msgstr "Téléchargement des données du projet..."
+
+msgid ""
+"Failed to export Label Studio project. Please ensure the project is properly "
+"configured and exported as 'YOLO with Images'."
+msgstr ""
+"Échec de l'exportation du projet Label Studio. Assurez-vous que le projet "
+"est correctement configuré et exporté au format « YOLO with Images »."
+
+msgid "Project exported successfully"
+msgstr "Projet exporté avec succès"
+
+msgid "Error exporting Label Studio project: {}"
+msgstr "Erreur lors de l'exportation du projet Label Studio : {}"
+
+msgid ""
+"Please either select a Label Studio project or upload a ZIP file with the "
+"training data."
+msgstr ""
+"Veuillez sélectionner un projet Label Studio ou importer un fichier ZIP "
+"contenant les données d'entraînement."
+
+msgid "The uploaded file is not a ZIP file. Please upload a valid ZIP file."
+msgstr ""
+"Le fichier importé n'est pas un fichier ZIP. Veuillez importer un fichier "
+"ZIP valide."
+
+msgid "Invalid base model selection."
+msgstr "Sélection de modèle de base invalide."
+
+msgid "Invalid image size selection."
+msgstr "Sélection de taille d'image invalide."
+
+msgid "Please enter a valid email address."
+msgstr "Veuillez saisir une adresse e-mail valide."
+
+msgid "The uploaded file is not a valid Label Studio training data ZIP file."
+msgstr ""
+"Le fichier importé n'est pas un fichier ZIP de données d'entraînement Label "
+"Studio valide."
+
+msgid ""
+"The destination for the model training is unreachable. Please check your "
+"network connection or try again later."
+msgstr ""
+"La destination de l'entraînement du modèle est inaccessible. Vérifiez votre "
+"connexion réseau ou réessayez plus tard."
+
+msgid "An error occurred while starting the model training: {}"
+msgstr ""
+"Une erreur s'est produite au démarrage de l'entraînement du modèle : {}"
+
+msgid ""
+"Insufficient disk space. At least 1.5GB of free space is required to install "
+"Label Studio. Please free up some space and try again."
+msgstr ""
+"Espace disque insuffisant. Au moins 1,5 Go d'espace libre est requis pour "
+"installer Label Studio. Libérez de l'espace et réessayez."
+
+msgid "Label Studio installed successfully! You can start it now."
+msgstr ""
+"Label Studio installé avec succès ! Vous pouvez le démarrer maintenant."
+
+msgid "Label Studio installation failed. Please check the logs for details."
+msgstr ""
+"Échec de l'installation de Label Studio. Consultez les journaux pour plus de "
+"détails."
+
+msgid "Label Studio updated successfully! You can start it now."
+msgstr ""
+"Label Studio mis à jour avec succès ! Vous pouvez le démarrer maintenant."
+
+msgid "Label Studio update failed. Please check the logs for details."
+msgstr ""
+"Échec de la mise à jour de Label Studio. Consultez les journaux pour plus de "
+"détails."
+
+msgid "Removing Label Studio"
+msgstr "Suppression de Label Studio"
+
+msgid "Please wait..."
+msgstr "Veuillez patienter..."
+
+msgid "Label Studio removed successfully."
+msgstr "Label Studio supprimé avec succès."
+
+msgid "Label Studio removal failed. Please check the logs for details."
+msgstr ""
+"Échec de la suppression de Label Studio. Consultez les journaux pour plus de "
+"détails."
+
+msgid "Stopping Label Studio..."
+msgstr "Arrêt de Label Studio..."
+
+msgid "Label Studio stopped successfully."
+msgstr "Label Studio arrêté avec succès."
+
+msgid "Label Studio may not have stopped completely. Please check the logs."
+msgstr ""
+"Label Studio ne s'est peut-être pas arrêté complètement. Consultez les "
+"journaux."
+
+msgid "Starting Label Studio..."
+msgstr "Démarrage de Label Studio..."
+
+msgid "(The first start of Label Studio may take several minutes!)"
+msgstr ""
+"(Le premier démarrage de Label Studio peut prendre plusieurs minutes !)"
+
+msgid "Label Studio started successfully."
+msgstr "Label Studio démarré avec succès."
+
+msgid "Label Studio may not have started completely. Please check the logs."
+msgstr ""
+"Label Studio ne s'est peut-être pas démarré complètement. Consultez les "
+"journaux."
+
+msgid "Label Studio API token saved successfully. Reloading…"
+msgstr "Jeton API Label Studio enregistré avec succès. Rechargement…"
+
+msgid "Label Studio API token cleared. Reloading…"
+msgstr "Jeton API Label Studio effacé. Rechargement…"
+
+msgid "Failed to save token. Please check the logs."
+msgstr "Échec de l'enregistrement du jeton. Consultez les journaux."
+
+msgid "Please configure an API token above to select a project."
+msgstr "Configurez un jeton API ci-dessus pour sélectionner un projet."
+
+msgid "Label Studio is not running. Please start it to select a project."
+msgstr ""
+"Label Studio n'est pas en cours d'exécution. Démarrez-le pour sélectionner "
+"un projet."
+
+msgid "Could not fetch projects. Please check your API token."
+msgstr "Impossible de récupérer les projets. Vérifiez votre jeton API."
+
+msgid "No projects found in Label Studio."
+msgstr "Aucun projet trouvé dans Label Studio."
+
+msgid "— Select a project —"
+msgstr "— Sélectionner un projet —"
+
+msgid "Select a Label Studio project"
+msgstr "Sélectionner un projet Label Studio"
+
+msgid "Label Studio project saved."
+msgstr "Projet Label Studio enregistré."
+
+msgid "Failed to save project selection. Please check the logs."
+msgstr ""
+"Échec de l'enregistrement de la sélection du projet. Consultez les journaux."
+
+msgid "No picture found!"
+msgstr "Aucune image trouvée !"
+
+msgid "##### Cat-specific settings"
+msgstr "##### Paramètres spécifiques au chat"
+
+msgid "Enable Prey detection"
+msgstr "Activer la détection de proie"
+
+msgid ""
+"**Disabled:** Global prey detection is turned off in the `CONFIGURATION` "
+"section. Enable `Detect prey` to use per-cat settings."
+msgstr ""
+"**Désactivé :** la détection de proie globale est désactivée dans la section "
+"`CONFIGURATION`. Activez `Détecter les proies` pour utiliser les paramètres "
+"par chat."
+
+msgid "Allow entry"
+msgstr "Autoriser l'entrée"
+
+msgid ""
+"**Disabled:** This feature is only available in `Individual configuration "
+"per cat` mode for entry."
+msgstr ""
+"**Désactivé :** cette fonctionnalité n'est disponible qu'en mode "
+"`Configuration individuelle par chat` pour l'entrée."
+
+msgid "Allow exit"
+msgstr "Autoriser la sortie"
+
+msgid ""
+"This cat has no RFID configured. The individual exit per cat works only for "
+"cats with a RFID chip!"
+msgstr ""
+"Ce chat n'a pas de RFID configuré. La sortie individuelle par chat ne "
+"fonctionne que pour les chats équipés d'une puce RFID !"
+
+msgid ""
+"**Disabled:** This feature is only available in `Individual configuration "
+"per cat` mode for exit."
+msgstr ""
+"**Désactivé :** cette fonctionnalité n'est disponible qu'en mode "
+"`Configuration individuelle par chat` pour la sortie."
+
+msgid "Name"
+msgstr "Nom"
+
+msgid ""
+"NOTE: This is NOT the number which stands in the booklet of your vet! You "
+"must use the the ID, which is read by the Kittyflap. It is 16 characters "
+"long and consists of numbers (0-9) and letters (A-F)."
+msgstr ""
+"REMARQUE : ce n'est PAS le numéro indiqué dans le carnet de votre "
+"vétérinaire ! Vous devez utiliser l'identifiant lu par la Kittyflap. Il "
+"comporte 16 caractères composés de chiffres (0-9) et de lettres (A-F)."
+
+msgid ""
+"If you have entered the RFID correctly here, the name of the cat will be "
+"displayed in the [PICTURES] section."
+msgstr ""
+"Si vous avez correctement saisi le RFID ici, le nom du chat s'affichera dans "
+"la section [PHOTOS]."
+
+msgid "Change Picture"
+msgstr "Changer la photo"
+
+msgid "Delete {} from the database"
+msgstr "Supprimer {} de la base de données"
+
+msgid ""
+"No RFID entered. Cat identification only via camera (if enabled). See "
+"CONFIGURATION section for details."
+msgstr ""
+"Aucun RFID saisi. Identification du chat uniquement par caméra (si activé). "
+"Voir la section CONFIGURATION pour plus de détails."
+
+msgid "Valid RFID"
+msgstr "RFID valide"
+
+msgid "Invalid RFID. Must be exactly 16 hex characters (0-9, A-F)."
+msgstr ""
+"RFID invalide. Doit comporter exactement 16 caractères hexadécimaux (0-9, A-"
+"F)."
+
+msgid "Save all changes"
+msgstr "Enregistrer toutes les modifications"
+
+msgid ""
+"No cats found in the database. Please go to the [ADD NEW CAT] section to add "
+"a new cat."
+msgstr ""
+"Aucun chat trouvé dans la base de données. Rendez-vous dans la section "
+"[AJOUTER UN CHAT] pour ajouter un nouveau chat."
+
+msgid "{} deleted successfully from the database."
+msgstr "{} supprimé(e) avec succès de la base de données."
+
+msgid "Failed to delete {} from the database: {}"
+msgstr "Échec de la suppression de {} de la base de données : {}"
+
+msgid "Data for {} updated successfully."
+msgstr "Données de {} mises à jour avec succès."
+
+msgid "Failed to update cat details: {}"
+msgstr "Échec de la mise à jour des informations du chat : {}"
+
+msgid "No changes detected. Nothing to save."
+msgstr "Aucune modification détectée. Rien à enregistrer."
+
+msgid ""
+"**Important:** Please read the notes about the prerequisites for the "
+"individual entry/exit configuration in the `MANAGE CATS` section if you want "
+"to use these features."
+msgstr ""
+"**Important :** veuillez lire les remarques concernant les prérequis pour la "
+"configuration individuelle d'entrée/sortie dans la section `GÉRER LES CHATS` "
+"si vous souhaitez utiliser ces fonctionnalités."
+
+msgid "Add new cat"
+msgstr "Ajouter un chat"
+
+msgid "Register a new cat with its RFID chip."
+msgstr "Enregistrer un nouveau chat avec sa puce RFID."
+
+msgid "API tokens, reboot/shutdown, and update actions."
+msgstr "Jetons API, redémarrage/arrêt, et mises à jour."
+
+msgid "Version and connection information."
+msgstr "Informations de version et de connexion."
+
+msgid ""
+"You can find the RFID in the [PICTURES] section, if the chip of your cat was "
+"recognized by the Kittyflap. To read the RFID, just set the entrance mode to "
+"'All Cats' and let pass your cat through the Kittyflap."
+msgstr ""
+"Vous pouvez trouver le RFID dans la section [PHOTOS] si la puce de votre "
+"chat a été reconnue par la Kittyflap. Pour lire le RFID, définissez "
+"simplement le mode d'entrée sur « Tous les chats » et laissez votre chat "
+"traverser la Kittyflap."
+
+msgid "Upload Picture"
+msgstr "Importer une photo"
+
+msgid "Save"
+msgstr "Enregistrer"
+
+msgid "New cat {} added successfully."
+msgstr "Nouveau chat {} ajouté avec succès."
+
+msgid "An error occurred while adding the new cat: {}"
+msgstr "Une erreur s'est produite lors de l'ajout du nouveau chat : {}"
+
+msgid "Show/hide password"
+msgstr "Afficher/masquer le mot de passe"
+
+msgid "The remote-mode documentation could not be loaded."
+msgstr "La documentation du mode distant n'a pas pu être chargée."
+
+msgid "General settings"
+msgstr "Paramètres généraux"
+
+msgid "Basic language, timezone, and display options for Kittyhack."
+msgstr ""
+"Options de base pour la langue, le fuseau horaire et l'affichage de "
+"Kittyhack."
+
+msgid "Language"
+msgstr "Langue"
+
+msgid "Timezone"
+msgstr "Fuseau horaire"
+
+msgid "See"
+msgstr "Voir"
+
+msgid "for valid timezone strings"
+msgstr "pour les chaînes de fuseaux horaires valides"
+
+msgid "Change your password"
+msgstr "Changer votre mot de passe"
+
+msgid "Current password"
+msgstr "Mot de passe actuel"
+
+msgid "New password"
+msgstr "Nouveau mot de passe"
+
+msgid "Confirm new password"
+msgstr "Confirmer le nouveau mot de passe"
+
+msgid "Update password"
+msgstr "Mettre à jour le mot de passe"
+
+msgid "Push notifications"
+msgstr "Notifications push"
+
+msgid "Not supported by this browser."
+msgstr "Non pris en charge par ce navigateur."
+
+msgid "Notifications are enabled on this device."
+msgstr "Les notifications sont activées sur cet appareil."
+
+msgid "Notifications are disabled on this device."
+msgstr "Les notifications sont désactivées sur cet appareil."
+
+msgid "Checking notification status..."
+msgstr "Vérification de l'état des notifications..."
+
+msgid "Enable"
+msgstr "Activer"
+
+msgid "Disable"
+msgstr "Désactiver"
+
+msgid ""
+"Get a notification on this device whenever a cat enters or exits through the "
+"flap."
+msgstr ""
+"Recevoir une notification sur cet appareil à chaque passage d'un chat par la "
+"chatière."
+
+msgid "Date format"
+msgstr "Format de date"
+
+msgid "Valid placeholders: `yyyy`, `mm`, `dd`"
+msgstr "Espaces réservés valides : `yyyy`, `mm`, `dd`"
+
+msgid "Example:"
+msgstr "Exemple :"
+
+msgid "for"
+msgstr "pour"
+
+msgid "Periodic version check"
+msgstr "Vérification périodique des versions"
+
+msgid "Automatically check for new versions of Kittyhack."
+msgstr "Vérifier automatiquement les nouvelles versions de Kittyhack."
+
+msgid "Update repository"
+msgstr "Dépôt de mise à jour"
+
+msgid "Standard"
+msgstr "Standard"
+
+msgid "Beta"
+msgstr "Bêta"
+
+msgid "Custom"
+msgstr "Personnalisé"
+
+msgid "Custom repository"
+msgstr "Dépôt personnalisé"
+
+msgid "e.g. owner/repo@branch or owner:branch"
+msgstr "par ex. owner/repo@branch ou owner:branch"
+
+msgid ""
+"**Warning:** Beta builds may be unstable. Create backups of your config "
+"(`config.ini`) and database before switching between **Standard** and "
+"**Beta**. Switching from beta back to the latest release may work, but it is "
+"not recommended."
+msgstr ""
+"**Attention :** les versions bêta peuvent être instables. Créez des "
+"sauvegardes de votre configuration (`config.ini`) et de la base de données "
+"avant de basculer entre **Standard** et **Bêta**. Revenir de la bêta vers la "
+"dernière version stable peut fonctionner, mais ce n'est pas recommandé."
+
+msgid ""
+"Use **Standard** for official stable releases from `floppyFK/kittyhack` "
+"(beta tags like `v2.6.3_beta_1` are never offered here). Use **Beta** to "
+"follow official beta releases named `vX.Y.Z_beta_N` (falls back to the "
+"latest stable release when no beta exists, or when the latest release is "
+"newer than or equal to the latest beta base version). Select **Custom** to "
+"test your own fork or a feature branch."
+msgstr ""
+"Utilisez **Standard** pour les versions stables officielles de `floppyFK/"
+"kittyhack` (les tags bêta comme `v2.6.3_beta_1` ne sont jamais proposés "
+"ici). Utilisez **Bêta** pour suivre les versions bêta officielles nommées "
+"`vX.Y.Z_beta_N` (revient à la dernière version stable si aucune bêta "
+"n'existe, ou si la dernière version stable est plus récente ou égale à la "
+"version de base de la dernière bêta). Sélectionnez **Personnalisé** pour "
+"tester votre propre fork ou une branche de fonctionnalité."
+
+msgid ""
+"Accepted custom formats:\n"
+"\n"
+"- `owner/repo` — latest stable release tag from that fork\n"
+"- `owner/repo@branch-or-tag` — track the specified ref\n"
+"- `owner:branch` — GitHub PR head-ref shorthand; you can copy it straight "
+"from a pull request header, the repo name defaults to `kittyhack`"
+msgstr ""
+"Formats personnalisés acceptés :\n"
+"\n"
+"- `owner/repo` — dernier tag de version stable de ce fork\n"
+"- `owner/repo@branch-or-tag` — suit la référence spécifiée\n"
+"- `owner:branch` — raccourci de branche de PR GitHub ; vous pouvez le copier "
+"directement depuis l'en-tête d'une pull request, le nom du dépôt est "
+"`kittyhack` par défaut"
+
+msgid "WLAN settings are not available in remote-mode."
+msgstr "Les paramètres Wi-Fi ne sont pas disponibles en mode distant."
+
+msgid "WLAN TX power (in dBm)"
+msgstr "Puissance d'émission Wi-Fi (en dBm)"
+
+msgid ""
+"WARNING: You should keep the TX power as low as possible to avoid "
+"interference with the PIR Sensors! You should only increase this value, if "
+"you have problems with the WLAN connection."
+msgstr ""
+"ATTENTION : gardez la puissance d'émission aussi basse que possible pour "
+"éviter les interférences avec les capteurs PIR ! N'augmentez cette valeur "
+"que si vous rencontrez des problèmes de connexion Wi-Fi."
+
+msgid "Default value: {}"
+msgstr "Valeur par défaut : {}"
+
+msgid "Camera settings"
+msgstr "Paramètres de la caméra"
+
+msgid "Camera specific settings for the internal and external cameras."
+msgstr "Paramètres spécifiques aux caméras interne et externe."
+
+msgid "Show IP camera usage tips"
+msgstr "Afficher les conseils d'utilisation de la caméra IP"
+
+msgid ""
+"You can use an **external IP camera** instead of the internal camera to "
+"achieve better viewing angles and better night vision.\n"
+"\n"
+"**Important notes:**\n"
+"- Both Kittyflap and the IP camera need a stable WLAN (Ethernet recommended "
+"for camera).\n"
+"- Use a **static IP** for the camera.\n"
+"- Ensure a compatible stream (RTSP / HTTP MJPEG / RTMP / UDP / TCP).\n"
+"- Recommended max resolution 1280x720 @ ≤15fps (higher reduces "
+"performance).\n"
+"- Configure resolution in camera settings or use alternate stream URLs.\n"
+"\n"
+"If you experience interruptions, check WLAN signal and network configuration."
+msgstr ""
+"Vous pouvez utiliser une **caméra IP externe** à la place de la caméra "
+"interne pour obtenir de meilleurs angles de vue et une meilleure vision "
+"nocturne.\n"
+"\n"
+"**Remarques importantes :**\n"
+"- La Kittyflap et la caméra IP ont toutes deux besoin d'un Wi-Fi stable "
+"(Ethernet recommandé pour la caméra).\n"
+"- Utilisez une **IP statique** pour la caméra.\n"
+"- Assurez-vous d'utiliser un flux compatible (RTSP / HTTP MJPEG / RTMP / "
+"UDP / TCP).\n"
+"- Résolution maximale recommandée : 1280x720 @ ≤15 im/s (une résolution plus "
+"élevée réduit les performances).\n"
+"- Configurez la résolution dans les paramètres de la caméra ou utilisez des "
+"URL de flux alternatives.\n"
+"\n"
+"En cas d'interruptions, vérifiez le signal Wi-Fi et la configuration réseau."
+
+msgid "Camera source"
+msgstr "Source de la caméra"
+
+msgid "Internal Camera"
+msgstr "Caméra interne"
+
+msgid "External IP Camera"
+msgstr "Caméra IP externe"
+
+msgid "External IP Camera URL"
+msgstr "URL de la caméra IP externe"
+
+msgid "e.g. rtsp://user:pass@192.168.1.100:554/stream"
+msgstr "par ex. rtsp://user:pass@192.168.1.100:554/stream"
+
+msgid "Show stream URL examples"
+msgstr "Afficher des exemples d'URL de flux"
+
+msgid "**Examples of supported stream URLs:**"
+msgstr "**Exemples d'URL de flux prises en charge :**"
+
+msgid "Advanced IP camera settings"
+msgstr "Paramètres avancés de la caméra IP"
+
+msgid "Downscale IP camera stream"
+msgstr "Réduire la résolution du flux de la caméra IP"
+
+msgid ""
+"If enabled, the IP camera stream is downscaled before frames reach Kittyhack."
+msgstr ""
+"Si activé, le flux de la caméra IP est réduit avant que les images "
+"n'atteignent Kittyhack."
+
+msgid ""
+"This can reduce CPU load and improve inference FPS for high-resolution "
+"streams."
+msgstr ""
+"Cela peut réduire la charge CPU et améliorer les FPS d'inférence pour les "
+"flux haute résolution."
+
+msgid "Target resolution for IP camera stream"
+msgstr "Résolution cible du flux de la caméra IP"
+
+msgid ""
+"Recommendation: choose `640x360` or `1280x720` for best performance/quality "
+"tradeoff."
+msgstr ""
+"Recommandation : choisissez `640x360` ou `1280x720` pour le meilleur "
+"compromis performance/qualité."
+
+msgid "IP camera FPS limit"
+msgstr "Limite FPS de la caméra IP"
+
+msgid "Unlimited"
+msgstr "Illimité"
+
+msgid ""
+"Default is `10 FPS`. Set to `Unlimited` to disable FPS limiting in the "
+"downscale pipeline (may cause higher CPU load)."
+msgstr ""
+"La valeur par défaut est `10 FPS`. Réglez sur `Illimité` pour désactiver la "
+"limitation de FPS dans le pipeline de réduction (peut augmenter la charge "
+"CPU)."
+
+msgid "IP camera hardware decode"
+msgstr "Décodage matériel de la caméra IP"
+
+msgid "Auto (detect GPU)"
+msgstr "Auto (détection du GPU)"
+
+msgid "Software only"
+msgstr "Logiciel uniquement"
+
+msgid "NVIDIA CUDA"
+msgstr "NVIDIA CUDA"
+
+msgid "VAAPI (Intel/AMD)"
+msgstr "VAAPI (Intel/AMD)"
+
+msgid "Intel Quick Sync"
+msgstr "Intel Quick Sync"
+
+msgid ""
+"Hardware decode offloads H.264/H.265 decoding from the CPU when using the "
+"downscale pipeline. Requires FFmpeg with the matching hardware support. "
+"Falls back to software decode automatically."
+msgstr ""
+"Le décodage matériel décharge le CPU du décodage H.264/H.265 lors de "
+"l'utilisation du pipeline de réduction. Nécessite FFmpeg avec le support "
+"matériel correspondant. Revient automatiquement au décodage logiciel si "
+"indisponible."
+
+msgid "Door control settings"
+msgstr "Paramètres de contrôle de la chatière"
+
+msgid ""
+"Detection thresholds, model selection and other settings for the door "
+"control."
+msgstr ""
+"Seuils de détection, sélection du modèle et autres paramètres pour le "
+"contrôle de la chatière."
+
+msgid "Minimum detection threshold"
+msgstr "Seuil de détection minimum"
+
+msgid "Explain minimum detection threshold"
+msgstr "Expliquer le seuil de détection minimum"
+
+msgid ""
+"Used to decide if an outside motion event is logged. At least one picture "
+"must exceed this probability or the event is discarded.\n"
+"*(Default value: {})*"
+msgstr ""
+"Utilisé pour décider si un événement de mouvement extérieur est enregistré. "
+"Au moins une image doit dépasser cette probabilité, sinon l'événement est "
+"ignoré.\n"
+"*(Valeur par défaut : {})*"
+
+msgid "Mouse detection threshold"
+msgstr "Seuil de détection de souris"
+
+msgid "Explain mouse threshold"
+msgstr "Expliquer le seuil de souris"
+
+msgid ""
+"Kittyhack decides if a picture contains a mouse based on this value. If "
+"probability exceeds it, flap stays closed.\n"
+"*(Default value: {})*\n"
+"\n"
+"**Note:** Minimum is coupled to 'Minimum detection threshold'."
+msgstr ""
+"Kittyhack décide si une image contient une souris en se basant sur cette "
+"valeur. Si la probabilité la dépasse, la chatière reste fermée.\n"
+"*(Valeur par défaut : {})*\n"
+"\n"
+"**Remarque :** le minimum est lié au « Seuil de détection minimum »."
+
+msgid "Cat detection threshold"
+msgstr "Seuil de détection du chat"
+
+msgid "Explain cat threshold"
+msgstr "Expliquer le seuil du chat"
+
+msgid "Kittyhack decides based on this value, if a picture contains your cat."
+msgstr ""
+"Kittyhack décide, en se basant sur cette valeur, si une image contient votre "
+"chat."
+
+msgid ""
+"If the detected probability of your cat exceeds this value in a picture, and "
+"the setting `Use camera for cat detection` is enabled, the flap will be "
+"opened."
+msgstr ""
+"Si la probabilité détectée de votre chat dépasse cette valeur sur une image, "
+"et que le paramètre `Utiliser la caméra pour la détection du chat` est "
+"activé, la chatière s'ouvrira."
+
+msgid ""
+"Note: The minimum of this value is always coupled to the configured value of "
+"'Minimum detection threshold' above."
+msgstr ""
+"Remarque : le minimum de cette valeur est toujours lié à la valeur "
+"configurée du « Seuil de détection minimum » ci-dessus."
+
+msgid "Seconds before unlock decision"
+msgstr "Secondes avant la décision de déverrouillage"
+
+msgid "Explain unlock decision delay"
+msgstr "Expliquer le délai de décision de déverrouillage"
+
+msgid ""
+"Time in seconds after an outside motion trigger before Kittyhack may unlock."
+msgstr ""
+"Temps en secondes après un déclenchement de mouvement extérieur avant que "
+"Kittyhack ne puisse déverrouiller."
+
+msgid ""
+"Unlock is only possible if no prey was detected during this initial analysis "
+"window."
+msgstr ""
+"Le déverrouillage n'est possible que si aucune proie n'a été détectée "
+"pendant cette fenêtre d'analyse initiale."
+
+msgid ""
+"After unlocking: If a later picture reaches the mouse_threshold, the flap is "
+"locked again."
+msgstr ""
+"Après déverrouillage : si une image ultérieure atteint le seuil de souris, "
+"la chatière est reverrouillée."
+
+msgid "Lock duration after prey detection (in s)"
+msgstr "Durée de verrouillage après détection de proie (en s)"
+
+msgid "Explain lock duration"
+msgstr "Expliquer la durée de verrouillage"
+
+msgid "The flap will remain closed for this time after a prey detection."
+msgstr ""
+"La chatière restera fermée pendant cette durée après une détection de proie."
+
+msgid "Detect prey"
+msgstr "Détecter les proies"
+
+msgid "Explain prey detection"
+msgstr "Expliquer la détection de proie"
+
+msgid ""
+"If the prey detection is enabled and the mouse detection threshold is "
+"exceeded in a picture, the flap will remain closed.\n"
+"\n"
+"**NOTE:** This is the global setting. It can also be configured per cat in "
+"the `MANAGE CATS` section."
+msgstr ""
+"Si la détection de proie est activée et que le seuil de détection de souris "
+"est dépassé sur une image, la chatière restera fermée.\n"
+"\n"
+"**REMARQUE :** ceci est le paramètre global. Il peut aussi être configuré "
+"par chat dans la section `GÉRER LES CHATS`."
+
+msgid "Version of the object detection model"
+msgstr "Version du modèle de détection d'objets"
+
+msgid "Show model version explanation"
+msgstr "Afficher l'explication des versions de modèle"
+
+msgid "Original Kittyflap Model v1:"
+msgstr "Modèle Kittyflap original v1 :"
+
+msgid ""
+"Always tries to detect objects `Mouse` and `No Mouse`, even if there is no "
+"such object in the picture."
+msgstr ""
+"Essaie toujours de détecter les objets `Mouse` et `No Mouse`, même si un tel "
+"objet n'est pas présent sur l'image."
+
+msgid "Original Kittyflap Model v2:"
+msgstr "Modèle Kittyflap original v2 :"
+
+msgid ""
+"Only tries to detect objects `Mouse` and `No Mouse` if there is a cat in the "
+"picture."
+msgstr ""
+"N'essaie de détecter les objets `Mouse` et `No Mouse` que si un chat est "
+"présent sur l'image."
+
+msgid "Custom Models:"
+msgstr "Modèles personnalisés :"
+
+msgid ""
+"These are your own trained models, which you have created in the `AI "
+"TRAINING` section."
+msgstr ""
+"Il s'agit de vos propres modèles entraînés, créés dans la section "
+"`ENTRAÎNEMENT DE L'IA`."
+
+msgid ""
+"If you change this setting, the Kittyflap must be restarted to apply the new "
+"model version."
+msgstr ""
+"Si vous modifiez ce paramètre, la Kittyflap doit être redémarrée pour "
+"appliquer la nouvelle version du modèle."
+
+msgid "Use camera for cat detection"
+msgstr "Utiliser la caméra pour la détection du chat"
+
+msgid "Explain camera cat detection"
+msgstr "Expliquer la détection du chat par caméra"
+
+msgid ""
+"If this setting is enabled, the camera will also be used for cat detection "
+"(in addition to the RFID reader)."
+msgstr ""
+"Si ce paramètre est activé, la caméra sera également utilisée pour la "
+"détection du chat (en plus du lecteur RFID)."
+
+msgid ""
+"You can configure the required threshold for the cat detection with the "
+"slider `Cat detection threshold`."
+msgstr ""
+"Vous pouvez configurer le seuil requis pour la détection du chat avec le "
+"curseur `Seuil de détection du chat`."
+
+msgid "If the detection is successful, the inside direction will be opened."
+msgstr "Si la détection réussit, le sens intérieur sera ouvert."
+
+msgid ""
+"**NOTE:** This feature requires a custom trained model for your cat(s). It "
+"does not work with the default kittyflap models."
+msgstr ""
+"**REMARQUE :** cette fonctionnalité nécessite un modèle personnalisé "
+"entraîné pour votre/vos chat(s). Elle ne fonctionne pas avec les modèles "
+"Kittyflap par défaut."
+
+msgid ""
+"This feature depends heavily on the quality of your model and sufficient "
+"lighting conditions."
+msgstr ""
+"Cette fonctionnalité dépend fortement de la qualité de votre modèle et d'un "
+"éclairage suffisant."
+
+msgid ""
+"If one or both are not good, the detection may either fail or other - "
+"similiar looking cats may be detected as your cat."
+msgstr ""
+"Si l'un ou l'autre n'est pas satisfaisant, la détection peut échouer, ou "
+"d'autres chats d'apparence similaire peuvent être détectés comme étant le "
+"vôtre."
+
+msgid "Use camera for motion detection"
+msgstr "Utiliser la caméra pour la détection de mouvement"
+
+msgid "Explain camera motion detection"
+msgstr "Expliquer la détection de mouvement par caméra"
+
+msgid ""
+"Disables the outside PIR sensor and uses the camera for motion detection "
+"instead."
+msgstr ""
+"Désactive le capteur PIR extérieur et utilise la caméra pour la détection de "
+"mouvement à la place."
+
+msgid "**How it works:**"
+msgstr "**Fonctionnement :**"
+
+msgid ""
+"- In regular operation, Kittyhack waits for a trigger from the outside PIR "
+"sensor before starting camera analysis"
+msgstr ""
+"- En fonctionnement normal, Kittyhack attend un déclenchement du capteur PIR "
+"extérieur avant de démarrer l'analyse par caméra"
+
+msgid ""
+"- With this feature enabled, the PIR sensor is disabled and the camera "
+"continuously analyzes images"
+msgstr ""
+"- Avec cette fonctionnalité activée, le capteur PIR est désactivé et la "
+"caméra analyse les images en continu"
+
+msgid ""
+"- When a cat is detected in the camera feed, it's treated as equivalent to a "
+"motion detection outside"
+msgstr ""
+"- Lorsqu'un chat est détecté dans le flux de la caméra, cela est traité "
+"comme équivalent à une détection de mouvement extérieure"
+
+msgid ""
+"This may be very helpful in areas where environmental factors (moving trees, "
+"people passing by) permanently cause false PIR triggers."
+msgstr ""
+"Cela peut être très utile dans les zones où des facteurs environnementaux "
+"(arbres en mouvement, passants) déclenchent en permanence de fausses alertes "
+"PIR."
+
+msgid ""
+"If one or both are not good, you may experience false triggers or your cat "
+"may not be detected correctly."
+msgstr ""
+"Si l'un ou l'autre n'est pas satisfaisant, vous pouvez rencontrer de fausses "
+"détections ou votre chat peut ne pas être détecté correctement."
+
+msgid "Open inside direction for:"
+msgstr "Ouvrir le sens intérieur pour :"
+
+msgid "All cats (unlock on every detected motion)"
+msgstr "Tous les chats (déverrouillage à chaque mouvement détecté)"
+
+msgid "All cats with a RFID chip"
+msgstr "Tous les chats avec une puce RFID"
+
+msgid "Only registered cats"
+msgstr "Chats enregistrés uniquement"
+
+msgid "No cats"
+msgstr "Aucun chat"
+
+msgid "Individual configuration per cat"
+msgstr "Configuration individuelle par chat"
+
+msgid "Explain entrance modes"
+msgstr "Expliquer les modes d'entrée"
+
+msgid ""
+"- **All cats:** *Every* detected motion on the outside will unlock the flap."
+msgstr ""
+"- **Tous les chats :** *chaque* mouvement détecté à l'extérieur "
+"déverrouillera la chatière."
+
+msgid ""
+"- **All cats with a RFID chip:** Every successful RFID detection will unlock "
+"the flap."
+msgstr ""
+"- **Tous les chats avec une puce RFID :** chaque détection RFID réussie "
+"déverrouillera la chatière."
+
+msgid ""
+"- **Only registered cats:** Only the cats that are registered in the "
+"database will unlock the flap (either by RFID or by camera detection, if "
+"enabled)."
+msgstr ""
+"- **Chats enregistrés uniquement :** seuls les chats enregistrés dans la "
+"base de données déverrouilleront la chatière (par RFID ou par détection "
+"caméra, si activée)."
+
+msgid ""
+"- **Individual configuration per cat:** Configure per cat if it is allowed "
+"to enter (in the `MANAGE CATS` section)."
+msgstr ""
+"- **Configuration individuelle par chat :** configurez pour chaque chat s'il "
+"est autorisé à entrer (dans la section `GÉRER LES CHATS`)."
+
+msgid "- **No cats:** The inside direction will never be opened."
+msgstr "- **Aucun chat :** le sens intérieur ne sera jamais ouvert."
+
+msgid "Show decision logic"
+msgstr "Afficher la logique de décision"
+
+msgid "Hide decision logic"
+msgstr "Masquer la logique de décision"
+
+msgid "Only the flowchart for the currently selected mode is shown."
+msgstr "Seul le logigramme du mode actuellement sélectionné est affiché."
+
+msgid "Outside direction:"
+msgstr "Sens extérieur :"
+
+msgid "Do not allow exit"
+msgstr "Interdire la sortie"
+
+msgid "Explain exit modes"
+msgstr "Expliquer les modes de sortie"
+
+msgid ""
+"- **Allow exit:** The outside direction is always possible. You can also "
+"configure time ranges below to restrict the exit times."
+msgstr ""
+"- **Autoriser la sortie :** le sens extérieur est toujours possible. Vous "
+"pouvez aussi configurer des plages horaires ci-dessous pour restreindre les "
+"heures de sortie."
+
+msgid "- **Do not allow exit:** The outside direction is always closed."
+msgstr "- **Interdire la sortie :** le sens extérieur est toujours fermé."
+
+msgid ""
+"- **Individual configuration per cat:** Configure per cat if it is allowed "
+"to exit (in the `MANAGE CATS` section). The time ranges below are applied in "
+"addition."
+msgstr ""
+"- **Configuration individuelle par chat :** configurez pour chaque chat s'il "
+"est autorisé à sortir (dans la section `GÉRER LES CHATS`). Les plages "
+"horaires ci-dessous s'appliquent en plus."
+
+msgid ""
+"**NOTE:** All your cats must be registered **with a RFID chip** to use this "
+"mode. Cats without RFID can not go outside in this mode!"
+msgstr ""
+"**REMARQUE :** tous vos chats doivent être enregistrés **avec une puce "
+"RFID** pour utiliser ce mode. Les chats sans RFID ne peuvent pas sortir dans "
+"ce mode !"
+
+msgid "Show exit time range rules"
+msgstr "Afficher les règles de plages horaires de sortie"
+
+msgid ""
+"You can specify up to 3 time ranges, in which your cats are allowed to exit."
+msgstr ""
+"Vous pouvez définir jusqu'à 3 plages horaires pendant lesquelles vos chats "
+"sont autorisés à sortir."
+
+msgid "Rules:"
+msgstr "Règles :"
+
+msgid "The time ranges are global and apply to all cats."
+msgstr "Les plages horaires sont globales et s'appliquent à tous les chats."
+
+msgid ""
+"If no range is enabled, cats may exit at any time (subject to other "
+"settings)."
+msgstr ""
+"Si aucune plage n'est activée, les chats peuvent sortir à tout moment (sous "
+"réserve des autres paramètres)."
+
+msgid ""
+"If any range is enabled, cats may exit only during the configured time "
+"windows."
+msgstr ""
+"Si une plage est activée, les chats ne peuvent sortir que pendant les "
+"fenêtres horaires configurées."
+
+msgid ""
+"Outside these windows, no cat may exit, even if the per‑cat setting in "
+"'Manage Cats' allows exit."
+msgstr ""
+"En dehors de ces fenêtres, aucun chat ne peut sortir, même si le paramètre "
+"par chat dans « Gérer les chats » autorise la sortie."
+
+msgid "See the decision logic flowchart above for details."
+msgstr ""
+"Voir le logigramme de la logique de décision ci-dessus pour plus de détails."
+
+msgid "Enter times in 24h format HH:MM (e.g., 13:00)."
+msgstr "Saisissez les heures au format 24h HH:MM (par ex. 13:00)."
+
+msgid ""
+"Example: If ranges are 10:00–18:00 and it is 20:00, no cat may exit, even if "
+"that cat is allowed per‑cat in 'Manage Cats'."
+msgstr ""
+"Exemple : si les plages sont 10:00–18:00 et qu'il est 20:00, aucun chat ne "
+"peut sortir, même si ce chat y est autorisé individuellement dans « Gérer "
+"les chats »."
+
+msgid "Time range 1"
+msgstr "Plage horaire 1"
+
+msgid "From"
+msgstr "De"
+
+msgid "To"
+msgstr "À"
+
+msgid "Time range 2"
+msgstr "Plage horaire 2"
+
+msgid "Time range 3"
+msgstr "Plage horaire 3"
+
+msgid "Reaction speed (in s) of the motion sensor on the inside"
+msgstr "Vitesse de réaction (en s) du capteur de mouvement intérieur"
+
+msgid "Explain inside PIR reaction speed"
+msgstr "Expliquer la vitesse de réaction PIR intérieure"
+
+msgid ""
+"A low value means a fast reaction, but also a higher probability of false "
+"alarms. A high value means a slow reaction, but also a lower probability of "
+"false alarms."
+msgstr ""
+"Une valeur basse signifie une réaction rapide, mais aussi une probabilité "
+"plus élevée de fausses alertes. Une valeur élevée signifie une réaction "
+"lente, mais aussi une probabilité plus faible de fausses alertes."
+
+msgid "The default setting should be a good value for most cases."
+msgstr "Le paramètre par défaut convient dans la plupart des cas."
+
+msgid "Immediate locking after passage"
+msgstr "Verrouillage immédiat après passage"
+
+msgid "About this feature"
+msgstr "À propos de cette fonctionnalité"
+
+msgid ""
+"When enabled, the flap locks again and the motion event is finalized as soon "
+"as motion is detected on the opposite side of the flap (cat has crossed)."
+msgstr ""
+"Lorsque activé, la chatière se reverrouille et l'événement de mouvement est "
+"finalisé dès qu'un mouvement est détecté de l'autre côté de la chatière (le "
+"chat a traversé)."
+
+msgid ""
+"This feature is useful if your cat is very fast and the flap should not "
+"remain open for too long. Will help prevent multiple cats from using the "
+"flap in quick succession."
+msgstr ""
+"Cette fonctionnalité est utile si votre chat est très rapide et que la "
+"chatière ne doit pas rester ouverte trop longtemps. Elle aide à empêcher "
+"plusieurs chats d'utiliser la chatière en succession rapide."
+
+msgid ""
+"If your cat is shy or just needs several attempts to cross, you should not "
+"enable this feature. Otherwise, the flap could be accidentally locked while "
+"your cat is still trying to cross."
+msgstr ""
+"Si votre chat est craintif ou a simplement besoin de plusieurs tentatives "
+"pour traverser, n'activez pas cette fonctionnalité. Sinon, la chatière "
+"pourrait se verrouiller accidentellement pendant que votre chat essaie "
+"encore de traverser."
+
+msgid "Live view settings"
+msgstr "Paramètres de la vue en direct"
+
+msgid "Update interval for the live camera view in the WebUI."
+msgstr ""
+"Intervalle de mise à jour de la vue caméra en direct dans l'interface Web."
+
+msgid "Live-View update interval:"
+msgstr "Intervalle de mise à jour de la vue en direct :"
+
+msgid "Refresh the live view every..."
+msgstr "Actualiser la vue en direct toutes les..."
+
+msgid ""
+"NOTE: A high refresh rate could slow down the performance, especially if "
+"several users are connected at the same time. Values below 1s require a fast "
+"and stable WLAN connection."
+msgstr ""
+"REMARQUE : un taux de rafraîchissement élevé peut ralentir les performances, "
+"surtout si plusieurs utilisateurs sont connectés simultanément. Les valeurs "
+"inférieures à 1 s nécessitent une connexion Wi-Fi rapide et stable."
+
+msgid ""
+"This setting affects only the view in the WebUI and has no impact on the "
+"detection process."
+msgstr ""
+"Ce paramètre n'affecte que l'affichage dans l'interface Web et n'a aucun "
+"impact sur le processus de détection."
+
+msgid "Pictures view settings"
+msgstr "Paramètres de la vue photos"
+
+msgid ""
+"Configuration of the pictures view in the WebUI, maximum number of pictures "
+"in the database and limits of pictures per event."
+msgstr ""
+"Configuration de la vue photos dans l'interface Web, nombre maximal d'images "
+"dans la base de données et limites d'images par événement."
+
+msgid "Maximum number of photos to retain in the database"
+msgstr "Nombre maximal de photos à conserver dans la base de données"
+
+msgid ""
+"The oldest pictures will be deleted if the number of pictures exceeds this "
+"value."
+msgstr ""
+"Les images les plus anciennes seront supprimées si leur nombre dépasse cette "
+"valeur."
+
+msgid ""
+"The maximum number of pictures depends on the type of the Raspberry Pi, "
+"since some kittyflaps are equipped with 16GB and some with 32GB."
+msgstr ""
+"Le nombre maximal d'images dépend du type de Raspberry Pi, certaines "
+"Kittyflaps étant équipées de 16 Go et d'autres de 32 Go."
+
+msgid ""
+"As a rule of thumb, you can calculate with 200MB per 1000 pictures. You can "
+"check the free disk space in the `INFO` section."
+msgstr ""
+"En règle générale, comptez environ 200 Mo pour 1000 images. Vous pouvez "
+"vérifier l'espace disque libre dans la section `INFO`."
+
+msgid "Maximal pictures per event with RFID"
+msgstr "Nombre maximal d'images par événement avec RFID"
+
+msgid ""
+"Maximal number of pictures that will be stored to the database for a motion "
+"event, if a cat with a RFID chip is detected."
+msgstr ""
+"Nombre maximal d'images stockées dans la base de données pour un événement "
+"de mouvement, si un chat avec une puce RFID est détecté."
+
+msgid ""
+"NOTE: The internal prey detection will still be active for all pictures of "
+"this event. This number just limits the number of pictures that will be "
+"stored to the database."
+msgstr ""
+"REMARQUE : la détection interne de proie reste active pour toutes les images "
+"de cet événement. Ce nombre limite uniquement le nombre d'images stockées "
+"dans la base de données."
+
+msgid ""
+"If you set this to 0, no event will be logged to the database. Too many "
+"pictures can slow down the performance drastically."
+msgstr ""
+"Si vous réglez cette valeur sur 0, aucun événement ne sera enregistré dans "
+"la base de données. Un trop grand nombre d'images peut ralentir "
+"drastiquement les performances."
+
+msgid "Maximal pictures per event without RFID"
+msgstr "Nombre maximal d'images par événement sans RFID"
+
+msgid ""
+"Maximal number of pictures that will be stored to the database for a motion "
+"event, if a motion event without a detected RFID occurs."
+msgstr ""
+"Nombre maximal d'images stockées dans la base de données pour un événement "
+"de mouvement sans RFID détecté."
+
+msgid "Maximum pictures per page"
+msgstr "Nombre maximal d'images par page"
+
+msgid ""
+"This setting applies only to the `PICTURES` section in the ungrouped view "
+"mode."
+msgstr ""
+"Ce paramètre s'applique uniquement à la section `PHOTOS` en mode d'affichage "
+"non groupé."
+
+msgid ""
+"NOTE: Too many pictures per page could slow down the performance drastically!"
+msgstr ""
+"REMARQUE : un nombre trop élevé d'images par page peut ralentir "
+"drastiquement les performances !"
+
+msgid "Home Assistant configuration"
+msgstr "Configuration Home Assistant"
+
+msgid "Configure MQTT integration for Home Assistant."
+msgstr "Configurer l'intégration MQTT pour Home Assistant."
+
+msgid "Enable MQTT"
+msgstr "Activer MQTT"
+
+msgid "MQTT Broker Address"
+msgstr "Adresse du broker MQTT"
+
+msgid "e.g. 192.168.1.10"
+msgstr "par ex. 192.168.1.10"
+
+msgid "MQTT Broker Port"
+msgstr "Port du broker MQTT"
+
+msgid "MQTT Username"
+msgstr "Nom d'utilisateur MQTT"
+
+msgid "MQTT username"
+msgstr "nom d'utilisateur MQTT"
+
+msgid "MQTT Password"
+msgstr "Mot de passe MQTT"
+
+msgid "MQTT password"
+msgstr "mot de passe MQTT"
+
+msgid "Camera update interval"
+msgstr "Intervalle de mise à jour de la caméra"
+
+msgid ""
+"The interval in seconds between publishing camera images to the MQTT broker."
+msgstr ""
+"L'intervalle en secondes entre chaque publication d'images de la caméra vers "
+"le broker MQTT."
+
+msgid "Home Assistant Card Example"
+msgstr "Exemple de carte Home Assistant"
+
+msgid "Copy this configuration to create a dashboard card in Home Assistant:"
+msgstr ""
+"Copiez cette configuration pour créer une carte de tableau de bord dans Home "
+"Assistant :"
+
+msgid "Home Assistant Dashboard Card"
+msgstr "Carte de tableau de bord Home Assistant"
+
+msgid "KittyHack Cat Flap"
+msgstr "Chatière KittyHack"
+
+msgid "Last Event"
+msgstr "Dernier événement"
+
+msgid "Inside"
+msgstr "Intérieur"
+
+msgid "Outside"
+msgstr "Extérieur"
+
+msgid "Magnetic Locks"
+msgstr "Verrous magnétiques"
+
+msgid "Configuration"
+msgstr "Configuration"
+
+msgid "Open entrance for..."
+msgstr "Ouvrir l'entrée pour..."
+
+msgid "Allow cats to exit"
+msgstr "Autoriser les chats à sortir"
+
+msgid "Motion outside"
+msgstr "Mouvement extérieur"
+
+msgid "Motion inside"
+msgstr "Mouvement intérieur"
+
+msgid "Status"
+msgstr "Statut"
+
+msgid "Advanced settings"
+msgstr "Paramètres avancés"
+
+msgid "Advanced configuration options for hostname, logging, and performance."
+msgstr ""
+"Options de configuration avancées pour le nom d'hôte, la journalisation et "
+"les performances."
+
+msgid "Hostname"
+msgstr "Nom d'hôte"
+
+msgid ""
+"The hostname of the Kittyflap. You can change it to any unique name in your "
+"network for an easier access (mDNS / Avahi must be enabled in your router)."
+msgstr ""
+"Le nom d'hôte de la Kittyflap. Vous pouvez le changer pour tout nom unique "
+"sur votre réseau afin de faciliter l'accès (mDNS / Avahi doit être activé "
+"sur votre routeur)."
+
+msgid "Allowed characters: `a-z`, `A-Z`, `0-9` and `-`."
+msgstr "Caractères autorisés : `a-z`, `A-Z`, `0-9` et `-`."
+
+msgid "NOTE: This setting requires a restart of the kittyflap to take effect."
+msgstr ""
+"REMARQUE : ce paramètre nécessite un redémarrage de la Kittyflap pour "
+"prendre effet."
+
+msgid "You can access the Kittyflap via the hostname in your browser:"
+msgstr ""
+"Vous pouvez accéder à la Kittyflap via son nom d'hôte dans votre navigateur :"
+
+msgid ""
+"`INFO` is the default log level and should be used in normal operation. "
+"`DEBUG` should only be used if it is really necessary!"
+msgstr ""
+"`INFO` est le niveau de journalisation par défaut et doit être utilisé en "
+"fonctionnement normal. `DEBUG` ne doit être utilisé qu'en cas de réelle "
+"nécessité !"
+
+msgid "Use all CPU cores for image processing"
+msgstr "Utiliser tous les cœurs CPU pour le traitement d'image"
+
+msgid ""
+"If this is enabled, all CPU cores will be used for image processing. This "
+"results in a faster analysis of the pictures, and therefore a maybe a bit "
+"faster prey detection."
+msgstr ""
+"Si activé, tous les cœurs CPU seront utilisés pour le traitement d'image. "
+"Cela permet une analyse plus rapide des images, et donc potentiellement une "
+"détection de proie un peu plus rapide."
+
+msgid ""
+"**WARNING**: It is NOT recommended to enable this feature! Several users "
+"have reported that this option causes reboots or system freezes."
+msgstr ""
+"**ATTENTION** : il n'est PAS recommandé d'activer cette fonctionnalité ! "
+"Plusieurs utilisateurs ont signalé que cette option provoque des "
+"redémarrages ou des blocages du système."
+
+msgid ""
+"If you encounter the same issue, it's strongly recommended to disable this "
+"setting."
+msgstr ""
+"Si vous rencontrez le même problème, il est fortement recommandé de "
+"désactiver ce paramètre."
+
+msgid "Remote inference FPS limit"
+msgstr "Limite de FPS d'inférence en mode distant"
+
+msgid "Limits the model inference loop to reduce CPU load in remote-mode."
+msgstr ""
+"Limite la boucle d'inférence du modèle pour réduire la charge CPU en mode "
+"distant."
+
+msgid "This setting is only configurable in remote-mode."
+msgstr "Ce paramètre n'est configurable qu'en mode distant."
+
+msgid "Default: 10 FPS"
+msgstr "Par défaut : 10 FPS"
+
+msgid "Wait for remote after reboot (seconds)"
+msgstr "Attendre la connexion distante après redémarrage (secondes)"
+
+msgid ""
+"If the Kittyflap has been controlled remotely before, it will wait this long "
+"for a remote-control takeover after reboot before starting Kittyhack locally."
+msgstr ""
+"Si la Kittyflap a déjà été contrôlée à distance, elle attendra cette durée "
+"pour une reprise du contrôle à distance après redémarrage, avant de démarrer "
+"Kittyhack localement."
+
+msgid "IP camera watchdog"
+msgstr "Surveillance de la caméra IP"
+
+msgid ""
+"If enabled, the stream of an external camera will be automatically restarted "
+"if corrupted frames are detected."
+msgstr ""
+"Si activé, le flux d'une caméra externe sera automatiquement redémarré en "
+"cas de détection d'images corrompues."
+
+msgid "WLAN watchdog is not available in remote-mode."
+msgstr "La surveillance Wi-Fi n'est pas disponible en mode distant."
+
+msgid "WLAN watchdog"
+msgstr "Surveillance Wi-Fi"
+
+msgid ""
+"If enabled, the WLAN connection will be monitored and automatically "
+"reconnected on failure. If this also fails, the Kittyflap will automatically "
+"restart."
+msgstr ""
+"Si activé, la connexion Wi-Fi sera surveillée et reconnectée automatiquement "
+"en cas de défaillance. Si cela échoue également, la Kittyflap redémarrera "
+"automatiquement."
+
+msgid "Inference device (Experimental!)"
+msgstr "Périphérique d'inférence (Expérimental !)"
+
+msgid "CPU (default)"
+msgstr "CPU (par défaut)"
+
+msgid "NVIDIA GPU (CUDA)"
+msgstr "GPU NVIDIA (CUDA)"
+
+msgid "Intel GPU (OpenVINO)"
+msgstr "GPU Intel (OpenVINO)"
+
+msgid "Show inference device info"
+msgstr "Afficher les infos sur le périphérique d'inférence"
+
+msgid "CPU (default):"
+msgstr "CPU (par défaut) :"
+
+msgid ""
+"Uses the NCNN model format, optimised for ARM/x86 without a dedicated GPU. "
+"Recommended for the Kittyflap hardware."
+msgstr ""
+"Utilise le format de modèle NCNN, optimisé pour ARM/x86 sans GPU dédié. "
+"Recommandé pour le matériel Kittyflap."
+
+msgid "NVIDIA GPU (CUDA):"
+msgstr "GPU NVIDIA (CUDA) :"
+
+msgid ""
+"Uses the PyTorch `.pt` model with CUDA. Requires a CUDA-capable NVIDIA GPU "
+"and PyTorch built with CUDA support."
+msgstr ""
+"Utilise le modèle PyTorch `.pt` avec CUDA. Nécessite un GPU NVIDIA "
+"compatible CUDA et PyTorch compilé avec le support CUDA."
+
+msgid "Intel GPU (OpenVINO):"
+msgstr "GPU Intel (OpenVINO) :"
+
+msgid ""
+"Uses an exported OpenVINO model via the `openvino` runtime. Suitable for "
+"Intel Arc and Intel integrated GPUs."
+msgstr ""
+"Utilise un modèle OpenVINO exporté via le runtime `openvino`. Adapté aux GPU "
+"Intel Arc et Intel intégrés."
+
+msgid ""
+"GPU inference only works with custom YOLO models, not with the original "
+"Kittyflap TFLite models."
+msgstr ""
+"L'inférence GPU ne fonctionne qu'avec les modèles YOLO personnalisés, pas "
+"avec les modèles TFLite Kittyflap d'origine."
+
+msgid ""
+"Note: This is an experimental feature. While it can significantly speed up "
+"inference and reduce CPU load, it may also cause instability on unsupported "
+"hardware or with incompatible model formats."
+msgstr ""
+"Remarque : il s'agit d'une fonctionnalité expérimentale. Bien qu'elle puisse "
+"accélérer considérablement l'inférence et réduire la charge CPU, elle peut "
+"aussi causer une instabilité sur du matériel non pris en charge ou avec des "
+"formats de modèle incompatibles."
+
+msgid ""
+"Inference device is fixed to **CPU** on Kittyflap hardware. GPU inference is "
+"only available in remote-mode."
+msgstr ""
+"Le périphérique d'inférence est fixé au **CPU** sur le matériel Kittyflap. "
+"L'inférence GPU n'est disponible qu'en mode distant."
+
+msgid "Disable RFID reader"
+msgstr "Désactiver le lecteur RFID"
+
+msgid ""
+"If this option is enabled, the RFID reader will NOT be powered when motion "
+"is detected. Use only for troubleshooting hardware defects or undervoltage "
+"reboots. You must rely on 'Open inside direction for: All cats' or camera-"
+"based cat detection instead."
+msgstr ""
+"Si cette option est activée, le lecteur RFID ne sera PAS alimenté lors de la "
+"détection de mouvement. À utiliser uniquement pour diagnostiquer des défauts "
+"matériels ou des redémarrages liés à une sous-tension. Vous devez alors vous "
+"appuyer sur « Ouvrir le sens intérieur pour : Tous les chats » ou sur la "
+"détection du chat par caméra."
+
+msgid "Default: Disabled"
+msgstr "Par défaut : désactivé"
+
+msgid "Remote-mode guide"
+msgstr "Guide du mode distant"
+
+msgid "Shows the remote-mode documentation."
+msgstr "Affiche la documentation du mode distant."
+
+msgid "Could not identify the current session. Please log in again."
+msgstr ""
+"Impossible d'identifier la session actuelle. Veuillez vous reconnecter."
+
+msgid "Current password is incorrect."
+msgstr "Le mot de passe actuel est incorrect."
+
+msgid "New password must be at least 8 characters long."
+msgstr "Le nouveau mot de passe doit contenir au moins 8 caractères."
+
+msgid "The new passwords do not match."
+msgstr "Les nouveaux mots de passe ne correspondent pas."
+
+msgid "Password updated successfully."
+msgstr "Mot de passe mis à jour avec succès."
+
+msgid "Allowed to exit time ranges: "
+msgstr "Plages horaires de sortie autorisées : "
+
+msgid "Invalid time format. Please use HH:MM format."
+msgstr "Format d'heure invalide. Utilisez le format HH:MM."
+
+msgid "Changes were not saved."
+msgstr "Les modifications n'ont pas été enregistrées."
+
+msgid "Time must be between 00:00 and 23:59."
+msgstr "L'heure doit être comprise entre 00:00 et 23:59."
+
+msgid "Invalid time value."
+msgstr "Valeur d'heure invalide."
+
+msgid "Update repository: "
+msgstr "Dépôt de mise à jour : "
+
+msgid ""
+"Invalid format. Use 'owner/repo', 'owner/repo@branch-or-tag', or "
+"'owner:branch'."
+msgstr ""
+"Format invalide. Utilisez « owner/repo », « owner/repo@branch-or-tag » ou "
+"« owner:branch »."
+
+msgid "Repository '{}' was not found on GitHub."
+msgstr "Le dépôt « {} » n'a pas été trouvé sur GitHub."
+
+msgid "Branch or tag '{}' was not found on GitHub."
+msgstr "La branche ou le tag « {} » n'a pas été trouvé(e) sur GitHub."
+
+msgid "Could not reach GitHub to verify the custom repository: {}"
+msgstr "Impossible de joindre GitHub pour vérifier le dépôt personnalisé : {}"
+
+msgid "Custom update repository could not be validated."
+msgstr "Le dépôt de mise à jour personnalisé n'a pas pu être validé."
+
+msgid "Hostname: "
+msgstr "Nom d'hôte : "
+
+msgid "Invalid hostname. Only letters, numbers and hyphens are allowed."
+msgstr ""
+"Nom d'hôte invalide. Seuls les lettres, chiffres et tirets sont autorisés."
+
+msgid "IP Camera URL: "
+msgstr "URL de la caméra IP : "
+
+msgid ""
+"Invalid stream URL format. Please use a valid URL starting with rtsp://, "
+"http://, https://, rtmp://, udp://, tcp://, or file://"
+msgstr ""
+"Format d'URL de flux invalide. Utilisez une URL valide commençant par "
+"rtsp://, http://, https://, rtmp://, udp://, tcp:// ou file://"
+
+msgid ""
+"FFmpeg is required for the decode+scale pipeline but could not be installed "
+"automatically."
+msgstr ""
+"FFmpeg est requis pour le pipeline de décodage et de redimensionnement, mais "
+"n'a pas pu être installé automatiquement."
+
+msgid "Please install `ffmpeg` manually and try again. Changes were not saved."
+msgstr ""
+"Veuillez installer `ffmpeg` manuellement et réessayer. Les modifications "
+"n'ont pas été enregistrées."
+
+msgid "OpenVINO: "
+msgstr "OpenVINO : "
+
+msgid ""
+"The `openvino` package could not be installed automatically. Please run `pip "
+"install openvino` manually and try again. Changes were not saved."
+msgstr ""
+"Le paquet `openvino` n'a pas pu être installé automatiquement. Exécutez `pip "
+"install openvino` manuellement et réessayez. Les modifications n'ont pas été "
+"enregistrées."
+
+msgid "Invalid configuration: "
+msgstr "Configuration invalide : "
+
+msgid ""
+"You cannot use the camera for motion detection in combination with an "
+"original Kittyflap model. You need a custom trained model for this."
+msgstr ""
+"Vous ne pouvez pas utiliser la caméra pour la détection de mouvement avec un "
+"modèle Kittyflap d'origine. Un modèle personnalisé entraîné est nécessaire "
+"pour cela."
+
+msgid "The setting \"{}\" was disabled."
+msgstr "Le paramètre « {} » a été désactivé."
+
+msgid ""
+"You cannot use the camera for cat detection in combination with an original "
+"Kittyflap model. You need a custom trained model for this."
+msgstr ""
+"Vous ne pouvez pas utiliser la caméra pour la détection du chat avec un "
+"modèle Kittyflap d'origine. Un modèle personnalisé entraîné est nécessaire "
+"pour cela."
+
+msgid "Kittyhack configuration updated successfully."
+msgstr "Configuration Kittyhack mise à jour avec succès."
+
+msgid "Deleted {} oldest photos to apply the new retention limit."
+msgstr ""
+"{} photo(s) la/les plus ancienne(s) supprimée(s) pour appliquer la nouvelle "
+"limite de conservation."
+
+msgid "Failed to apply the new photo retention limit: {}"
+msgstr ""
+"Échec de l'application de la nouvelle limite de conservation des photos : {}"
+
+msgid "Model change applied."
+msgstr "Changement de modèle appliqué."
+
+msgid "Model change could not be applied live. A reboot is still required."
+msgstr ""
+"Le changement de modèle n'a pas pu être appliqué à chaud. Un redémarrage est "
+"toujours nécessaire."
+
+msgid ""
+"Please restart the kittyflap in the [SYSTEM] section, to apply the new "
+"language."
+msgstr ""
+"Veuillez redémarrer la Kittyflap dans la section [SYSTÈME] pour appliquer la "
+"nouvelle langue."
+
+msgid ""
+"A restart is required to apply the changes. Do you want to reboot the "
+"kittyflap now?"
+msgstr ""
+"Un redémarrage est nécessaire pour appliquer les modifications. Voulez-vous "
+"redémarrer la Kittyflap maintenant ?"
+
+msgid "Restart required"
+msgstr "Redémarrage requis"
+
+msgid "Reboot"
+msgstr "Redémarrer"
+
+msgid ""
+"The update repository was changed. A version check for the new source has "
+"been started."
+msgstr ""
+"Le dépôt de mise à jour a été modifié. Une vérification de version pour la "
+"nouvelle source a été lancée."
+
+msgid "Latest version for the new source: **{}**"
+msgstr "Dernière version pour la nouvelle source : **{}**"
+
+msgid ""
+"The latest version for the new source could not be determined yet. You can "
+"retry the check on the **INFO** tab."
+msgstr ""
+"La dernière version pour la nouvelle source n'a pas encore pu être "
+"déterminée. Vous pouvez relancer la vérification depuis l'onglet **INFO**."
+
+msgid ""
+"**Important:** Create backups of your config (`config.ini`) and database "
+"before switching between Standard and Beta."
+msgstr ""
+"**Important :** créez des sauvegardes de votre configuration (`config.ini`) "
+"et de la base de données avant de basculer entre Standard et Bêta."
+
+msgid ""
+"Switching from beta back to the latest release may work, but it is not "
+"recommended."
+msgstr ""
+"Revenir de la bêta vers la dernière version stable peut fonctionner, mais ce "
+"n'est pas recommandé."
+
+msgid ""
+"If a different version is available, you can review it and start the update "
+"yourself on the **INFO** tab."
+msgstr ""
+"Si une version différente est disponible, vous pouvez l'examiner et démarrer "
+"vous-même la mise à jour depuis l'onglet **INFO**."
+
+msgid "Update source changed"
+msgstr "Source de mise à jour modifiée"
+
+msgid "Failed to restart MQTT client. Check the logs for details."
+msgstr ""
+"Échec du redémarrage du client MQTT. Consultez les journaux pour plus de "
+"détails."
+
+msgid "Failed to save the Kittyhack configuration."
+msgstr "Échec de l'enregistrement de la configuration Kittyhack."
+
+msgid "Previous frame"
+msgstr "Image précédente"
+
+msgid "Play/Pause"
+msgstr "Lecture/Pause"
+
+msgid "Next frame"
+msgstr "Image suivante"
+
+msgid "Toggle overlay for detected objects"
+msgstr "Basculer l'incrustation des objets détectés"
+
+msgid "Loading..."
+msgstr "Chargement..."
+
+msgid "Delete all pictures of this event"
+msgstr "Supprimer toutes les images de cet événement"
+
+msgid "Download current picture"
+msgstr "Télécharger l'image actuelle"
+
+msgid "Send current picture to Label Studio"
+msgstr "Envoyer l'image actuelle à Label Studio"
+
+msgid "Download all pictures of this event (ZIP)"
+msgstr "Télécharger toutes les images de cet événement (ZIP)"
+
+msgid ""
+"Label Studio is not configured. Please set an API token and select a project "
+"in the settings."
+msgstr ""
+"Label Studio n'est pas configuré. Définissez un jeton API et sélectionnez un "
+"projet dans les paramètres."
+
+msgid "Could not load the image."
+msgstr "Impossible de charger l'image."
+
+msgid "Sending picture to Label Studio..."
+msgstr "Envoi de l'image à Label Studio..."
+
+msgid "Picture sent to Label Studio successfully."
+msgstr "Image envoyée à Label Studio avec succès."
+
+msgid "Failed to send picture to Label Studio."
+msgstr "Échec de l'envoi de l'image à Label Studio."
+
+msgid "SSID"
+msgstr "SSID"
+
+msgid "Password"
+msgstr "Mot de passe"
+
+msgid "Priority"
+msgstr "Priorité"
+
+msgid ""
+"The priority determines the order in which the WLANs are tried to connect. "
+"Higher numbers are tried first."
+msgstr ""
+"La priorité détermine l'ordre dans lequel les réseaux Wi-Fi sont essayés. "
+"Les nombres les plus élevés sont essayés en premier."
+
+msgid "Add new WLAN configuration"
+msgstr "Ajouter une nouvelle configuration Wi-Fi"
+
+msgid "Creating log archive. Please wait..."
+msgstr "Création de l'archive des journaux. Veuillez patienter..."
+
+msgid "Preparing Download"
+msgstr "Préparation du téléchargement"
+
+msgid "Failed to create logs zip file: {}"
+msgstr "Échec de la création du fichier ZIP des journaux : {}"
+
+msgid ""
+"Database snapshot is unavailable during image migration ({} pictures "
+"remaining). Please try again later."
+msgstr ""
+"L'instantané de la base de données n'est pas disponible pendant la migration "
+"des images ({} image(s) restante(s)). Veuillez réessayer plus tard."
+
+msgid "Failed to create a consistent snapshot: {}"
+msgstr "Échec de la création d'un instantané cohérent : {}"
+
+msgid "Failed to prepare database download: {}"
+msgstr "Échec de la préparation du téléchargement de la base de données : {}"
+
+msgid "The original kittyflap database file does not exist."
+msgstr "Le fichier de base de données Kittyflap d'origine n'existe pas."
+
+msgid "Latest version check failed."
+msgstr "Échec de la vérification de la dernière version."
+
+msgid "Internet connection not available."
+msgstr "Connexion Internet non disponible."
+
+msgid "Retry failed: {}"
+msgstr "Échec de la nouvelle tentative : {}"
+
+msgid ""
+"Remote and Kittyflap versions differ (this device: {}, target device: {}). "
+"Please update to match versions."
+msgstr ""
+"Les versions distante et Kittyflap diffèrent (cet appareil : {}, appareil "
+"cible : {}). Veuillez mettre à jour pour faire correspondre les versions."
+
+msgid ""
+"Update is disabled because less than 2 GB of free disk space is available "
+"({:.1f} MB free). Free up space first (e.g. reduce the max amount of "
+"pictures in the database), then reload this page."
+msgstr ""
+"La mise à jour est désactivée car moins de 2 Go d'espace disque libre sont "
+"disponibles ({:.1f} Mo libres). Libérez d'abord de l'espace (par ex. "
+"réduisez le nombre maximal d'images dans la base de données), puis rechargez "
+"cette page."
+
+msgid ""
+"This update includes a Python runtime change and can take **up to 20 "
+"minutes**. After the reboot, finishing the update can take **another 10–20 "
+"minutes**. Do **not** power-cycle or switch off the Kittyflap during that "
+"time."
+msgstr ""
+"Cette mise à jour inclut un changement de runtime Python et peut prendre "
+"**jusqu'à 20 minutes**. Après le redémarrage, la fin de la mise à jour peut "
+"prendre **encore 10 à 20 minutes**. **Ne** débranchez **pas** ou n'éteignez "
+"pas la Kittyflap pendant ce temps."
+
+msgid ""
+"Unable to fetch the latest version from github. Please try it again later or "
+"check your internet connection."
+msgstr ""
+"Impossible de récupérer la dernière version depuis GitHub. Réessayez plus "
+"tard ou vérifiez votre connexion Internet."
+
+msgid "Retry latest version check"
+msgstr "Relancer la vérification de la dernière version"
+
+msgid "Remote-/Kittyflap-version mismatch detected."
+msgstr "Incohérence de version distante/Kittyflap détectée."
+
+msgid ""
+"You can update only one side to match versions before running a full update."
+msgstr ""
+"Vous pouvez mettre à jour un seul côté pour faire correspondre les versions "
+"avant d'effectuer une mise à jour complète."
+
+msgid "Update target device only"
+msgstr "Mettre à jour uniquement l'appareil cible"
+
+msgid "Update this device only"
+msgstr "Mettre à jour uniquement cet appareil"
+
+msgid "Release Notes for"
+msgstr "Notes de version pour"
+
+msgid "Release notes unavailable: {}"
+msgstr "Notes de version indisponibles : {}"
+
+msgid "Automatic update to **{}**:"
+msgstr "Mise à jour automatique vers **{}** :"
+
+msgid "Update Kittyhack"
+msgstr "Mettre à jour Kittyhack"
+
+msgid "Important: A stable WLAN connection is required for the update process."
+msgstr ""
+"Important : une connexion Wi-Fi stable est requise pour le processus de mise "
+"à jour."
+
+msgid "The update will end with a reboot of the Kittyflap."
+msgstr "La mise à jour se terminera par un redémarrage de la Kittyflap."
+
+msgid ""
+"Check out the [Changelog](https://github.com/floppyFK/kittyhack/releases) to "
+"see what's new in the latest version."
+msgstr ""
+"Consultez le [journal des modifications](https://github.com/floppyFK/"
+"kittyhack/releases) pour voir les nouveautés de la dernière version."
+
+msgid "Use one of the buttons below if you want to update only one device."
+msgstr ""
+"Utilisez l'un des boutons ci-dessous si vous souhaitez mettre à jour un seul "
+"appareil."
+
+msgid ""
+"This installation does not appear to be a git clone. Automatic updates "
+"require a git repository (git clone)."
+msgstr ""
+"Cette installation ne semble pas être un clone git. Les mises à jour "
+"automatiques nécessitent un dépôt git (git clone)."
+
+msgid "WARNING: Local changes detected in the git repository in `{}`."
+msgstr ""
+"ATTENTION : des modifications locales ont été détectées dans le dépôt git "
+"dans `{}`."
+
+msgid ""
+"If you proceed with the update, these changes will be lost (the database and "
+"configuration will not be affected)."
+msgstr ""
+"Si vous procédez à la mise à jour, ces modifications seront perdues (la base "
+"de données et la configuration ne seront pas affectées)."
+
+msgid ""
+"Please commit or stash your changes manually before updating, if you want to "
+"keep them."
+msgstr ""
+"Committez ou remisez (stash) vos modifications manuellement avant la mise à "
+"jour si vous souhaitez les conserver."
+
+msgid "Local changes:"
+msgstr "Modifications locales :"
+
+msgid "Unable to check local git changes: {}"
+msgstr "Impossible de vérifier les modifications git locales : {}"
+
+msgid "You are already using the latest version of Kittyhack."
+msgstr "Vous utilisez déjà la dernière version de Kittyhack."
+
+msgid ""
+"The current update source is your custom repository. Use this button to pull "
+"the latest commit on the selected branch or re-install the selected tag."
+msgstr ""
+"La source de mise à jour actuelle est votre dépôt personnalisé. Utilisez ce "
+"bouton pour récupérer le dernier commit de la branche sélectionnée ou "
+"réinstaller le tag sélectionné."
+
+msgid ""
+"The current update source is the official beta channel. Use this button to "
+"re-install the latest beta tag (`vX.Y.Z_beta_N`), or the latest stable "
+"release when no newer beta is available."
+msgstr ""
+"La source de mise à jour actuelle est le canal bêta officiel. Utilisez ce "
+"bouton pour réinstaller le dernier tag bêta (`vX.Y.Z_beta_N`), ou la "
+"dernière version stable si aucune bêta plus récente n'est disponible."
+
+msgid ""
+"Re-install the currently selected version from the configured update source."
+msgstr ""
+"Réinstaller la version actuellement sélectionnée depuis la source de mise à "
+"jour configurée."
+
+msgid "Force update"
+msgstr "Forcer la mise à jour"
+
+msgid "Force update now"
+msgstr "Forcer la mise à jour maintenant"
+
+msgid ""
+"The original kittyflap database file consumes currently **{:.1f} MB** of "
+"disk space."
+msgstr ""
+"Le fichier de base de données Kittyflap d'origine occupe actuellement "
+"**{:.1f} Mo** d'espace disque."
+
+msgid ""
+"The file contains a lot pictures which could not be uploaded to the original "
+"kittyflap servers anymore."
+msgstr ""
+"Le fichier contient de nombreuses images qui n'ont pas pu être téléversées "
+"vers les serveurs Kittyflap d'origine."
+
+msgid "You could delete the pictures from it to free up disk space."
+msgstr "Vous pouvez en supprimer les images pour libérer de l'espace disque."
+
+msgid "Remove pictures from original Kittyflap Database"
+msgstr "Supprimer les images de la base de données Kittyflap d'origine"
+
+msgid "Download Kittyflap Database"
+msgstr "Télécharger la base de données Kittyflap"
+
+msgid "Original Kittyflap Database"
+msgstr "Base de données Kittyflap d'origine"
+
+msgid "Information"
+msgstr "Informations"
+
+msgid ""
+"Kittyhack is an open-source project that enables offline use of the "
+"Kittyflap cat door—completely without internet access."
+msgstr ""
+"Kittyhack est un projet open source qui permet d'utiliser la chatière "
+"Kittyflap hors ligne — complètement sans accès Internet."
+
+msgid ""
+"It was created after the manufacturer of Kittyflap filed for bankruptcy, "
+"rendering the associated app non-functional."
+msgstr ""
+"Il a été créé après que le fabricant de Kittyflap a déposé le bilan, rendant "
+"l'application associée non fonctionnelle."
+
+msgid "**Important Notes**"
+msgstr "**Remarques importantes**"
+
+msgid ""
+"I have no connection to the manufacturer of Kittyflap. This project was "
+"developed on my own initiative to continue using my Kittyflap."
+msgstr ""
+"Je n'ai aucun lien avec le fabricant de Kittyflap. Ce projet a été développé "
+"de ma propre initiative pour continuer à utiliser ma Kittyflap."
+
+msgid ""
+"If you find any bugs or have suggestions for improvement, please report them "
+"on the GitHub page."
+msgstr ""
+"Si vous trouvez des bugs ou avez des suggestions d'amélioration, veuillez "
+"les signaler sur la page GitHub."
+
+msgid "GitHub Repository"
+msgstr "Dépôt GitHub"
+
+msgid "**License**"
+msgstr "**Licence**"
+
+msgid "This project is licensed under the MIT License."
+msgstr "Ce projet est distribué sous licence MIT."
+
+msgid "Copyright (c) 2025 Florian Kispert."
+msgstr "Copyright (c) 2025 Florian Kispert."
+
+msgid "MIT License (full text)"
+msgstr "Licence MIT (texte intégral)"
+
+msgid ""
+"If you like Kittyhack, you can support the project with a small donation:"
+msgstr ""
+"Si vous aimez Kittyhack, vous pouvez soutenir le projet avec un petit don :"
+
+msgid "Donate via PayPal"
+msgstr "Faire un don via PayPal"
+
+msgid "Version Information"
+msgstr "Informations de version"
+
+msgid "Current Version"
+msgstr "Version actuelle"
+
+msgid "Current Version on Kittyflap"
+msgstr "Version actuelle sur la Kittyflap"
+
+msgid "Latest Version"
+msgstr "Dernière version"
+
+msgid ""
+"The remote and Kittyflap versions differ. This may lead to malfunction "
+"during operation."
+msgstr ""
+"Les versions distante et Kittyflap diffèrent. Cela peut entraîner un "
+"dysfonctionnement pendant le fonctionnement."
+
+msgid "Show all Changelogs"
+msgstr "Afficher tous les journaux des modifications"
+
+msgid "System Information"
+msgstr "Informations système"
+
+msgid "Kittyhack Database"
+msgstr "Base de données Kittyhack"
+
+msgid "Backup and Restore your Kittyhack database"
+msgstr "Sauvegarder et restaurer votre base de données Kittyhack"
+
+msgid "Download Kittyhack Database"
+msgstr "Télécharger la base de données Kittyhack"
+
+msgid "Restore Kittyhack Database (.db)"
+msgstr "Restaurer la base de données Kittyhack (.db)"
+
+msgid "Restore Database"
+msgstr "Restaurer la base de données"
+
+msgid "Configuration File"
+msgstr "Fichier de configuration"
+
+msgid "Backup and Restore your Kittyhack configuration"
+msgstr "Sauvegarder et restaurer votre configuration Kittyhack"
+
+msgid "Download Configuration File"
+msgstr "Télécharger le fichier de configuration"
+
+msgid "Restore Configuration File (config.ini)"
+msgstr "Restaurer le fichier de configuration (config.ini)"
+
+msgid "Restore Configuration"
+msgstr "Restaurer la configuration"
+
+msgid ""
+"> Note: If the database or the configuration gets restored from a backup, "
+"then the Kittyflap will be rebooted afterwards to apply the new "
+"configuration."
+msgstr ""
+"> Remarque : si la base de données ou la configuration est restaurée depuis "
+"une sauvegarde, la Kittyflap redémarrera ensuite pour appliquer la nouvelle "
+"configuration."
+
+msgid "Progressive Web App (PWA)"
+msgstr "Application web progressive (PWA)"
+
+msgid "You can install Kittyhack as a"
+msgstr "Vous pouvez installer Kittyhack en tant qu'"
+
+msgid "Progressive Web App"
+msgstr "application web progressive"
+
+msgid "on your Smartphone or computer for easier access."
+msgstr "sur votre smartphone ou ordinateur pour un accès facilité."
+
+msgid ""
+"Such a PWA can be added to your home screen and launched like a native app, "
+"without needing to open a web browser."
+msgstr ""
+"Une telle PWA peut être ajoutée à votre écran d'accueil et lancée comme une "
+"application native, sans avoir besoin d'ouvrir un navigateur web."
+
+msgid "**HTTPS Required**"
+msgstr "**HTTPS requis**"
+
+msgid ""
+"PWA installation requires a secure connection (HTTPS). You are currently "
+"accessing Kittyhack via HTTP."
+msgstr ""
+"L'installation de la PWA nécessite une connexion sécurisée (HTTPS). Vous "
+"accédez actuellement à Kittyhack via HTTP."
+
+msgid "You'll need to set up a reverse proxy with HTTPS."
+msgstr "Vous devrez configurer un reverse proxy avec HTTPS."
+
+msgid ""
+"If you want to setup a reverse proxy in your home network, you can watch"
+msgstr ""
+"Si vous souhaitez configurer un reverse proxy sur votre réseau domestique, "
+"vous pouvez regarder"
+
+msgid "this guide"
+msgstr "ce guide"
+
+msgid "**App is already installed on this device!**"
+msgstr "**L'application est déjà installée sur cet appareil !**"
+
+msgid "**Installation successful!**"
+msgstr "**Installation réussie !**"
+
+msgid "Install as App"
+msgstr "Installer comme application"
+
+msgid "Logfiles"
+msgstr "Fichiers journaux"
+
+msgid "Download Kittyhack Logfile"
+msgstr "Télécharger le fichier journal Kittyhack"
+
+msgid "Not available in remote-mode"
+msgstr "Non disponible en mode distant"
+
+msgid "Strong signal"
+msgstr "Signal fort"
+
+msgid "Medium signal"
+msgstr "Signal moyen"
+
+msgid "Weak signal"
+msgstr "Signal faible"
+
+msgid "Quality: {}, Signal: {} dBm"
+msgstr "Qualité : {}, Signal : {} dBm"
+
+msgid "Not connected"
+msgstr "Non connecté"
+
+msgid "Unable to determine"
+msgstr "Impossible à déterminer"
+
+msgid "Kittyhack database size"
+msgstr "Taille de la base de données Kittyhack"
+
+msgid "Free disk space"
+msgstr "Espace disque libre"
+
+msgid "Used RAM"
+msgstr "RAM utilisée"
+
+msgid "WLAN Status"
+msgstr "Statut Wi-Fi"
+
+msgid "No changelogs found."
+msgstr "Aucun journal des modifications trouvé."
+
+msgid "(No release notes.)"
+msgstr "(Aucune note de version.)"
+
+msgid "Changelogs"
+msgstr "Journaux des modifications"
+
+msgid "Close"
+msgstr "Fermer"
+
+msgid ""
+"The pictures from the original kittyflap database were removed successfully."
+msgstr ""
+"Les images de la base de données Kittyflap d'origine ont été supprimées avec "
+"succès."
+
+msgid ""
+"An error occurred while deleting the pictures from the original kittyflap "
+"database: {}"
+msgstr ""
+"Une erreur s'est produite lors de la suppression des images de la base de "
+"données Kittyflap d'origine : {}"
+
+msgid "The original kittyflap database file does not exist anymore."
+msgstr "Le fichier de base de données Kittyflap d'origine n'existe plus."
+
+msgid "config.ini not found"
+msgstr "config.ini introuvable"
+
+msgid "Failed to download config.ini file: {}"
+msgstr "Échec du téléchargement du fichier config.ini : {}"
+
+msgid "No file selected."
+msgstr "Aucun fichier sélectionné."
+
+msgid "Uploaded file not found."
+msgstr "Fichier importé introuvable."
+
+msgid "Invalid file type. Please upload a .db file."
+msgstr "Type de fichier invalide. Veuillez importer un fichier .db."
+
+msgid "Database file uploaded. Click 'Restore Database' to apply."
+msgstr ""
+"Fichier de base de données importé. Cliquez sur « Restaurer la base de "
+"données » pour appliquer."
+
+msgid "No uploaded database ready to restore."
+msgstr "Aucune base de données importée prête à être restaurée."
+
+msgid "Database restored successfully."
+msgstr "Base de données restaurée avec succès."
+
+msgid "Please click the 'Reboot' button to restart the Kittyflap."
+msgstr "Cliquez sur le bouton « Redémarrer » pour redémarrer la Kittyflap."
+
+msgid "Reboot required"
+msgstr "Redémarrage requis"
+
+msgid "Failed to restore database: {}"
+msgstr "Échec de la restauration de la base de données : {}"
+
+msgid "Invalid file type. Please upload a config.ini file."
+msgstr "Type de fichier invalide. Veuillez importer un fichier config.ini."
+
+msgid "Invalid configuration file: missing [Settings] section."
+msgstr "Fichier de configuration invalide : section [Settings] manquante."
+
+msgid "Failed to validate configuration: {}"
+msgstr "Échec de la validation de la configuration : {}"
+
+msgid "Configuration file uploaded. Click 'Restore Configuration' to apply."
+msgstr ""
+"Fichier de configuration importé. Cliquez sur « Restaurer la configuration » "
+"pour appliquer."
+
+msgid "No uploaded configuration ready to restore."
+msgstr "Aucune configuration importée prête à être restaurée."
+
+msgid "Configuration restored successfully."
+msgstr "Configuration restaurée avec succès."
+
+msgid "Failed to restore configuration: {}"
+msgstr "Échec de la restauration de la configuration : {}"
+
+msgid ""
+"Automatic update requires a git repository. Please reinstall via git clone "
+"or the setup script."
+msgstr ""
+"La mise à jour automatique nécessite un dépôt git. Veuillez réinstaller via "
+"git clone ou le script d'installation."
+
+msgid "Nothing to update."
+msgstr "Rien à mettre à jour."
+
+msgid "Target-only update is only available in remote-mode."
+msgstr ""
+"La mise à jour de l'appareil cible uniquement n'est disponible qu'en mode "
+"distant."
+
+msgid "Starting update..."
+msgstr "Démarrage de la mise à jour..."
+
+msgid "Updating connected target device..."
+msgstr "Mise à jour de l'appareil cible connecté..."
+
+msgid "Preparing remote update..."
+msgstr "Préparation de la mise à jour distante..."
+
+msgid "Remote target is not connected."
+msgstr "La cible distante n'est pas connectée."
+
+msgid "Timed out while waiting for target device update."
+msgstr "Délai dépassé en attendant la mise à jour de l'appareil cible."
+
+msgid "Unknown target update error."
+msgstr "Erreur inconnue de mise à jour de l'appareil cible."
+
+msgid "Target device update failed: {}."
+msgstr "Échec de la mise à jour de l'appareil cible : {}."
+
+msgid "Connected target device updated."
+msgstr "Appareil cible connecté mis à jour."
+
+msgid "Starting update on this device..."
+msgstr "Démarrage de la mise à jour sur cet appareil..."
+
+msgid "Update finished."
+msgstr "Mise à jour terminée."
+
+msgid "Connection lost while target is restarting/reconnecting. Waiting..."
+msgstr ""
+"Connexion perdue pendant le redémarrage/la reconnexion de la cible. "
+"Attente..."
+
+msgid ""
+"Connection to target device did not recover in time after update restart."
+msgstr ""
+"La connexion à l'appareil cible n'a pas été rétablie à temps après le "
+"redémarrage de la mise à jour."
+
+msgid "Target update is running..."
+msgstr "Mise à jour de la cible en cours..."
+
+msgid "Waiting for target update to start..."
+msgstr "En attente du démarrage de la mise à jour de la cible..."
+
+msgid "Waiting for remote target response..."
+msgstr "En attente de la réponse de la cible distante..."
+
+msgid "Target device reconnected, but version is still {} instead of {}."
+msgstr ""
+"Appareil cible reconnecté, mais la version est toujours {} au lieu de {}."
+
+msgid "Failed to run target update: {}."
+msgstr "Échec de l'exécution de la mise à jour de la cible : {}."
+
+msgid "*This step may take several minutes. Please be patient.*"
+msgstr "*Cette étape peut prendre plusieurs minutes. Merci de patienter.*"
+
+msgid "Do not close this page until the update is finished!"
+msgstr "Ne fermez pas cette page tant que la mise à jour n'est pas terminée !"
+
+msgid "Updating Kittyhack..."
+msgstr "Mise à jour de Kittyhack..."
+
+msgid ""
+"A restart is required to apply the update. Please click the 'Reboot' button "
+"to restart the Kittyflap."
+msgstr ""
+"Un redémarrage est nécessaire pour appliquer la mise à jour. Cliquez sur le "
+"bouton « Redémarrer » pour redémarrer la Kittyflap."
+
+msgid ""
+"After the reboot, finishing the update can take **another 10–20 minutes**. "
+"Do **not** power-cycle or switch off the Kittyflap during that time."
+msgstr ""
+"Après le redémarrage, la fin de la mise à jour peut prendre **encore 10 à 20 "
+"minutes**. **Ne** débranchez **pas** ou n'éteignez pas la Kittyflap pendant "
+"ce temps."
+
+msgid "An error occurred during the update process:"
+msgstr "Une erreur s'est produite pendant le processus de mise à jour :"
+
+msgid ""
+"A restart is required to recover. Please click the 'Reboot' button to "
+"restart the Kittyflap."
+msgstr ""
+"Un redémarrage est nécessaire pour récupérer. Cliquez sur le bouton "
+"« Redémarrer » pour redémarrer la Kittyflap."
+
+msgid "Dismiss"
+msgstr "Ignorer"
+
+msgid "Inside direction:"
+msgstr "Sens intérieur :"
+
+msgid "The individual configuration per cat can be set in the CATS section."
+msgstr ""
+"La configuration individuelle par chat peut être définie dans la section "
+"CHATS."
+
+msgid "Manual unlock not yet initialized..."
+msgstr "Déverrouillage manuel pas encore initialisé..."
+
+msgid "Reset prey cooldown now"
+msgstr "Réinitialiser maintenant le délai de proie"
+
+msgid "Last events"
+msgstr "Derniers événements"
+
+msgid "No events found."
+msgstr "Aucun événement trouvé."
+
+msgid "Today"
+msgstr "Aujourd'hui"
+
+msgid "Yesterday"
+msgstr "Hier"
+
+msgid "Show event details"
+msgstr "Afficher les détails de l'événement"
+
+msgid "Failed to read events from the database."
+msgstr "Échec de la lecture des événements depuis la base de données."
+
+msgid "Show detected cats only"
+msgstr "Afficher uniquement les chats détectés"
+
+msgid "Show detected mice only"
+msgstr "Afficher uniquement les souris détectées"
+
+msgid "Show detection overlay"
+msgstr "Afficher l'incrustation de détection"
+
+msgid "Group pictures to events"
+msgstr "Grouper les images par événement"
+
+msgid "Page"
+msgstr "Page"
+
+msgid "pictures"
+msgstr "images"
+
+msgid "Unknown RFID: {}"
+msgstr "RFID inconnu : {}"
+
+msgid "Mouse probability"
+msgstr "Probabilité de souris"
+
+msgid "Download picture"
+msgstr "Télécharger l'image"
+
+msgid "Send picture to Label Studio"
+msgstr "Envoyer l'image à Label Studio"
+
+msgid "Delete picture"
+msgstr "Supprimer l'image"
+
+msgid "No pictures for the selected filter criteria found."
+msgstr "Aucune image trouvée pour les critères de filtre sélectionnés."
+
+msgid "Photo {} deleted successfully."
+msgstr "Photo {} supprimée avec succès."
+
+msgid "An error occurred while deleting the photo: {}"
+msgstr "Une erreur s'est produite lors de la suppression de la photo : {}"
+
+msgid "Unknown"
+msgstr "Inconnu"
+
+msgid "just now"
+msgstr "à l'instant"
+
+#, python-brace-format
+msgid "{n} min ago"
+msgstr "il y a {n} min"
+
+#, python-brace-format
+msgid "{n} h ago"
+msgstr "il y a {n} h"
+
+#, python-brace-format
+msgid "{n} d ago"
+msgstr "il y a {n} j"
+
+msgid "Unlocked"
+msgstr "Déverrouillé"
+
+msgid "Locked"
+msgstr "Verrouillé"
+
+msgid "Lock now"
+msgstr "Verrouiller maintenant"
+
+msgid "Unlock now"
+msgstr "Déverrouiller maintenant"
+
+msgid "No cats registered yet."
+msgstr "Aucun chat enregistré pour le moment."
+
+msgid "Never seen yet"
+msgstr "Pas encore vu"
+
+msgid "Flap camera"
+msgstr "Caméra de la chatière"
+
+msgid "Terrace"
+msgstr "Terrasse"
+
+msgid "Japanese garden"
+msgstr "Jardin japonais"
+
+msgid "Entrance"
+msgstr "Entrée"
+
+msgid "Outdoor cameras"
+msgstr "Caméras extérieures"
+
+msgid "Preview only, refreshed every few seconds - not a live video feed."
+msgstr "Aperçu seulement, actualisé toutes les quelques secondes - pas un flux vidéo en direct."
+
+msgid "Warning"
+msgstr "Attention"
+
+msgid "Your IP camera resolution is higher than recommended (max. 1280x720)."
+msgstr ""
+"La résolution de votre caméra IP est supérieure à la valeur recommandée "
+"(max. 1280x720)."
+
+#, python-brace-format
+msgid ""
+"Current: {width}x{height}. This may have negative effects on performance."
+msgstr ""
+"Actuel : {width}x{height}. Cela peut avoir des effets négatifs sur les "
+"performances."
+
+msgid "Notifications"
+msgstr "Notifications"
+
+msgid "Remote target host not configured"
+msgstr "Hôte cible distant non configuré"
+
+msgid "Remote: not configured"
+msgstr "Distant : non configuré"
+
+msgid "Connected to Kittyflap"
+msgstr "Connecté à la Kittyflap"
+
+msgid "Remote: connected"
+msgstr "Distant : connecté"
+
+msgid "Disconnect"
+msgstr "Déconnecter"
+
+msgid "Disconnected from Kittyflap"
+msgstr "Déconnecté de la Kittyflap"
+
+msgid "Remote: disconnected"
+msgstr "Distant : déconnecté"
+
+msgid "Connecting to Kittyflap"
+msgstr "Connexion à la Kittyflap"
+
+msgid "Remote: connecting"
+msgstr "Distant : connexion en cours"
+
+msgid "Remote-mode setup is required before Kittyhack can start."
+msgstr ""
+"La configuration du mode distant est requise avant que Kittyhack puisse "
+"démarrer."
+
+msgid ""
+"After saving, an initial sync can take several minutes (depending on "
+"pictures/models size)."
+msgstr ""
+"Après l'enregistrement, une synchronisation initiale peut prendre plusieurs "
+"minutes (selon la taille des images/modèles)."
+
+msgid ""
+"Please keep this browser tab open and do not close or reload it until "
+"synchronization is finished."
+msgstr ""
+"Veuillez garder cet onglet du navigateur ouvert et ne pas le fermer ni le "
+"recharger avant la fin de la synchronisation."
+
+msgid "Startup continues after a successful sync and service restart."
+msgstr ""
+"Le démarrage se poursuit après une synchronisation réussie et un redémarrage "
+"du service."
+
+msgid "Kittyflap IP:"
+msgstr "IP de la Kittyflap :"
+
+msgid "Sync on first connect"
+msgstr "Synchroniser à la première connexion"
+
+msgid "Sync Label Studio user data"
+msgstr "Synchroniser les données utilisateur de Label Studio"
+
+msgid "Remote-mode setup"
+msgstr "Configuration du mode distant"
+
+msgid "Save settings"
+msgstr "Enregistrer les paramètres"
+
+msgid "Abort"
+msgstr "Abandonner"
+
+msgid "Initial sync failed."
+msgstr "Échec de la synchronisation initiale."
+
+msgid "Back"
+msgstr "Retour"
+
+msgid "Initial sync"
+msgstr "Synchronisation initiale"
+
+msgid "Initial sync has completed."
+msgstr "La synchronisation initiale est terminée."
+
+msgid ""
+"To fully apply all settings, the Kittyhack service must be restarted now."
+msgstr ""
+"Pour appliquer entièrement tous les paramètres, le service Kittyhack doit "
+"être redémarré maintenant."
+
+msgid "The web interface will be briefly unavailable during the restart."
+msgstr "L'interface web sera brièvement indisponible pendant le redémarrage."
+
+msgid "Restart Kittyhack service"
+msgstr "Redémarrer le service Kittyhack"
+
+msgid "Connection to Kittyflap is disconnected."
+msgstr "La connexion à la Kittyflap est déconnectée."
+
+msgid "Connection to Kittyflap has been disconnected manually."
+msgstr "La connexion à la Kittyflap a été déconnectée manuellement."
+
+msgid "The Kittyflap can now be controlled directly in its web UI:"
+msgstr ""
+"La Kittyflap peut maintenant être contrôlée directement depuis son interface "
+"web :"
+
+msgid "Remote disconnected"
+msgstr "Distant déconnecté"
+
+msgid "Reconnect"
+msgstr "Reconnecter"
+
+msgid "Do you really want to disconnect from Kittyflap?"
+msgstr "Voulez-vous vraiment vous déconnecter de la Kittyflap ?"
+
+msgid "Disconnected from Kittyflap."
+msgstr "Déconnecté de la Kittyflap."
+
+msgid "Failed to disconnect from Kittyflap: {}."
+msgstr "Échec de la déconnexion de la Kittyflap : {}."
+
+msgid "Reconnecting to Kittyflap, please wait..."
+msgstr "Reconnexion à la Kittyflap, veuillez patienter..."
+
+msgid "Failed to reconnect to Kittyflap: {}."
+msgstr "Échec de la reconnexion à la Kittyflap : {}."
+
+msgid "Waiting for sync to start..."
+msgstr "En attente du démarrage de la synchronisation..."
+
+msgid "Initial sync in progress..."
+msgstr "Synchronisation initiale en cours..."
+
+msgid "Initial sync completed."
+msgstr "Synchronisation initiale terminée."
+
+msgid "Connecting to Kittyflap..."
+msgstr "Connexion à la Kittyflap..."
+
+msgid "Transferred: {:.1f} MB"
+msgstr "Transféré : {:.1f} Mo"
+
+msgid "Transferred ({} items): {:.1f} MB"
+msgstr "Transféré ({} éléments) : {:.1f} Mo"
+
+msgid "Reason: {} "
+msgstr "Raison : {} "
+
+msgid "Could not connect to the remote Kittyflap."
+msgstr "Impossible de se connecter à la Kittyflap distante."
+
+msgid "Initial sync timed out."
+msgstr "Délai de synchronisation initiale dépassé."
+
+msgid "Failed to reload synced config.ini: {}."
+msgstr "Échec du rechargement du config.ini synchronisé : {}."
+
+msgid "unknown error"
+msgstr "erreur inconnue"
+
+msgid "Remote target host must not be empty."
+msgstr "L'hôte cible distant ne doit pas être vide."
+
+msgid "Failed to write config.remote.ini: {}"
+msgstr "Échec de l'écriture de config.remote.ini : {}"
+
+msgid "Failed to initialize remote control client: {}."
+msgstr "Échec de l'initialisation du client de contrôle à distance : {}."
+
+msgid "Remote-mode configuration saved. Starting services..."
+msgstr "Configuration du mode distant enregistrée. Démarrage des services..."
+
+msgid "Initial sync aborted. Remote target host has been cleared."
+msgstr "Synchronisation initiale annulée. L'hôte cible distant a été effacé."
+
+msgid "Restarting Kittyhack service..."
+msgstr "Redémarrage du service Kittyhack..."
+
+msgid ""
+"A new version of Kittyhack is available: {}. Go to the [INFO] section for "
+"update instructions."
+msgstr ""
+"Une nouvelle version de Kittyhack est disponible : {}. Rendez-vous dans la "
+"section [INFO] pour les instructions de mise à jour."
+
+msgid ""
+" or consider deleting pictures from the original kittyflap database file. "
+"For more details, see the [INFO] section."
+msgstr ""
+" ou envisagez de supprimer des images du fichier de base de données "
+"Kittyflap d'origine. Pour plus de détails, voir la section [INFO]."
+
+msgid ""
+"Remaining disk space is low: {:.1f} MB. Please free up some space (e.g. "
+"reduce the max amount of pictures in the database{})."
+msgstr ""
+"L'espace disque restant est faible : {:.1f} Mo. Libérez de l'espace (par ex. "
+"réduisez le nombre maximal d'images dans la base de données{})."
+
+msgid ""
+"Database migration in progress. Performance may be a bit slower until "
+"finished ({} pictures remaining, ~{} min)."
+msgstr ""
+"Migration de la base de données en cours. Les performances peuvent être "
+"légèrement réduites jusqu'à la fin ({} image(s) restante(s), ~{} min)."
+
+msgid ""
+"LabelStudio is running. If you do not need it anymore to label images, "
+"please stop it in the [AI TRAINING] section."
+msgstr ""
+"LabelStudio est en cours d'exécution. Si vous n'en avez plus besoin pour "
+"étiqueter des images, arrêtez-le dans la section [ENTRAÎNEMENT DE L'IA]."
+
+msgid "Warning: RAM usage is at {:.1f}%!{}"
+msgstr "Attention : l'utilisation de la RAM est de {:.1f} % !{}"
+
+msgid "Close inside now"
+msgstr "Fermer l'intérieur maintenant"
+
+msgid "Open inside now"
+msgstr "Ouvrir l'intérieur maintenant"
+
+msgid "Connecting to the IP camera..."
+msgstr "Connexion à la caméra IP..."
+
+msgid "Please wait a few seconds while the stream is initialized."
+msgstr "Veuillez patienter quelques secondes pendant l'initialisation du flux."
+
+msgid "Current status: "
+msgstr "Statut actuel : "
+
+msgid ""
+"If the stream does not recover, verify the URL, camera network connection, "
+"and camera credentials."
+msgstr ""
+"Si le flux ne se rétablit pas, vérifiez l'URL, la connexion réseau de la "
+"caméra et ses identifiants."
+
+msgid "Connection to the IP camera failed."
+msgstr "Échec de la connexion à la caméra IP."
+
+msgid ""
+"Please check the stream URL and the network connection of your IP camera."
+msgstr "Vérifiez l'URL du flux et la connexion réseau de votre caméra IP."
+
+msgid ""
+"If you have just changed the camera settings, please wait a few seconds for "
+"the camera to reconnect."
+msgstr ""
+"Si vous venez de modifier les paramètres de la caméra, veuillez patienter "
+"quelques secondes le temps qu'elle se reconnecte."
+
+msgid ""
+"If this message does not disappear within 60 seconds, please (re-)install "
+"the required camera drivers with the \"Reinstall Camera Driver\" button in "
+"the \"System\" section."
+msgstr ""
+"Si ce message ne disparaît pas dans les 60 secondes, veuillez (ré)installer "
+"les pilotes de caméra requis avec le bouton « Réinstaller le pilote de "
+"caméra » dans la section « Système »."
+
+msgid "Connection to the camera failed."
+msgstr "Échec de la connexion à la caméra."
+
+msgid "Camera stream appears to be frozen."
+msgstr "Le flux de la caméra semble figé."
+
+msgid "Please check your external IP camera connection or network settings."
+msgstr ""
+"Vérifiez la connexion de votre caméra IP externe ou vos paramètres réseau."
+
+msgid "Could not read the picture from the camera."
+msgstr "Impossible de lire l'image depuis la caméra."
+
+msgid "An error occured while fetching the live view image."
+msgstr ""
+"Une erreur s'est produite lors de la récupération de l'image de la vue en "
+"direct."
+
+msgid "Clock"
+msgstr "Horloge"
+
+msgid "Current time"
+msgstr "Heure actuelle"
+
+msgid "Status unavailable"
+msgstr "Statut indisponible"
+
+#, python-brace-format
+msgid "Prey detected {0:.0f}s ago. Inside lock remains closed for {1:.0f}s."
+msgstr ""
+"Proie détectée il y a {0:.0f}s. Le verrou intérieur reste fermé pendant "
+"{1:.0f}s."
+
+msgid "Inside lock: Open"
+msgstr "Verrou intérieur : ouvert"
+
+msgid "Inside lock: Closed"
+msgstr "Verrou intérieur : fermé"
+
+msgid "Inside motion: Motion"
+msgstr "Mouvement intérieur : mouvement"
+
+msgid "Inside motion: No motion"
+msgstr "Mouvement intérieur : aucun mouvement"
+
+msgid "Outside lock: Open"
+msgstr "Verrou extérieur : ouvert"
+
+msgid "Outside lock: Closed"
+msgstr "Verrou extérieur : fermé"
+
+msgid "Outside motion: Motion"
+msgstr "Mouvement extérieur : mouvement"
+
+msgid "Outside motion: No motion"
+msgstr "Mouvement extérieur : aucun mouvement"
+
+msgid "Remote control not connected"
+msgstr "Contrôle à distance non connecté"
+
+msgid "Reinstall Camera Driver"
+msgstr "Réinstaller le pilote de caméra"
+
+msgid "Reinstall the camera driver if the live view does not work properly."
+msgstr ""
+"Réinstallez le pilote de caméra si la vue en direct ne fonctionne pas "
+"correctement."
+
+msgid "Start tasks/actions on the devices"
+msgstr "Démarrer des tâches/actions sur les appareils"
+
+msgid "Kittyflap"
+msgstr "Kittyflap"
+
+msgid "Target device actions"
+msgstr "Actions sur l'appareil cible"
+
+msgid "Restart Kittyflap"
+msgstr "Redémarrer la Kittyflap"
+
+msgid "Shutdown Kittyflap"
+msgstr "Éteindre la Kittyflap"
+
+msgid ""
+"To avoid data loss, always shut down the Kittyflap properly before "
+"unplugging the power cable. After a shutdown, wait 30 seconds before "
+"unplugging the power cable. To start the Kittyflap again, just plug in the "
+"power again."
+msgstr ""
+"Pour éviter toute perte de données, éteignez toujours la Kittyflap "
+"correctement avant de débrancher le câble d'alimentation. Après "
+"l'extinction, attendez 30 secondes avant de débrancher le câble. Pour "
+"redémarrer la Kittyflap, rebranchez simplement l'alimentation."
+
+msgid "This device"
+msgstr "Cet appareil"
+
+msgid "Remote-mode device actions"
+msgstr "Actions sur l'appareil en mode distant"
+
+msgid "Restart this device"
+msgstr "Redémarrer cet appareil"
+
+msgid "Shutdown this device"
+msgstr "Éteindre cet appareil"
+
+msgid ""
+"Shutting down this device will stop remote control and the web interface "
+"until it is started again."
+msgstr ""
+"Éteindre cet appareil arrêtera le contrôle à distance et l'interface web "
+"jusqu'à son prochain démarrage."
+
+msgid "Start tasks/actions on the Kittyflap"
+msgstr "Démarrer des tâches/actions sur la Kittyflap"
+
+msgid "API Tokens"
+msgstr "Jetons API"
+
+msgid ""
+"Tokens authenticate REST API calls (see **doc/api.md**). Each token is shown "
+"only once at creation — store it safely. Send it via `Authorization: Bearer "
+"<token>` header, or — for URL-only clients like Stream Deck — as a `?"
+"token=<token>` query parameter."
+msgstr ""
+"Les jetons authentifient les appels à l'API REST (voir **doc/api.md**). "
+"Chaque jeton n'est affiché qu'une seule fois à sa création — conservez-le en "
+"lieu sûr. Envoyez-le via l'en-tête `Authorization: Bearer <token>`, ou — "
+"pour les clients limités à une URL comme Stream Deck — en tant que paramètre "
+"de requête `?token=<token>`."
+
+msgid "Create new token"
+msgstr "Créer un nouveau jeton"
+
+msgid "Label"
+msgstr "Étiquette"
+
+msgid "e.g. stream-deck"
+msgstr "par ex. stream-deck"
+
+msgid "Create Token"
+msgstr "Créer le jeton"
+
+msgid "Revoke token"
+msgstr "Révoquer le jeton"
+
+msgid "Revoke Selected"
+msgstr "Révoquer la sélection"
+
+msgid "Kittyflap System Actions"
+msgstr "Actions système de la Kittyflap"
+
+msgid ""
+"Do you really want to reinstall the camera driver? This operation can take "
+"several minutes."
+msgstr ""
+"Voulez-vous vraiment réinstaller le pilote de caméra ? Cette opération peut "
+"prendre plusieurs minutes."
+
+msgid "Reinstall Camera Driver in progress."
+msgstr "Réinstallation du pilote de caméra en cours."
+
+msgid "This may take a while..."
+msgstr "Cela peut prendre un certain temps..."
+
+msgid "Stopping the camera"
+msgstr "Arrêt de la caméra"
+
+msgid "Downloading all dependencies"
+msgstr "Téléchargement de toutes les dépendances"
+
+msgid "Download"
+msgstr "Télécharger"
+
+msgid "Uninstalling libcamera packages above version 0.3"
+msgstr "Désinstallation des paquets libcamera au-delà de la version 0.3"
+
+msgid "Installing all dependencies"
+msgstr "Installation de toutes les dépendances"
+
+msgid ""
+"An error occurred during the installation process. Please check the logs for "
+"details."
+msgstr ""
+"Une erreur s'est produite pendant le processus d'installation. Consultez les "
+"journaux pour plus de détails."
+
+msgid ""
+"A restart is required to apply the update. Do you want to restart the "
+"Kittyflap now?"
+msgstr ""
+"Un redémarrage est nécessaire pour appliquer la mise à jour. Voulez-vous "
+"redémarrer la Kittyflap maintenant ?"
+
+msgid ""
+"Kittyflap is rebooting now... This will take 1 or 2 minutes. Please reload "
+"the page after the restart."
+msgstr ""
+"La Kittyflap redémarre maintenant... Cela prendra 1 à 2 minutes. Veuillez "
+"recharger la page après le redémarrage."
+
+msgid ""
+"Both devices are rebooting now... This may take 1 or 2 minutes. Please "
+"reconnect and reload the page afterwards."
+msgstr ""
+"Les deux appareils redémarrent maintenant... Cela peut prendre 1 à 2 "
+"minutes. Veuillez vous reconnecter et recharger la page ensuite."
+
+msgid "Failed to load tokens: "
+msgstr "Échec du chargement des jetons : "
+
+msgid "No tokens yet."
+msgstr "Aucun jeton pour l'instant."
+
+msgid "never"
+msgstr "jamais"
+
+msgid "Created"
+msgstr "Créé"
+
+msgid "Last used"
+msgstr "Dernière utilisation"
+
+msgid "— select a token —"
+msgstr "— sélectionner un jeton —"
+
+msgid "Please enter a label first."
+msgstr "Veuillez d'abord saisir une étiquette."
+
+msgid "Failed to create token: "
+msgstr "Échec de la création du jeton : "
+
+msgid "**Copy this token now — it will not be shown again.**"
+msgstr "**Copiez ce jeton maintenant — il ne sera plus affiché.**"
+
+msgid ""
+"Use it as an `Authorization: Bearer <token>` header, or — for URL-only "
+"clients like Stream Deck — as a `?token=<token>` query parameter. URL-based "
+"tokens may appear in web-server access logs and browser history; prefer "
+"headers whenever possible."
+msgstr ""
+"Utilisez-le comme en-tête `Authorization: Bearer <token>`, ou — pour les "
+"clients limités à une URL comme Stream Deck — comme paramètre de requête `?"
+"token=<token>`. Les jetons basés sur une URL peuvent apparaître dans les "
+"journaux d'accès du serveur web et l'historique du navigateur ; préférez les "
+"en-têtes autant que possible."
+
+msgid "Token created"
+msgstr "Jeton créé"
+
+msgid "Please select a token to revoke."
+msgstr "Veuillez sélectionner un jeton à révoquer."
+
+msgid ""
+"Revoke token '{}'? This cannot be undone. Any client using it will "
+"immediately lose access."
+msgstr ""
+"Révoquer le jeton « {} » ? Cette action est irréversible. Tout client "
+"l'utilisant perdra immédiatement l'accès."
+
+msgid "Revoke API token"
+msgstr "Révoquer le jeton API"
+
+msgid "Revoke"
+msgstr "Révoquer"
+
+msgid "Failed to revoke token: "
+msgstr "Échec de la révocation du jeton : "
+
+msgid "Token revoked."
+msgstr "Jeton révoqué."
+
+msgid "Token not found — it may have been revoked already."
+msgstr "Jeton introuvable — il a peut-être déjà été révoqué."
+
+msgid "Do you really want to restart the Kittyflap?"
+msgstr "Voulez-vous vraiment redémarrer la Kittyflap ?"
+
+msgid ""
+"Kittyflap is rebooting now... This will take 1 or 2 minutes. Please "
+"reconnect and reload the page afterwards."
+msgstr ""
+"La Kittyflap redémarre maintenant... Cela prendra 1 à 2 minutes. Veuillez "
+"vous reconnecter et recharger la page ensuite."
+
+msgid ""
+"Failed to trigger Kittyflap reboot. Check the remote connection and "
+"REMOTE_TARGET_HOST."
+msgstr ""
+"Échec du déclenchement du redémarrage de la Kittyflap. Vérifiez la connexion "
+"distante et REMOTE_TARGET_HOST."
+
+msgid "Do you really want to restart this device?"
+msgstr "Voulez-vous vraiment redémarrer cet appareil ?"
+
+msgid ""
+"This device is rebooting now... Please reconnect and reload the page "
+"afterwards."
+msgstr ""
+"Cet appareil redémarre maintenant... Veuillez vous reconnecter et recharger "
+"la page ensuite."
+
+msgid ""
+"Kittyflap is shutting down now... Please wait 30 seconds before unplugging "
+"the power."
+msgstr ""
+"La Kittyflap s'éteint maintenant... Veuillez attendre 30 secondes avant de "
+"débrancher l'alimentation."
+
+msgid "Do you really want to shut down the Kittyflap?"
+msgstr "Voulez-vous vraiment éteindre la Kittyflap ?"
+
+msgid ""
+"Failed to trigger Kittyflap shutdown. Check the remote connection and "
+"REMOTE_TARGET_HOST."
+msgstr ""
+"Échec du déclenchement de l'extinction de la Kittyflap. Vérifiez la "
+"connexion distante et REMOTE_TARGET_HOST."
+
+msgid "Do you really want to shut down this device?"
+msgstr "Voulez-vous vraiment éteindre cet appareil ?"
+
+msgid "This device is shutting down now..."
+msgstr "Cet appareil s'éteint maintenant..."
+
+msgid "Configured WLANs"
+msgstr "Réseaux Wi-Fi configurés"
+
+msgid "Add new WLAN"
+msgstr "Ajouter un nouveau Wi-Fi"
+
+msgid "Connected"
+msgstr "Connecté"
+
+msgid "Enforce connection to this WLAN"
+msgstr "Forcer la connexion à ce Wi-Fi"
+
+msgid "Modify this WLAN"
+msgstr "Modifier ce Wi-Fi"
+
+msgid "Failed to scan for available WLANs"
+msgstr "Échec de la recherche des réseaux Wi-Fi disponibles"
+
+msgid "The WLAN connection will be interrupted now!"
+msgstr "La connexion Wi-Fi va maintenant être interrompue !"
+
+msgid ""
+"Please wait a few seconds. If the page does not reload automatically within "
+"30 seconds, please reload it manually."
+msgstr ""
+"Veuillez patienter quelques secondes. Si la page ne se recharge pas "
+"automatiquement dans les 30 secondes, rechargez-la manuellement."
+
+msgid "Updating WLAN configuration..."
+msgstr "Mise à jour de la configuration Wi-Fi..."
+
+msgid "WLAN configuration for {} updated successfully."
+msgstr "Configuration Wi-Fi pour {} mise à jour avec succès."
+
+msgid "Failed to update WLAN configuration for {}"
+msgstr "Échec de la mise à jour de la configuration Wi-Fi pour {}"
+
+msgid "Available WLANs"
+msgstr "Réseaux Wi-Fi disponibles"
+
+msgid "No signal"
+msgstr "Aucun signal"
+
+msgid "Channel"
+msgstr "Canal"
+
+msgid "Signal"
+msgstr "Signal"
+
+msgid ""
+"This WLAN is currently connected. You can not delete it or change the "
+"password."
+msgstr ""
+"Ce réseau Wi-Fi est actuellement connecté. Vous ne pouvez pas le supprimer "
+"ni changer son mot de passe."
+
+msgid "Leave empty to keep the current password"
+msgstr "Laisser vide pour conserver le mot de passe actuel"
+
+msgid "Change WLAN configuration"
+msgstr "Modifier la configuration Wi-Fi"
+
+msgid "Delete"
+msgstr "Supprimer"
+
+msgid "WLAN connection {} deleted successfully."
+msgstr "Connexion Wi-Fi {} supprimée avec succès."
+
+msgid "Failed to delete WLAN connection {}"
+msgstr "Échec de la suppression de la connexion Wi-Fi {}"
+
+msgid "This model is currently in use. You can not delete it."
+msgstr "Ce modèle est actuellement utilisé. Vous ne pouvez pas le supprimer."
+
+msgid "Unique ID"
+msgstr "Identifiant unique"
+
+msgid "Model created at: {}"
+msgstr "Modèle créé le : {}"
+
+msgid "Change model configuration"
+msgstr "Modifier la configuration du modèle"
+
+msgid "Model configuration {} updated successfully."
+msgstr "Configuration du modèle {} mise à jour avec succès."
+
+msgid "Failed to update model configuration {}"
+msgstr "Échec de la mise à jour de la configuration du modèle {}"
+
+msgid "Do you really want to delete this model?"
+msgstr "Voulez-vous vraiment supprimer ce modèle ?"
+
+msgid "Delete Model"
+msgstr "Supprimer le modèle"
+
+msgid "Model {} deleted successfully."
+msgstr "Modèle {} supprimé avec succès."
+
+msgid "Failed to delete Model {}"
+msgstr "Échec de la suppression du modèle {}"
+
+msgid "This model cannot be selected because it has no unique ID."
+msgstr ""
+"Ce modèle ne peut pas être sélectionné car il n'a pas d'identifiant unique."
+
+msgid "This model is already active."
+msgstr "Ce modèle est déjà actif."
+
+msgid "The selected model was not found on disk."
+msgstr "Le modèle sélectionné est introuvable sur le disque."
+
+msgid "Model switched successfully."
+msgstr "Modèle changé avec succès."
+
+msgid ""
+"Model was selected, but live reload failed. Please reboot to apply the "
+"change."
+msgstr ""
+"Le modèle a été sélectionné, mais le rechargement à chaud a échoué. "
+"Redémarrez pour appliquer le changement."
+
+msgid "Model fallback applied"
+msgstr "Modèle de secours appliqué"
+
+msgid "The configured YOLO model was not found at startup:"
+msgstr "Le modèle YOLO configuré n'a pas été trouvé au démarrage :"
+
+msgid "Kittyhack switched automatically to another available YOLO model:"
+msgstr ""
+"Kittyhack a automatiquement basculé vers un autre modèle YOLO disponible :"
+
+msgid ""
+"No other YOLO model was available. Kittyhack switched to the shipped TFLite "
+"model:"
+msgstr ""
+"Aucun autre modèle YOLO n'était disponible. Kittyhack a basculé vers le "
+"modèle TFLite fourni :"
+
+msgid ""
+"The kittyflap was not shut down gracefully several times in a row. Please do "
+"not power off the device without shutting it down first, otherwise the "
+"database may be corrupted!"
+msgstr ""
+"La Kittyflap n'a pas été éteinte correctement plusieurs fois de suite. Ne "
+"coupez pas l'alimentation de l'appareil sans l'éteindre au préalable, sinon "
+"la base de données pourrait être corrompue !"
+
+msgid ""
+"If you have shut it down gracefully and see this message, please report it "
+"in the"
+msgstr ""
+"Si vous l'avez éteinte correctement et que vous voyez ce message, veuillez "
+"le signaler dans le"
+
+msgid "thanks!"
+msgstr "merci !"
+
+msgid ""
+"> **NOTE:** The option `Use all CPU cores for image processing` has been "
+"disabled now automatically, since this could cause the issue on some devices."
+msgstr ""
+"> **REMARQUE :** l'option `Utiliser tous les cœurs CPU pour le traitement "
+"d'image` a maintenant été désactivée automatiquement, car elle pourrait "
+"causer ce problème sur certains appareils."
+
+msgid "Please check the settings and enable it again, if you want to use it."
+msgstr "Vérifiez les paramètres et réactivez-la si vous souhaitez l'utiliser."
+
+msgid "Several crashes detected!"
+msgstr "Plusieurs plantages détectés !"
+
+msgid "Database restored"
+msgstr "Base de données restaurée"
+
+msgid ""
+"The kittyhack database was corrupted at startup and has been restored from "
+"backup: {}. The corrupted file was archived as: {}"
+msgstr ""
+"La base de données Kittyhack était corrompue au démarrage et a été restaurée "
+"depuis une sauvegarde : {}. Le fichier corrompu a été archivé sous : {}"
+
+msgid "Stopping existing Label Studio service..."
+msgstr "Arrêt du service Label Studio existant..."
+
+msgid "Removing existing Label Studio installation..."
+msgstr "Suppression de l'installation Label Studio existante..."
+
+msgid "Starting Label Studio installation..."
+msgstr "Démarrage de l'installation de Label Studio..."
+
+msgid "This may take a few minutes..."
+msgstr "Cela peut prendre quelques minutes..."
+
+msgid "Creating virtual environment..."
+msgstr "Création de l'environnement virtuel..."
+
+msgid "This may take a moment..."
+msgstr "Cela peut prendre un instant..."
+
+msgid "Virtual environment already exists"
+msgstr "L'environnement virtuel existe déjà"
+
+msgid "Skipping creation..."
+msgstr "Création ignorée..."
+
+msgid "Upgrading pip..."
+msgstr "Mise à jour de pip..."
+
+msgid "Installing Label Studio..."
+msgstr "Installation de Label Studio..."
+
+msgid ""
+"This takes several minutes... Do not turn off the power or reload the page!"
+msgstr ""
+"Cela prend plusieurs minutes... Ne coupez pas l'alimentation et ne rechargez "
+"pas la page !"
+
+msgid "Creating systemd service..."
+msgstr "Création du service systemd..."
+
+msgid "Almost done..."
+msgstr "Presque terminé..."
+
+msgid "Service file created successfully."
+msgstr "Fichier de service créé avec succès."
+
+msgid "Error: Template file not found."
+msgstr "Erreur : fichier modèle introuvable."
+
+msgid "Reloading systemd services..."
+msgstr "Rechargement des services systemd..."
+
+msgid "Starting Label Studio update..."
+msgstr "Démarrage de la mise à jour de Label Studio..."
+
+msgid "Upgrading Label Studio..."
+msgstr "Mise à jour de Label Studio..."
+
+msgid "Presence"
+msgstr "Chats"
+
+msgid "Live view"
+msgstr "Live"
+
+msgid "Pictures"
+msgstr "Photos"
+
+msgid "Manage cats"
+msgstr "Gérer les chats"
+
+msgid "AI Training"
+msgstr "Entraînement de l'IA"
+
+msgid "System"
+msgstr "Système"
+
+msgid "WLAN Configuration"
+msgstr "Configuration Wi-Fi"
+
+msgid "Info"
+msgstr "Info"
+
+msgid "Toggle theme"
+msgstr "Changer de thème"
+
+msgid "Theme: Auto"
+msgstr "Thème : auto"
+
+msgid "Correct"
+msgstr "Correct"
+
+msgid "Not a real detection"
+msgstr "Pas une vraie détection"
+
+msgid "Reviewed"
+msgstr "Vérifié"
+
+msgid "Confirmed: {name}"
+msgstr "Confirmé : {name}"
+
+msgid "Marked as a false detection ({name})"
+msgstr "Marqué comme fausse détection ({name})"
+
+msgid "Corrected: {old} → {new}"
+msgstr "Corrigé : {old} → {new}"
+
+msgid "Failed to record the correction."
+msgstr "Échec de l'enregistrement de la correction."
+
+msgid "Tag a missed cat/prey directly on this picture"
+msgstr "Taguer un chat/une proie manqué(e) directement sur cette photo"
+
+msgid "Added: {name}"
+msgstr "Ajouté : {name}"
+
+msgid "Failed to add the detection."
+msgstr "Échec de l'ajout de la détection."
+
+msgid "added"
+msgstr "ajouté"
+
+msgid "Journey"
+msgstr "Parcours"
+
+msgid "Chronology"
+msgstr "Chronologie"
+
+msgid "More"
+msgstr "Plus"
+
+msgid "Entries & exits"
+msgstr "Entrées et sorties"
+
+msgid "Total activity"
+msgstr "Activité totale"
+
+msgid "Flap cam"
+msgstr "Chatière"
+
+msgid "Send to Label Studio"
+msgstr "Envoyer à Label Studio"
+
+msgid "No pictures found."
+msgstr "Aucune image trouvée."
+
+msgid "Capture deleted."
+msgstr "Capture supprimée."
+
+msgid "Failed to process the requested action."
+msgstr "Échec du traitement de l'action demandée."
+
+msgid "Failed to load the journey."
+msgstr "Échec du chargement du parcours."
+
+msgid "Last entry"
+msgstr "Dernière entrée"
+
+msgid "Time outside"
+msgstr "Temps à l'extérieur"
+
+msgid "Entries"
+msgstr "Entrées"
+
+msgid "No entry recorded yet."
+msgstr "Aucune entrée enregistrée pour l'instant."
+
+msgid "Presence corrected."
+msgstr "Présence corrigée."
+
+msgid "Failed to correct presence."
+msgstr "Échec de la correction de présence."
+
+msgid "Prey detected ({cat}) - entry blocked for {minutes} min. False alarm? Reset the cooldown from Live view."
+msgstr "Proie détectée ({cat}) - entrée bloquée {minutes} min. Fausse alerte ? Réinitialise le cooldown depuis Vue en direct."
+
+msgid "Entry"
+msgstr "Entrée"
+
+msgid "Exit"
+msgstr "Sortie"
+
+msgid "Entries/day avg"
+msgstr "Entrées/jour moy."
+
+msgid "Time outside/day avg"
+msgstr "Temps dehors/jour moy."
+
+msgid "Prey blocked"
+msgstr "Cadeaux bloqués"
+
+msgid "Connection history"
+msgstr "Historique de connexion"
+
+msgid "No connection history yet."
+msgstr "Pas encore d'historique de connexion."
+
+msgid "Disconnected"
+msgstr "Déconnecté"
+
+msgid "Uptime"
+msgstr "Disponibilité"
+
+msgid "Disconnections"
+msgstr "Déconnexions"
+
+msgid "Longest stable streak"
+msgstr "Plus longue période stable"
+
+msgid "ongoing"
+msgstr "en cours"
+
+msgid "since {date}"
+msgstr "depuis le {date}"
+
+msgid "{span} · newest first"
+msgstr "{span} · plus récent en premier"
+
+msgid "Remote connection history"
+msgstr "Historique de connexion remote"
+
+msgid "Connect/disconnect log with uptime and durations."
+msgstr "Journal des connexions/déconnexions avec disponibilité et durées."
+
+msgid "In remote-mode, pictures are stored on this remote device's own disk, not on the Kittyflap."
+msgstr "En mode remote, les photos sont stockées sur le disque de cet appareil remote, pas sur la Kittyflap."
+
+msgid "Also use the PIR sensor alongside the camera"
+msgstr "Utiliser aussi le capteur PIR en plus de la caméra"
+
+msgid "Explain combined PIR + camera detection"
+msgstr "Expliquer la détection combinée PIR + caméra"
+
+msgid "Neither sensor alone is perfectly reliable: the camera tends to lose track of the cat once it's right at the flap, while the PIR sensor is more prone to false triggers from environmental changes (moving trees, passers-by). With this enabled, outside motion is detected if EITHER the camera OR the PIR sensor reports it, instead of relying on the camera alone."
+msgstr "Aucun des deux capteurs n'est parfaitement fiable seul : la caméra a tendance à perdre le chat une fois qu'il est tout près de la chatière, tandis que le capteur PIR est plus sujet aux faux déclenchements liés à l'environnement (arbres qui bougent, passants). Avec ce réglage activé, un mouvement extérieur est détecté dès que LA CAMÉRA OU LE PIR le signale, au lieu de ne se fier qu'à la caméra seule."
+
+msgid "**NOTE:** Only has an effect while `Use camera for motion detection` above is also enabled."
+msgstr "**NOTE :** N'a d'effet que si `Utiliser la caméra pour la détection de mouvement` ci-dessus est aussi activé."
+
+msgid "Pause camera analysis when idle (resume on PIR motion)"
+msgstr "Mettre l'analyse caméra en pause au repos (reprend sur mouvement PIR)"
+
+msgid "Cat entered"
+msgstr "Chat entré"
+
+msgid "Cat exited"
+msgstr "Chat sorti"
+
+msgid "Looked outside, didn't go out"
+msgstr "A regardé dehors, n'est pas sorti"
+
+msgid "Motion detected outside (raw)"
+msgstr "Mouvement détecté dehors (brut)"
+
+msgid "Motion detected inside (raw)"
+msgstr "Mouvement détecté dedans (brut)"
+
+msgid "Explain push notification types"
+msgstr "Explication des types de notifications push"
+
+msgid "The first four match an actual event (a cat really came in/went out/looked without passing/a prey was blocked) and are on by default.\n\n**Motion detected outside/inside (raw)** fire on the underlying PIR/camera trigger itself, before it's known whether anything will come of it - far more frequent (tens to 50+ times a day), so they're off by default and, when enabled, limited to one notification per 10 minutes."
+msgstr "Les quatre premières correspondent à un vrai événement (un chat est réellement entré/sorti/a regardé sans entrer/une proie a été bloquée) et sont activées par défaut.\n\n**Mouvement détecté dehors/dedans (brut)** se déclenchent sur le signal PIR/caméra lui-même, avant même de savoir si quelque chose en découlera - bien plus fréquent (dizaines à plus de 50 fois par jour), donc désactivées par défaut et, si activées, limitées à une notification toutes les 10 minutes."
+
+msgid "A cat looked outside but didn't go out."
+msgstr "Un chat a regardé dehors mais n'est pas sorti."
+
+msgid "{cat} looked outside but didn't go out."
+msgstr "{cat} a regardé dehors mais n'est pas sorti."
+
+msgid "A cat walked by outside."
+msgstr "Un chat est passé."
+
+msgid "{cat} walked by outside."
+msgstr "{cat} est passé."
+
+msgid "Motion detected outside."
+msgstr "Mouvement détecté dehors."
+
+msgid "Motion detected inside."
+msgstr "Mouvement détecté dedans."
+
+msgid "Exits"
+msgstr "Sorties"
+
+msgid "Glances"
+msgstr "Coups d'œil"
+
+msgid "Busiest hour"
+msgstr "Heure la plus active"
+
+msgid "Last 30 days"
+msgstr "30 derniers jours"
+
+msgid "{}:00"
+msgstr "{}h00"
+
+msgid "Explain pausing the camera when idle"
+msgstr "Expliquer la mise en pause de la caméra au repos"
+
+msgid "The chatiere camera's continuous analysis is by far the biggest CPU cost on the box. With this enabled, it only runs for a short while after the PIR sensor last saw real motion outside, instead of running non-stop."
+msgstr "L'analyse continue de la caméra de la chatière est de loin le plus gros poste de consommation CPU sur le NAS. Avec ce réglage activé, elle ne tourne que quelques instants après la dernière détection réelle de mouvement par le PIR, au lieu de tourner en continu."
+
+msgid "**Trade-off:** if the PIR sensor itself ever misses a very brief passage, the camera won't wake up for it either in that case - unlike the always-on default, which can sometimes catch what the PIR misses."
+msgstr "**Compromis :** si le capteur PIR lui-même rate un passage très bref, la caméra ne se réveillera pas non plus dans ce cas précis — contrairement au mode continu par défaut, qui peut parfois rattraper ce que le PIR a raté."
+
+msgid "Block exit after a prey-flagged entry"
+msgstr "Bloquer la sortie après une entrée marquée proie"
+
+msgid "Explain exit block after prey entry"
+msgstr "Expliquer le blocage de sortie après une entrée avec proie"
+
+msgid "Some cats drop a caught prey outside the flap, wait for the entry lock to expire, come in prey-free, then reach a paw back out to retrieve it. If enabled, a cat seen with a prey is blocked from exiting for the duration below once their entry is confirmed - even if that happens well after the sighting.\n\n**NOTE:** This is the global setting. It can also be configured per cat in the `MANAGE CATS` section."
+msgstr "Certains chats déposent une proie attrapée dehors, attendent que le verrou d'entrée expire, rentrent sans la proie, puis ressortent juste une patte pour aller la chercher. Si activé, un chat vu avec une proie voit sa sortie bloquée pour la durée ci-dessous dès que son entrée est confirmée - même longtemps après l'avoir vu avec la proie.\n\n**NOTE :** Ceci est le réglage global. Il peut aussi être configuré par chat dans la section `GÉRER LES CHATS`."
+
+msgid "Exit block duration after prey-flagged entry (in s)"
+msgstr "Durée du blocage de sortie après entrée avec proie (en s)"
+
+msgid "**Disabled:** This is turned off globally in the `CONFIGURATION` section."
+msgstr "**Désactivé :** Ce réglage est coupé globalement dans la section `CONFIGURATION`."
+
+msgid "Access"
+msgstr "Accès"
+
+msgid "Daily average"
+msgstr "Moyenne journalière"
+
+msgid "Filter by cat"
+msgstr "Filtrer par chat"
+
+msgid "All cats"
+msgstr "Tous les chats"
+
+msgid "Human Corrections"
+msgstr "Corrections manuelles"
+
+msgid "Send your validated/corrected detections (Photos tab) to Label Studio as pre-annotated tasks."
+msgstr "Envoyer tes détections validées/corrigées (onglet Photos) vers Label Studio sous forme de tâches pré-annotées."
+
+msgid "Configure Label Studio above first (install, token, project) to send corrections."
+msgstr "Configure d'abord Label Studio ci-dessus (installation, jeton, projet) pour envoyer les corrections."
+
+msgid "{n} correction(s) waiting to be sent."
+msgstr "{n} correction(s) en attente d'envoi."
+
+msgid "No corrections waiting - everything you've reviewed on the Photos tab is already in Label Studio."
+msgstr "Aucune correction en attente - tout ce que tu as révisé dans l'onglet Photos est déjà dans Label Studio."
+
+msgid "Nothing to export."
+msgstr "Rien à exporter."
+
+msgid "Sent {ok}, {fail} failed (will retry next time)."
+msgstr "{ok} envoyées, {fail} échouées (nouvel essai la prochaine fois)."
+
+msgid "Sent {ok} correction(s) to Label Studio."
+msgstr "{ok} correction(s) envoyée(s) vers Label Studio."
+
+msgid "Retroactive Model Review"
+msgstr "Révision rétroactive du modèle"
+
+msgid "Re-run the active model on already-tagged photos and review where it disagrees with what's stored."
+msgstr "Relance le modèle actif sur des photos déjà étiquetées et passe en revue les cas où il n'est pas d'accord avec ce qui est stocké."
+
+msgid "Runs the currently active model again on photos from the last N events, and flags only the ones where it now disagrees with what's stored. Nothing is overwritten automatically - you confirm or dismiss each one below."
+msgstr "Relance le modèle actuellement actif sur les photos des N derniers événements, et ne signale que les cas où il n'est plus d'accord avec ce qui est stocké. Rien n'est écrasé automatiquement - tu confirmes ou rejettes chaque cas ci-dessous."
+
+msgid "Run pilot (last 50 events)"
+msgstr "Lancer le pilote (50 derniers événements)"
+
+msgid "Scan everything with the active model"
+msgstr "Tout scanner avec le modèle actif"
+
+msgid "A scan is already running (maybe from another tab/device) - wait for it to finish first."
+msgstr "Un scan est déjà en cours (peut-être depuis un autre onglet/appareil) - attends qu'il se termine d'abord."
+
+msgid "Running..."
+msgstr "En cours..."
+
+msgid "Last run: {scanned} photo(s) from {events} event(s) scanned in {elapsed:.0f}s, {flagged} flagged."
+msgstr "Dernier passage : {scanned} photo(s) sur {events} événement(s) analysées en {elapsed:.0f}s, {flagged} signalée(s)."
+
+msgid "No disagreements waiting for review right now."
+msgstr "Aucun désaccord en attente de révision pour le moment."
+
+msgid "{n} disagreement(s) waiting for review:"
+msgstr "{n} désaccord(s) en attente de révision :"
+
+msgid "The review could not run (no active model or inference failed - check the logs)."
+msgstr "La révision n'a pas pu s'exécuter (pas de modèle actif ou échec de l'inférence - vérifie les logs)."
+
+msgid "Reviewed {scanned} photo(s) from {events} event(s): {flagged} disagreement(s) to check."
+msgstr "{scanned} photo(s) passées en revue sur {events} événement(s) : {flagged} désaccord(s) à vérifier."
+
+msgid "Before: "
+msgstr "Avant : "
+
+msgid "After: "
+msgstr "Après : "
+
+msgid "RFID: "
+msgstr "RFID : "
+
+msgid "nothing"
+msgstr "rien"
+
+msgid "Keep old"
+msgstr "Garder l'ancien"
+
+msgid "Confirm new"
+msgstr "Confirmer le nouveau"
+
+msgid "Kept the existing tag."
+msgstr "Étiquette existante conservée."
+
+msgid "Could not save this decision."
+msgstr "Impossible d'enregistrer cette décision."
+
+msgid "Could not save this correction."
+msgstr "Impossible d'enregistrer cette correction."
+
+msgid "Other"
+msgstr "Autre"
+
+msgid "Runs the currently active model again on photos from N events, and flags only the ones where it now disagrees with what's stored. Each run advances to the next, older batch of events (never the same ones twice) - nothing is overwritten automatically, you confirm or dismiss each one below."
+msgstr "Relance le modèle actuellement actif sur les photos de N événements, et ne signale que les cas où il n'est plus d'accord avec ce qui est stocké. Chaque passage avance vers le lot d'événements suivant, plus ancien (jamais les mêmes deux fois) - rien n'est écrasé automatiquement, tu confirmes ou rejettes chaque cas ci-dessous."
+
+msgid "Every event has already been scanned with this model. Train and activate a new model to get a fresh batch."
+msgstr "Tous les événements ont déjà été scannés avec ce modèle. Entraîne et active un nouveau modèle pour obtenir un nouveau lot."
+
+msgid "prey"
+msgstr "proie"
+
+msgid "Showing the first {shown} of {n} disagreement(s) waiting for review (most recent handled first):"
+msgstr "Affichage des {shown} premiers sur {n} désaccord(s) en attente de révision (les plus récents traités en premier) :"
+
+msgid "Prey (not a cat)"
+msgstr "Proie (pas un chat)"
+
+msgid "Nothing (false detection)"
+msgstr "Rien (fausse détection)"
+
+#~ msgid "YOLOv8 model"
+#~ msgstr "Modèle YOLOv8"

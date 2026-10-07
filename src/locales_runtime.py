@@ -17,8 +17,8 @@ except Exception:
 from src.paths import kittyhack_root
 
 _REQUIRED_TOOLS = ("xgettext", "msgmerge", "msgfmt")
-# English strings are the source msgids. We only maintain a translated catalog for German.
-_LANGUAGES = ("de",)
+# English strings are the source msgids. We maintain translated catalogs for German and French.
+_LANGUAGES = ("de", "fr")
 _STATE_FILE = ".runtime_locale_state.json"
 
 _once_lock = threading.Lock()
