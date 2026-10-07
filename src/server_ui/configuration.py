@@ -35,7 +35,7 @@ from src.server_ui.state import (
 )
 from src.server_ui.helpers import _disable_numeric_input, collapsible_section
 from src.server_ui.context import SessionContext
-from src.webauth import SESSION_COOKIE, _session_username, _check_credentials, set_password
+from src.webauth import SESSION_COOKIE, _session_username, _check_credentials, set_password, username_exists
 import src.startup as startup
 
 _ = set_language(CONFIG["LANGUAGE"])
@@ -227,6 +227,43 @@ def register_configuration(input, output, session, ctx: SessionContext):
                                     "bChangePassword",
                                     _("Update password"),
                                     icon=icon_svg("key"),
+                                    class_="btn-outline-primary",
+                                    style_="margin-top: 10px;",
+                                ),
+                                style_="margin-top: 4px;",
+                            ),
+                        ),
+                        ui.hr(),
+                        # 07.10, Sid ("il me faudra une possibilite d'ajouter
+                        # un utilisateur, pour Xa"): set_password() already
+                        # upserts into users_auth.json regardless of whether
+                        # the username exists yet - this was just missing a
+                        # UI to call it for a NEW username (only "change my
+                        # own password", above, existed before).
+                        ui.row(
+                            ui.column(12, ui.h5(_("Add a user"))),
+                            ui.column(
+                                4,
+                                ui.input_text("txtNewUsername", _("Username")),
+                            ),
+                            ui.column(
+                                4,
+                                _password_field_with_eye(
+                                    "txtNewUserPassword", _("Password")
+                                ),
+                            ),
+                            ui.column(
+                                4,
+                                _password_field_with_eye(
+                                    "txtNewUserPassword2", _("Confirm password")
+                                ),
+                            ),
+                            ui.column(
+                                12,
+                                ui.input_action_button(
+                                    "bAddUser",
+                                    _("Add user"),
+                                    icon=icon_svg("user-plus"),
                                     class_="btn-outline-primary",
                                     style_="margin-top: 10px;",
                                 ),
@@ -2640,6 +2677,48 @@ def register_configuration(input, output, session, ctx: SessionContext):
         set_password(username, new_pw)
         _clear_fields()
         ui.notification_show(_("Password updated successfully."), type="message", duration=5)
+
+    @reactive.Effect
+    @reactive.event(input.bAddUser)
+    def on_add_user():
+        new_username = (input.txtNewUsername() or "").strip()
+        new_pw = input.txtNewUserPassword()
+        new_pw2 = input.txtNewUserPassword2()
+
+        def _clear_fields():
+            ui.update_text("txtNewUsername", value="")
+            ui.update_text("txtNewUserPassword", value="")
+            ui.update_text("txtNewUserPassword2", value="")
+
+        if not new_username:
+            ui.notification_show(_("Please enter a username."), type="error", duration=6)
+            return
+
+        if username_exists(new_username):
+            ui.notification_show(
+                _("This username already exists. Use a different one, or change that user's own password instead."),
+                type="error",
+                duration=7,
+            )
+            return
+
+        if len(new_pw) < 8:
+            ui.notification_show(
+                _("New password must be at least 8 characters long."), type="error", duration=6
+            )
+            return
+
+        if new_pw != new_pw2:
+            ui.notification_show(_("The new passwords do not match."), type="error", duration=6)
+            return
+
+        set_password(new_username, new_pw)
+        _clear_fields()
+        ui.notification_show(
+            _("User '{username}' added successfully.").format(username=new_username),
+            type="message",
+            duration=5,
+        )
 
     @reactive.Effect
     @reactive.event(input.bSaveKittyhackConfig)

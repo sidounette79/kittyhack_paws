@@ -128,6 +128,14 @@ def set_password(username: str, password: str) -> None:
     _save_users(users)
 
 
+def username_exists(username: str) -> bool:
+    """07.10, Sid ("une possibilite d'ajouter un utilisateur"): set_password()
+    silently upserts either way - the "Add a user" UI needs this to tell a
+    genuinely new account from a typo that would overwrite someone else's
+    password."""
+    return username in _load_users()
+
+
 def _check_credentials(username: str, password: str) -> bool:
     users = _load_users()
     encoded = users.get(username)

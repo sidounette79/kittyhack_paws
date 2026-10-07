@@ -988,6 +988,27 @@ msgstr "Confirmer le nouveau mot de passe"
 msgid "Update password"
 msgstr "Mettre à jour le mot de passe"
 
+msgid "Add a user"
+msgstr "Ajouter un utilisateur"
+
+msgid "Username"
+msgstr "Nom d'utilisateur"
+
+msgid "Confirm password"
+msgstr "Confirmer le mot de passe"
+
+msgid "Add user"
+msgstr "Ajouter"
+
+msgid "Please enter a username."
+msgstr "Merci de saisir un nom d'utilisateur."
+
+msgid "This username already exists. Use a different one, or change that user's own password instead."
+msgstr "Ce nom d'utilisateur existe déjà. Utilise un autre nom, ou change le mot de passe de cet utilisateur directement."
+
+msgid "User '{username}' added successfully."
+msgstr "Utilisateur « {username} » ajouté avec succès."
+
 msgid "Push notifications"
 msgstr "Notifications push"
 
