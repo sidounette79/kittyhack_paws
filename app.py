@@ -6,6 +6,7 @@ from src.paths import pictures_thumbnails_dir, pictures_original_dir
 from src.api import ApiMiddleware
 from src.webauth import WebAuthMiddleware
 from src.webpush import WebPushMiddleware
+from src.fcm_push import FCMMiddleware
 
 path_www = os.path.join(os.path.dirname(__file__), "www")
 path_doc_diagrams = os.path.join(os.path.dirname(__file__), "doc", "diagrams")
@@ -88,6 +89,6 @@ shiny_app = App(
 # ("admin") are seeded on first run only (users_auth.json, gitignored) —
 # change them from day one via src.webauth.set_password().
 app = WebAuthMiddleware(
-    WebPushMiddleware(ApiMiddleware(TabRoutingMiddleware(shiny_app))),
+    FCMMiddleware(WebPushMiddleware(ApiMiddleware(TabRoutingMiddleware(shiny_app)))),
     seed_users={"sidounette": "admin", "xacarr": "admin"},
 )

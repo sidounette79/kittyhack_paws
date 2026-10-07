@@ -21,6 +21,7 @@ from src.hardware_sim import create_hardware, FakeRfid
 from src.camera import image_buffer
 from src.event_timeline import TimelineAction, timeline_append
 from src.webpush import send_notification_to_all, register_notification_image
+from src.fcm_push import send_fcm_notification_to_all_sync
 from src.paths import pictures_thumbnails_dir
 
 from src.backend.constants import (
@@ -689,6 +690,7 @@ def backend_main(
                     send_notification_to_all(
                         _("Kittyhack"), body, url="/", tag=f"kittyhack-inside-{_mono():.3f}", image=photo_url
                     )
+                    send_fcm_notification_to_all_sync(_("Kittyhack"), body, url="/", image=photo_url)
                 elif is_outside:
                     if not CONFIG['NOTIFY_CAT_EXITED']:
                         return
@@ -699,6 +701,7 @@ def backend_main(
                     send_notification_to_all(
                         _("Kittyhack"), body, url="/", tag=f"kittyhack-outside-{_mono():.3f}", image=photo_url
                     )
+                    send_fcm_notification_to_all_sync(_("Kittyhack"), body, url="/", image=photo_url)
                 else:
                     if not CONFIG['NOTIFY_GLANCE_OUTSIDE']:
                         return
@@ -709,6 +712,7 @@ def backend_main(
                     send_notification_to_all(
                         _("Kittyhack"), body, url="/", tag=f"kittyhack-glance-{_mono():.3f}", image=photo_url
                     )
+                    send_fcm_notification_to_all_sync(_("Kittyhack"), body, url="/", image=photo_url)
             except Exception as e:
                 logging.warning(f"[BACKEND] Failed to send push notification: {e}")
 
@@ -1086,6 +1090,9 @@ def backend_main(
                             _("Kittyhack"), _("Motion detected outside."),
                             url="/", tag=f"kittyhack-motion-outside-{_mono():.3f}",
                         )
+                        send_fcm_notification_to_all_sync(
+                            _("Kittyhack"), _("Motion detected outside."), url="/"
+                        )
                     except Exception as e:
                         logging.warning(f"[BACKEND] Failed to send motion-outside push notification: {e}")
 
@@ -1239,6 +1246,9 @@ def backend_main(
                         send_notification_to_all(
                             _("Kittyhack"), _("Motion detected inside."),
                             url="/", tag=f"kittyhack-motion-inside-{_mono():.3f}",
+                        )
+                        send_fcm_notification_to_all_sync(
+                            _("Kittyhack"), _("Motion detected inside."), url="/"
                         )
                     except Exception as e:
                         logging.warning(f"[BACKEND] Failed to send motion-inside push notification: {e}")
@@ -1659,6 +1669,9 @@ def backend_main(
                             ).format(cat=prey_cat_name, minutes=lock_minutes)
                             send_notification_to_all(
                                 _("Kittyhack"), prey_body, url="/", tag=f"kittyhack-prey-{_mono():.3f}", image=prey_photo_url
+                            )
+                            send_fcm_notification_to_all_sync(
+                                _("Kittyhack"), prey_body, url="/", image=prey_photo_url
                             )
                     except Exception as e:
                         logging.warning(f"[BACKEND] Failed to send prey push notification: {e}")

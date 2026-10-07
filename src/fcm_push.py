@@ -14,14 +14,17 @@ Mirrors webpush.py's posture: local, gitignored JSON files for the
 service-account key and registered tokens, generated/stored on first use,
 never committed.
 
-NOT YET WIRED IN: requires a real Firebase project + service account key
-from Sid before send_fcm_notification_to_all() can do anything (see the
-docstring on _get_access_token for exactly what's needed). Until then,
-every call here is a safe, logged no-op - this must never be allowed to
-break the existing webpush.py path, same as webpush.py's own "never let
-tracking break real playback" posture elsewhere in this codebase.
+07.10, Sid: wired into app.py (FCMMiddleware) and loop.py (every
+send_notification_to_all() call site also calls
+send_fcm_notification_to_all_sync() right next to it) now that
+fcm_service_account.json is real. Still a safe no-op wherever a piece is
+missing (no token registered yet, no service account, a single send
+failing) - this must never be allowed to break the existing webpush.py
+path, same as webpush.py's own "never let tracking break real playback"
+posture elsewhere in this codebase.
 """
 
+import asyncio
 import base64
 import json
 import logging
@@ -226,6 +229,22 @@ async def send_fcm_notification_to_all(
             tokens = [t for t in tokens if t.get("token") not in dead_tokens]
             _save_tokens(tokens)
         logging.info(f"[FCM] Pruned {len(dead_tokens)} unregistered token(s).")
+
+
+def send_fcm_notification_to_all_sync(
+    title: str, body: str, url: str = "/", image: str | None = None
+) -> None:
+    """Sync wrapper for loop.py's call sites - _send_prey_push_notification
+    (and friends) run in their own dedicated background thread (not inside
+    Shiny/Starlette's own asyncio loop), so asyncio.run() here is safe: a
+    fresh event loop local to that thread, same pattern loop.py already
+    uses nowhere else only because webpush.py's pywebpush is sync natively.
+    Never raises - a transport failure here must not take down the caller,
+    same "best-effort, fire-and-forget" posture as webpush.py's own calls."""
+    try:
+        asyncio.run(send_fcm_notification_to_all(title, body, url, image))
+    except Exception as e:
+        logging.warning(f"[FCM] send_fcm_notification_to_all_sync failed: {e}")
 
 
 class FCMMiddleware:

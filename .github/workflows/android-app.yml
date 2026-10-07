@@ -15,6 +15,9 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write  # needed for `gh release create` below
+
     # 07.10, Sid (real error from the GitHub Actions UI - the API never
     # surfaced it): "secrets" cannot be referenced directly inside an `if:`
     # expression, that's a documented GitHub Actions restriction, not
@@ -23,6 +26,14 @@ jobs:
     # first, then check THAT in `if:` instead of `secrets.*` directly.
     env:
       GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+      # 07.10, Sid: same "secrets not allowed directly in if:" restriction -
+      # exposed as env first (see generate-keystore.yml for how these 4 get
+      # created; absent/empty until Sid adds them as repo secrets, build
+      # still runs fine without them, just unsigned-consistently like before).
+      KITTYHACK_KEYSTORE_BASE64: ${{ secrets.KITTYHACK_KEYSTORE_BASE64 }}
+      KITTYHACK_KEYSTORE_PASSWORD: ${{ secrets.KITTYHACK_KEYSTORE_PASSWORD }}
+      KITTYHACK_KEY_ALIAS: ${{ secrets.KITTYHACK_KEY_ALIAS }}
+      KITTYHACK_KEY_PASSWORD: ${{ secrets.KITTYHACK_KEY_PASSWORD }}
     defaults:
       run:
         working-directory: android-app
@@ -52,6 +63,10 @@ jobs:
         if: ${{ env.GOOGLE_SERVICES_JSON != '' }}
         run: echo "$GOOGLE_SERVICES_JSON" | base64 -d > android/app/google-services.json
 
+      - name: Decode signing keystore
+        if: ${{ env.KITTYHACK_KEYSTORE_BASE64 != '' }}
+        run: echo "$KITTYHACK_KEYSTORE_BASE64" | base64 -d > android/app/kittyhack-release.jks
+
       - name: Sync Capacitor
         run: node node_modules/.bin/cap sync android
 
@@ -61,12 +76,29 @@ jobs:
         # filesystem not preserving the bit, or a git clone on a mode-
         # insensitive filesystem) is a real failure mode already hit once
         # setting this up, not a hypothetical.
+        env:
+          KITTYHACK_KEYSTORE_PATH: ${{ env.KITTYHACK_KEYSTORE_BASE64 != '' && 'kittyhack-release.jks' || '' }}
         run: |
           chmod +x ./gradlew
           ./gradlew assembleDebug
 
-      - name: Upload APK
+      - name: Upload APK (CI artifact)
         uses: actions/upload-artifact@v4
         with:
           name: kittyhack-debug-apk
           path: android-app/android/app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Publish APK as a numbered GitHub release
+        # 07.10, Sid ("chaque APK buildé sauvegardé... garder les anciennes
+        # versions"): a public release asset is fetchable with a plain
+        # unauthenticated curl (unlike a CI artifact, which needs an API
+        # token) - that's what lets the backup-to-OLDMEDIA step run from
+        # outside this workflow without needing any new credential. One
+        # release per build number, never overwritten.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "android-build-${{ github.run_number }}" \
+            "android/app/build/outputs/apk/debug/app-debug.apk#kittyhack-build-${{ github.run_number }}.apk" \
+            --title "Kittyhack Android build ${{ github.run_number }}" \
+            --notes "Automated build from commit ${{ github.sha }}."

@@ -16,10 +16,37 @@ android {
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    // 07.10, Sid ("integrer le hash pour que je puisse reinstaller par-dessus
+    // et que ca garde la config"): a GitHub Actions runner is a fresh
+    // environment every run - Android's auto-generated ~/.android/debug.keystore
+    // (what "debug" builds sign with by default) would be DIFFERENT every
+    // single build there, which is exactly what breaks reinstall-over (Android
+    // refuses, or silently wants a full uninstall first, when the signature
+    // doesn't match). This signingConfig, backed by a keystore generated once
+    // (.github/workflows/generate-keystore.yml) and stored as a GitHub secret,
+    // keeps every build - debug or release - signed identically.
+    signingConfigs {
+        release {
+            if (System.getenv("KITTYHACK_KEYSTORE_PATH")) {
+                storeFile file(System.getenv("KITTYHACK_KEYSTORE_PATH"))
+                storePassword System.getenv("KITTYHACK_KEYSTORE_PASSWORD")
+                keyAlias System.getenv("KITTYHACK_KEY_ALIAS")
+                keyPassword System.getenv("KITTYHACK_KEY_PASSWORD")
+            }
+        }
+    }
     buildTypes {
+        debug {
+            if (System.getenv("KITTYHACK_KEYSTORE_PATH")) {
+                signingConfig signingConfigs.release
+            }
+        }
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            if (System.getenv("KITTYHACK_KEYSTORE_PATH")) {
+                signingConfig signingConfigs.release
+            }
         }
     }
 }
