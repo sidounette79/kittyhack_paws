@@ -239,29 +239,82 @@ def register_live_view(input, output, session, ctx: SessionContext):
     @output
     @render.ui
     def ui_last_events():
+        # Just a teaser + link now - the full expandable list (with the
+        # per-event timeline arrow) lives on the Photos tab's "Group pictures
+        # to events" view, which this button jumps straight into.
         return ui.layout_column_wrap(
             ui.div(
                 ui.card(
-                    ui.card_header(ui.h5(_("Last events"))),
-                    ui.output_ui("ui_last_events_table"),
+                    ui.card_header(
+                        ui.input_action_button(
+                            "btn_goto_events",
+                            ui.div(
+                                {"class": "d-flex justify-content-between align-items-center w-100"},
+                                ui.h5(_("Last events"), style_="margin-bottom:0;"),
+                                icon_svg("chevron-right"),
+                            ),
+                            class_="btn-link p-0 w-100 text-start border-0",
+                        ),
+                    ),
+                    ui.output_ui("ui_last_events_teaser"),
                     full_screen=False,
                     class_="generic-container",
                     style_="margin-bottom: 40px;",
-                    min_height="150px",
                 ),
                 width="400px",
             )
         )
 
-    @render.text
+    @render.ui
     @reactive.event(reload_trigger_photos, last_events_ready, ignore_none=True)
-    def ui_last_events_table():
-        # Show a loading spinner until the delayed flag is set
+    def ui_last_events_teaser():
         if not last_events_ready.get():
             return ui.HTML(
                 '<div class="spinner-container"><div class="spinner"></div></div>'
             )
-        return get_events_table_html(block_count=25)
+        return get_events_table_html(block_count=1)
+
+    @reactive.Effect
+    @reactive.event(input.btn_goto_events)
+    def on_goto_events():
+        CONFIG["GROUP_PICTURES_TO_EVENTS"] = True
+        update_single_config_parameter("GROUP_PICTURES_TO_EVENTS")
+        session.send_input_message("button_events_view", {"value": True})
+        ui.update_navs("main_nav", selected="pictures")
+
+    @output
+    @render.ui
+    def ui_outdoor_cameras():
+        # Static markup - watchdog-cams-client.js refreshes the <img> src
+        # client-side every few seconds, no server re-render needed.
+        cams = [
+            ("chatiere", _("Flap camera")),
+            ("terrasse", _("Terrace")),
+            ("jardin_japonais", _("Japanese garden")),
+            ("entree", _("Entrance")),
+        ]
+        cards = [
+            ui.div(
+                {"class": "kh-wdcam-card"},
+                ui.tags.img({"id": f"wd-cam-{name}", "class": "kh-wdcam-img"}, alt=label),
+                ui.div({"class": "kh-wdcam-label"}, label),
+            )
+            for name, label in cams
+        ]
+        # 09.09, Sid: plain div, not ui.card() - bslib's card pulls in its
+        # whole fill/flex machinery (card-body becomes an internal flex
+        # item competing for the card's own height), which was collapsing
+        # this block on desktop even with fill=False. A hand-styled div
+        # has none of that: its height is just its content, always.
+        return ui.div(
+            ui.h5(_("Outdoor cameras"), class_="kh-wdcam-title"),
+            ui.div({"class": "kh-wdcam-grid"}, *cards),
+            ui.div(
+                {"class": "kh-wdcam-hint"},
+                _("Preview only, refreshed every few seconds - not a live video feed."),
+            ),
+            class_="generic-container kh-wdcam-container",
+        )
 
     @output
     @render.ui
@@ -284,6 +337,7 @@ def register_live_view(input, output, session, ctx: SessionContext):
         input.button_reload,
         input.date_selector,
         input.button_cat_only,
+        input.selCatFilter,
         input.button_mouse_only,
         reload_trigger_photos,
         ignore_none=True,
@@ -314,6 +368,7 @@ def register_live_view(input, output, session, ctx: SessionContext):
             input.button_cat_only(),
             input.button_mouse_only(),
             CONFIG["MOUSE_THRESHOLD"],
+            rfid_filter=str(input.selCatFilter() or ""),
         )
 
     def get_events_table_html(
@@ -323,6 +378,7 @@ def register_live_view(input, output, session, ctx: SessionContext):
         cats_only=False,
         mouse_only=False,
         mouse_probability=0.0,
+        rfid_filter="",
     ):
         try:
             logging.info(
@@ -336,6 +392,7 @@ def register_live_view(input, output, session, ctx: SessionContext):
                 cats_only,
                 mouse_only,
                 mouse_probability,
+                rfid_filter=rfid_filter,
             )
 
             if df_events.empty:
@@ -346,8 +403,18 @@ def register_live_view(input, output, session, ctx: SessionContext):
                 )
 
                 # Convert UTC timestamps to local timezone
+            # 04.10, Sid ("on a casse un truc" - confirmee avant le fix watchdog,
+            # donc sans rapport): `events.created_at` melange deux formats
+            # ('...20:45:15' sans microsecondes/offset sur certaines lignes,
+            # '...19:58:49.1932+00:00' sur d'autres - meme cause racine que les
+            # bugs deja corriges ce soir ailleurs). pd.to_datetime() sans
+            # format='mixed' essaie d'inferer UN SEUL format pour toute la
+            # colonne et plante des qu'une ligne no-decimal apparait dans la
+            # plage demandee. format='mixed' parse chaque valeur independamment;
+            # utc=True traite les valeurs sans offset comme deja-UTC (correct
+            # ici, confirme a plusieurs reprises ce soir).
             df_events["created_at"] = pd.to_datetime(
-                df_events["created_at"]
+                df_events["created_at"], format="mixed", utc=True
             ).dt.tz_convert(CONFIG["TIMEZONE"])
             df_events = df_events.sort_values(by="created_at", ascending=False)
             df_events["date"] = df_events["created_at"].dt.date

@@ -16,7 +16,9 @@ from src.baseconfig import CONFIG, set_language
 from src.helper import DateTimeUtil
 from src.system import LabelStudioInstall
 from src.database import (
+    CatsRepo,
     DatabaseCore,
+    DetectionFeedbackRepo,
     EventsRepo,
     ORIGINAL_IMAGE_DIR,
     ReturnDataPhotosDB,
@@ -386,33 +388,61 @@ def show_event_server(input, output, session, block_id: int):
 
             return f"{base}.{frac[:1]}"
 
+        # 09.09, Sid: "je valide ou invalide les détections" - batched lookup
+        # of any existing human corrections for this block's photos, so the
+        # overlay can mark already-reviewed detections instead of re-asking.
+        feedback_by_photo = DetectionFeedbackRepo.get_for_photos(
+            CONFIG["KITTYHACK_DATABASE_PATH"], list(pictures)
+        )
+
         frames_json = []
         for i in range(len(pictures)):
+            pid_i = pictures[i]
+            photo_feedback = feedback_by_photo.get(int(pid_i), {})
             frame_obj = {
-                "pid": pictures[i],
+                "pid": pid_i,
                 "ts": _format_event_modal_ts(
                     timestamps[i] if i < len(timestamps) else ""
                 ),
                 "objects": [],
             }
             if i < len(event_datas):
-                for dobj in event_datas[i]:
+                for obj_idx, dobj in enumerate(event_datas[i]):
                     obj_name = (dobj.object_name or "").strip()
                     if obj_name.lower() == "false-accept":
                         continue
-                    frame_obj["objects"].append(
-                        {
-                            "x": round(dobj.x, 2),
-                            "y": round(dobj.y, 2),
-                            "w": round(dobj.width, 2),
-                            "h": round(dobj.height, 2),
-                            "name": obj_name,
-                            "prob": round(dobj.probability, 1)
-                            if dobj.probability
-                            else 0,
-                        }
-                    )
+                    obj_json = {
+                        "x": round(dobj.x, 2),
+                        "y": round(dobj.y, 2),
+                        "w": round(dobj.width, 2),
+                        "h": round(dobj.height, 2),
+                        "name": obj_name,
+                        "prob": round(dobj.probability, 1)
+                        if dobj.probability
+                        else 0,
+                        "idx": obj_idx,
+                    }
+                    fb = photo_feedback.get(obj_idx)
+                    if fb is not None:
+                        obj_json["reviewed"] = True
+                        obj_json["reviewedAs"] = (
+                            fb.get("original_name")
+                            if fb.get("confirmed")
+                            else fb.get("corrected_name")
+                        )
+                    frame_obj["objects"].append(obj_json)
             frames_json.append(frame_obj)
+
+        # Correction choices offered in the popover: her registered cats +
+        # the fixed "Prey" class + a "not a real detection" option. Sourced
+        # from the cat registry (not the currently-loaded model's labels.txt)
+        # since that's the stable set Label Studio's project is labeled
+        # against, regardless of which experimental model is active.
+        correction_labels = CatsRepo.get_cat_names_list(
+            CONFIG["KITTYHACK_DATABASE_PATH"]
+        ) + ["Prey"]
+
+        ns_correction = session.ns("client_correction")
 
         player_data = json.dumps(
             {
@@ -425,6 +455,13 @@ def show_event_server(input, output, session, block_id: int):
                 "fps": float(event_effective_fps[0]) if event_effective_fps[0] else 4.0,
                 "fallbackMode": fallback_mode[0],
                 "blockId": block_id,
+                "correctionLabels": correction_labels,
+                "nsCorrection": ns_correction,
+                "i18n": {
+                    "confirm": _("Correct"),
+                    "falsePositive": _("Not a real detection"),
+                    "reviewed": _("Reviewed"),
+                },
             }
         )
 
@@ -717,6 +754,70 @@ def show_event_server(input, output, session, block_id: int):
             with open(out_path, "w", encoding="utf-8") as f:
                 f.write("Single image download failed.\n")
             return out_path
+
+    # ---- Detection feedback (validate/correct) ----
+    # 09.09, Sid: "je valide ou invalide les détections... typiquement dès
+    # qu'il voit un chat dans le champ, il dit que c'est Patoune. valider
+    # aussi quand c'est une vraie proie d'une fausse proie" - click a
+    # detected-object label in the overlay (event-modal.js) to confirm it or
+    # correct it to another label; recorded per (photo_id, object_index) so
+    # re-opening the same event later shows what was already reviewed.
+    @reactive.effect
+    @reactive.event(input.client_correction)
+    def handle_detection_correction():
+        try:
+            payload = json.loads(input.client_correction() or "{}")
+            pid = int(payload.get("pid"))
+            obj_idx = int(payload.get("idx"))
+            action = str(payload.get("action") or "")
+            corrected_name = payload.get("correctedName")
+
+            if pid not in photo_ids:
+                raise ValueError(f"Unknown photo id {pid} in this event")
+            vis_idx = photo_ids.index(pid)
+            objs = event_datas[vis_idx] if vis_idx < len(event_datas) else []
+            if obj_idx < 0 or obj_idx >= len(objs):
+                raise ValueError(f"Object index {obj_idx} out of range for photo {pid}")
+            dobj = objs[obj_idx]
+
+            if action == "confirm":
+                confirmed, final_corrected_name = True, None
+            elif action == "false_positive":
+                confirmed, final_corrected_name = False, "none"
+            elif action == "correct":
+                if not corrected_name:
+                    raise ValueError("Missing correctedName for a 'correct' action")
+                confirmed, final_corrected_name = False, str(corrected_name)
+            else:
+                raise ValueError(f"Unknown correction action '{action}'")
+
+            result = DetectionFeedbackRepo.upsert(
+                CONFIG["KITTYHACK_DATABASE_PATH"],
+                photo_id=pid,
+                object_index=obj_idx,
+                original_name=dobj.object_name,
+                original_probability=dobj.probability or 0,
+                x=dobj.x, y=dobj.y, width=dobj.width, height=dobj.height,
+                corrected_name=final_corrected_name,
+                confirmed=confirmed,
+            )
+            if not result.success:
+                raise RuntimeError(result.message)
+
+            if confirmed:
+                msg = _("Confirmed: {name}").format(name=dobj.object_name)
+            elif final_corrected_name == "none":
+                msg = _("Marked as a false detection ({name})").format(name=dobj.object_name)
+            else:
+                msg = _("Corrected: {old} → {new}").format(
+                    old=dobj.object_name, new=final_corrected_name
+                )
+            ui.notification_show(msg, type="message", duration=3)
+        except Exception as e:
+            logging.warning(f"[DETECTION_FEEDBACK] Failed to record correction: {e}")
+            ui.notification_show(
+                _("Failed to record the correction."), type="error", duration=5
+            )
 
     # ---- Send to Label Studio ----
     @reactive.effect

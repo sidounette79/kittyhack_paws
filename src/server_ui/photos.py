@@ -1,8 +1,11 @@
 """Pictures tab handlers."""
 
+import html as html_module
+import json
 import os
 import pandas as pd
 from datetime import datetime, timedelta
+from types import SimpleNamespace
 from shiny import render, ui, reactive
 import logging
 from zoneinfo import ZoneInfo
@@ -15,6 +18,7 @@ from src.system import LabelStudioInstall
 from src.database import (
     CatsRepo,
     DatabaseCore,
+    DetectionFeedbackRepo,
     EventsRepo,
     ReturnDataPhotosDB,
 )
@@ -35,6 +39,25 @@ else:
 
 def register_photos(input, output, session, ctx: SessionContext):
     """Register Pictures tab UI and handlers."""
+
+    def _cat_filter_choices() -> dict:
+        """{"": "All cats", rfid: name, ...} for the photos-page cat filter dropdown."""
+        choices = {"": _("All cats")}
+        try:
+            for rfid, name in CatsRepo.get_cat_name_rfid_dict(
+                CONFIG["KITTYHACK_DATABASE_PATH"]
+            ).items():
+                choices[rfid] = name
+        except Exception:
+            pass
+        return choices
+
+    def _selected_cat_rfid_filter() -> str:
+        """04.10, Sid ("filtre par nom de chat"): selected cat's rfid, or "" for no filter."""
+        try:
+            return str(input.selCatFilter() or "")
+        except Exception:
+            return ""
 
     @output
     @render.ui
@@ -135,6 +158,21 @@ def register_photos(input, output, session, ctx: SessionContext):
                 ),
                 class_="d-flex justify-content-center align-items-center",  # Centers elements horizontally
             ),
+            ui.br(),
+            ui.row(
+                ui.div(
+                    ui.input_select(
+                        "selCatFilter",
+                        _("Filter by cat"),
+                        _cat_filter_choices(),
+                        selected="",
+                        width="100%",
+                    ),
+                    class_="col-auto px-1",
+                    style_="min-width: 220px;",
+                ),
+                class_="d-flex justify-content-center align-items-center",
+            ),
             class_="container",  # Adds centering within a smaller container
         )
         return uiDateBar
@@ -222,6 +260,7 @@ def register_photos(input, output, session, ctx: SessionContext):
             input.button_cat_only(),
             input.button_mouse_only(),
             CONFIG["MOUSE_THRESHOLD"],
+            rfid_filter=_selected_cat_rfid_filter(),
         )
         per_page = max(1, int(CONFIG["ELEMENTS_PER_PAGE"]))
         total_pages = max(1, int(math.ceil(float(total_count) / float(per_page))))
@@ -232,6 +271,7 @@ def register_photos(input, output, session, ctx: SessionContext):
         input.button_reload,
         input.date_selector,
         input.button_cat_only,
+        input.selCatFilter,
         input.button_mouse_only,
         reload_trigger_photos,
         ignore_none=True,
@@ -294,22 +334,10 @@ def register_photos(input, output, session, ctx: SessionContext):
             return ui.div(
                 ui.output_ui("ui_photos_cards_nav"),
                 ui.output_ui("ui_photos_cards"),
+                ui.output_ui("ui_photos_cards_nav_bottom"),
             )
 
-    @output
-    @render.ui
-    @reactive.event(
-        input.button_reload,
-        input.date_selector,
-        input.button_cat_only,
-        input.button_mouse_only,
-        reload_trigger_photos,
-        ignore_none=True,
-    )
-    def ui_photos_cards_nav():
-        if input.button_events_view():
-            return ui.div()
-
+    def _photos_nav_state():
         date_start = DateTimeUtil.format_date_minmax(input.date_selector(), True)
         date_end = DateTimeUtil.format_date_minmax(input.date_selector(), False)
         timezone = ZoneInfo(CONFIG["TIMEZONE"])
@@ -333,6 +361,7 @@ def register_photos(input, output, session, ctx: SessionContext):
             input.button_cat_only(),
             input.button_mouse_only(),
             CONFIG["MOUSE_THRESHOLD"],
+            rfid_filter=_selected_cat_rfid_filter(),
         )
 
         per_page = max(1, int(CONFIG["ELEMENTS_PER_PAGE"]))
@@ -351,6 +380,25 @@ def register_photos(input, output, session, ctx: SessionContext):
             )
         except Exception:
             pass
+
+        return current_page, total_pages, total_count
+
+    @output
+    @render.ui
+    @reactive.event(
+        input.button_reload,
+        input.date_selector,
+        input.button_cat_only,
+        input.selCatFilter,
+        input.button_mouse_only,
+        reload_trigger_photos,
+        ignore_none=True,
+    )
+    def ui_photos_cards_nav():
+        if input.button_events_view():
+            return ui.div()
+
+        current_page, total_pages, total_count = _photos_nav_state()
 
         return ui.div(
             ui.div(
@@ -385,8 +433,115 @@ def register_photos(input, output, session, ctx: SessionContext):
             class_="container",
         )
 
+    # 04.10, Sid ("il faut le paginateur aussi en bas, sinon je dois tout
+    # remonter"): a second, display-only pager under the cards. Deliberately
+    # NOT a second editable input_numeric mirroring "photos_page" - that
+    # risked fighting with reset_photos_page_on_filter_change (below) and the
+    # top nav's own bounds-sync over who owns the input's value each render.
+    # Just prev/next buttons (own ids) driving the same "photos_page" input
+    # the top nav already owns, plus plain text for page/count.
+    @output
+    @render.ui
+    @reactive.event(
+        input.button_reload,
+        input.date_selector,
+        input.button_cat_only,
+        input.selCatFilter,
+        input.button_mouse_only,
+        reload_trigger_photos,
+        input.photos_page,
+        ignore_none=True,
+    )
+    def ui_photos_cards_nav_bottom():
+        if input.button_events_view():
+            return ui.div()
+
+        total_count, total_pages = _photos_total_pages()
+        try:
+            current_page = max(1, min(total_pages, int(input.photos_page() or 1)))
+        except Exception:
+            current_page = 1
+
+        return ui.div(
+            ui.div(
+                ui.input_action_button(
+                    "photos_prev_page_bottom",
+                    "",
+                    icon=icon_svg("angle-left"),
+                    class_="btn-page-control",
+                ),
+                ui.tags.span(f"{current_page} / {total_pages}", class_="photos-page-total"),
+                ui.input_action_button(
+                    "photos_next_page_bottom",
+                    "",
+                    icon=icon_svg("angle-right"),
+                    class_="btn-page-control",
+                ),
+                ui.tags.span(
+                    f"{total_count} " + _("pictures"),
+                    class_="photos-count",
+                ),
+                class_="photos-pager",
+            ),
+            class_="container",
+        )
+
+    @reactive.effect
+    @reactive.event(input.photos_prev_page_bottom, ignore_none=True)
+    def _on_photos_prev_page_bottom():
+        __count, total_pages = _photos_total_pages()
+        current = int(input.photos_page() or 1)
+        new_val = max(1, min(total_pages, current - 1))
+        session.send_input_message(
+            "photos_page", {"value": new_val, "min": 1, "max": total_pages}
+        )
+
+    @reactive.effect
+    @reactive.event(input.photos_next_page_bottom, ignore_none=True)
+    def _on_photos_next_page_bottom():
+        __count, total_pages = _photos_total_pages()
+        current = int(input.photos_page() or 1)
+        new_val = max(1, min(total_pages, current + 1))
+        session.send_input_message(
+            "photos_page", {"value": new_val, "min": 1, "max": total_pages}
+        )
+
+    def _boxes_overlap(a, b, pad=2.0):
+        """AABB intersection test on x/y/width/height percentages, with a
+        small padding tolerance since labels sit just inside each box's
+        corner - two boxes close enough for their labels to visually touch
+        even without the boxes themselves strictly overlapping."""
+        ax1, ay1 = a.x - pad, a.y - pad
+        ax2, ay2 = a.x + a.width + pad, a.y + a.height + pad
+        bx1, by1 = b.x - pad, b.y - pad
+        bx2, by2 = b.x + b.width + pad, b.y + b.height + pad
+        return ax1 < bx2 and ax2 > bx1 and ay1 < by2 and ay2 > by1
+
+    def _assign_label_slots(detected_objects):
+        """05.10, Sid ("les étiquettes se mettent toujours les unes sur les
+        autres"): the old top/bottom-by-index alternation didn't actually
+        look at whether boxes overlap, so two detections with the same
+        index parity (or 3+ overlapping at once) could still collide.
+        Greedy graph coloring instead: walk objects in order, give each one
+        the lowest-numbered slot not already used by an object it actually
+        overlaps - overlapping boxes are then guaranteed different slots,
+        however many there are."""
+        slots = []
+        for i, obj in enumerate(detected_objects):
+            used = {
+                slots[j]
+                for j in range(i)
+                if _boxes_overlap(obj, detected_objects[j])
+            }
+            slot = 0
+            while slot in used:
+                slot += 1
+            slots.append(slot)
+        return slots
+
     def _build_photo_card(
-        data_row, cat_name_dict, show_overlay: bool, extra_class: str = ""
+        data_row, cat_name_dict, show_overlay: bool, extra_class: str = "",
+        photo_feedback: dict | None = None,
     ):
         """Build a single photo card UI element."""
         mouse_probability = data_row["mouse_probability"]
@@ -396,6 +551,7 @@ def register_photos(input, output, session, ctx: SessionContext):
             detected_objects = EventsRepo.read_event_from_json(event_text)
         else:
             detected_objects = []
+        photo_feedback = photo_feedback or {}
 
         try:
             photo_timestamp = pd.to_datetime(
@@ -424,14 +580,88 @@ def register_photos(input, output, session, ctx: SessionContext):
         img_html = f'''<div class="kh-photo-thumb" data-photo-id="{pid}" data-orig-src="{orig_src}">
                 <img src="{thumb_src}" loading="lazy" decoding="async" />'''
 
-        if show_overlay and detected_objects:
-            for detected_object in detected_objects:
-                label_pos = "bottom: -26px" if detected_object.y < 16 else "top: -26px"
+        # 05.10, Sid ("je puisse tagger directement depuis ces photos"): a
+        # manually-drawn box (no matching entry in detected_objects, just a
+        # detection_feedback row with an object_index beyond the model's own
+        # list - see handle_photos_detection_add) needs to render too, even
+        # on a photo the model found nothing on at all.
+        extra_fb_items = sorted(
+            (idx, fb) for idx, fb in photo_feedback.items() if idx >= len(detected_objects)
+        )
+        if show_overlay and (detected_objects or extra_fb_items):
+            # 09.09, Sid: same validate/correct affordance as the event
+            # modal (see event_modal.py's startCrossfade... no, its
+            # handle_detection_correction / event-modal.js) - a real
+            # detection label here is clickable to confirm/correct/mark as
+            # false, keyed by the same (photo_id, object_index) pair
+            # DetectionFeedbackRepo uses everywhere. A plain <button> (not a
+            # div) so app.js's existing photo-lightbox click handler already
+            # ignores it (it excludes any click landing on a button/a/
+            # .kh-photo-actions) - no extra wiring needed there.
+            extra_boxes = [
+                SimpleNamespace(
+                    x=fb.get("x") or 0, y=fb.get("y") or 0,
+                    width=fb.get("width") or 0, height=fb.get("height") or 0,
+                )
+                for __, fb in extra_fb_items
+            ]
+            label_slots = _assign_label_slots(list(detected_objects) + extra_boxes)
+            # Slot -> (side, px offset): alternate top/bottom first, then
+            # step further out for a 3rd/4th truly-overlapping detection.
+            slot_positions = [
+                ("top", 4), ("bottom", 4), ("top", 26), ("bottom", 26),
+                ("top", 48), ("bottom", 48),
+            ]
+            for obj_idx, detected_object in enumerate(detected_objects):
+                obj_name = (detected_object.object_name or "").strip()
+                if obj_name.lower() == "false-accept":
+                    continue
+                # 04.10, Sid: label INSIDE the box instead of outside it - offsetting from
+                # the box's own bottom edge broke for a tall box already spanning most of
+                # the frame (see event-modal.js for the full reasoning). 05.10: slot comes
+                # from real overlap detection now (_assign_label_slots), not just index
+                # parity, so 2+ boxes that actually collide always land on different spots.
+                near_top = detected_object.y < 8
+                side, px = slot_positions[label_slots[obj_idx] % len(slot_positions)]
+                if near_top and side == "top":
+                    side = "bottom"
+                label_pos = f"{side}: {px}px"
+                fb = photo_feedback.get(obj_idx)
+                label_text = f"{html_module.escape(obj_name)} ({detected_object.probability:.0f}%)"
+                if fb is not None:
+                    reviewed_as = fb.get("original_name") if fb.get("confirmed") else fb.get("corrected_name")
+                    if reviewed_as is None:
+                        label_text = f"✗ {label_text}"
+                    elif reviewed_as != obj_name:
+                        label_text = f"✓ {label_text} → {html_module.escape(str(reviewed_as))}"
+                    else:
+                        label_text = f"✓ {label_text}"
                 img_html += f'''
                 <div class="kh-detect-box" style="left:{detected_object.x}%; top:{detected_object.y}%; width:{detected_object.width}%; height:{detected_object.height}%;">
-                    <div class="kh-detect-label" style="{label_pos};">
-                        {detected_object.object_name} ({detected_object.probability:.0f}%)
-                    </div>
+                    <button type="button" class="kh-detect-label kh-detect-label-clickable" style="{label_pos};"
+                        data-pid="{pid}" data-obj-idx="{obj_idx}" data-obj-name="{html_module.escape(obj_name)}">
+                        {label_text}
+                    </button>
+                </div>'''
+
+            # Manually-added boxes: not yet editable/removable by clicking
+            # (handle_photos_detection_correction only knows the model's own
+            # detected_objects indices), so rendered as plain text, not a
+            # button - styled distinctly (green) so it's clear it's a human
+            # addition, not a model guess.
+            for slot_i, (obj_idx, fb) in enumerate(extra_fb_items):
+                box = extra_boxes[slot_i]
+                near_top = box.y < 8
+                side, px = slot_positions[
+                    label_slots[len(detected_objects) + slot_i] % len(slot_positions)
+                ]
+                if near_top and side == "top":
+                    side = "bottom"
+                label_pos = f"{side}: {px}px"
+                added_name = html_module.escape(str(fb.get("corrected_name") or "?"))
+                img_html += f'''
+                <div class="kh-detect-box kh-detect-box-manual" style="left:{box.x}%; top:{box.y}%; width:{box.width}%; height:{box.height}%;">
+                    <span class="kh-detect-label" style="{label_pos};">✓ {added_name} ({_("added")})</span>
                 </div>'''
 
         img_html += "</div>"
@@ -486,6 +716,22 @@ def register_photos(input, output, session, ctx: SessionContext):
                             options={"trigger": "hover"},
                         ),
                         ui.tooltip(
+                            ui.tags.button(
+                                ui.HTML(
+                                    str(
+                                        icon_svg(
+                                            "vector-square", margin_left="0", margin_right="0"
+                                        )
+                                    )
+                                ),
+                                type="button",
+                                class_="btn btn-icon-square btn-outline-success kh-photo-action-btn kh-photo-add-detection-btn",
+                                **{"data-pid": str(pid)},
+                            ),
+                            _("Tag a missed cat/prey directly on this picture"),
+                            options={"trigger": "hover"},
+                        ),
+                        ui.tooltip(
                             ui.input_action_button(
                                 id=f"photo_send_ls_{pid}",
                                 label="",
@@ -528,6 +774,7 @@ def register_photos(input, output, session, ctx: SessionContext):
         input.button_reload,
         input.date_selector,
         input.button_cat_only,
+        input.selCatFilter,
         input.button_mouse_only,
         reload_trigger_photos,
         ignore_none=True,
@@ -545,6 +792,7 @@ def register_photos(input, output, session, ctx: SessionContext):
             input.button_cat_only(),
             input.button_mouse_only(),
             CONFIG["MOUSE_THRESHOLD"],
+            rfid_filter=_selected_cat_rfid_filter(),
         )
         per_page = max(1, int(CONFIG["ELEMENTS_PER_PAGE"]))
         total_pages = max(1, int(math.ceil(float(total_count) / float(per_page))))
@@ -568,6 +816,7 @@ def register_photos(input, output, session, ctx: SessionContext):
             CONFIG["MOUSE_THRESHOLD"],
             page_index,
             per_page,
+            rfid_filter=_selected_cat_rfid_filter(),
         )
 
         if df_photos.empty:
@@ -585,12 +834,49 @@ def register_photos(input, output, session, ctx: SessionContext):
         )
         show_overlay = bool(input.button_detection_overlay())
 
+        # 09.09, Sid: batched lookup of any existing human corrections for
+        # this page's photos, same reasoning as the event modal's own
+        # batched fetch - avoids one query per card.
+        feedback_by_photo = (
+            DetectionFeedbackRepo.get_for_photos(
+                CONFIG["KITTYHACK_DATABASE_PATH"], df_photos["id"].tolist()
+            )
+            if show_overlay
+            else {}
+        )
+
         ui_cards = [
-            _build_photo_card(row, cat_name_dict, show_overlay)
+            _build_photo_card(
+                row, cat_name_dict, show_overlay,
+                photo_feedback=feedback_by_photo.get(int(row["id"])),
+            )
             for _, row in df_photos.iterrows()
         ]
 
+        # Same correction-choice set as the event modal (registered cats +
+        # "Prey") - see event_modal.py's own correction_labels for why this
+        # is sourced from the cat registry rather than the active model's
+        # labels.txt.
+        correction_labels = CatsRepo.get_cat_names_list(
+            CONFIG["KITTYHACK_DATABASE_PATH"]
+        ) + ["Prey"]
+
         return ui.div(
+            ui.tags.script(
+                ui.HTML(
+                    json.dumps(
+                        {
+                            "correctionLabels": correction_labels,
+                            "i18n": {
+                                "confirm": _("Correct"),
+                                "falsePositive": _("Not a real detection"),
+                            },
+                        }
+                    )
+                ),
+                type="application/json",
+                id="kh_photos_correction_data",
+            ),
             ui.tags.div(
                 *ui_cards,
                 class_="kh-photo-grid",
@@ -601,6 +887,131 @@ def register_photos(input, output, session, ctx: SessionContext):
 
         # Per-photo action handlers: delete, send to Label Studio
         # These are dynamic based on photo IDs currently on the page.
+
+    # ---- Detection feedback (validate/correct) - ungrouped Photos grid ----
+    # 09.09, Sid: same validate/correct feature as the event modal, now also
+    # reachable straight from the ungrouped Photos view (not just from
+    # inside an event's own player) - both write to the exact same
+    # detection_feedback table, keyed by (photo_id, object_index), so a
+    # correction made from either place shows up in the other.
+    @reactive.effect
+    @reactive.event(input.photos_client_correction)
+    def handle_photos_detection_correction():
+        try:
+            payload = json.loads(input.photos_client_correction() or "{}")
+            pid = int(payload.get("pid"))
+            obj_idx = int(payload.get("idx"))
+            action = str(payload.get("action") or "")
+            corrected_name = payload.get("correctedName")
+
+            df = DatabaseCore.read_df_from_database(
+                CONFIG["KITTYHACK_DATABASE_PATH"],
+                f"SELECT event_text FROM events WHERE id = {pid}",
+            )
+            if df.empty:
+                raise ValueError(f"Unknown photo id {pid}")
+            event_text = df.iloc[0]["event_text"]
+            objs = EventsRepo.read_event_from_json(event_text) if event_text else []
+            if obj_idx < 0 or obj_idx >= len(objs):
+                raise ValueError(f"Object index {obj_idx} out of range for photo {pid}")
+            dobj = objs[obj_idx]
+
+            if action == "confirm":
+                confirmed, final_corrected_name = True, None
+            elif action == "false_positive":
+                confirmed, final_corrected_name = False, "none"
+            elif action == "correct":
+                if not corrected_name:
+                    raise ValueError("Missing correctedName for a 'correct' action")
+                confirmed, final_corrected_name = False, str(corrected_name)
+            else:
+                raise ValueError(f"Unknown correction action '{action}'")
+
+            result = DetectionFeedbackRepo.upsert(
+                CONFIG["KITTYHACK_DATABASE_PATH"],
+                photo_id=pid,
+                object_index=obj_idx,
+                original_name=dobj.object_name,
+                original_probability=dobj.probability or 0,
+                x=dobj.x, y=dobj.y, width=dobj.width, height=dobj.height,
+                corrected_name=final_corrected_name,
+                confirmed=confirmed,
+            )
+            if not result.success:
+                raise RuntimeError(result.message)
+
+            if confirmed:
+                msg = _("Confirmed: {name}").format(name=dobj.object_name)
+            elif final_corrected_name == "none":
+                msg = _("Marked as a false detection ({name})").format(name=dobj.object_name)
+            else:
+                msg = _("Corrected: {old} → {new}").format(
+                    old=dobj.object_name, new=final_corrected_name
+                )
+            ui.notification_show(msg, type="message", duration=3)
+        except Exception as e:
+            logging.warning(f"[DETECTION_FEEDBACK] Failed to record correction (photos grid): {e}")
+            ui.notification_show(
+                _("Failed to record the correction."), type="error", duration=5
+            )
+
+    # 05.10, Sid ("je puisse tagger directement depuis ces photos"): a box
+    # the model missed entirely, drawn by hand (photos-correction-client.js's
+    # draw mode) rather than correcting an existing detection - same table,
+    # but with no "original" detection behind it (original_name=None,
+    # original_probability=0) and a fresh object_index that can't collide
+    # with the photo's real detections or any earlier manual addition.
+    @reactive.effect
+    @reactive.event(input.photos_client_add_detection)
+    def handle_photos_detection_add():
+        try:
+            payload = json.loads(input.photos_client_add_detection() or "{}")
+            pid = int(payload.get("pid"))
+            x = float(payload.get("x"))
+            y = float(payload.get("y"))
+            width = float(payload.get("width"))
+            height = float(payload.get("height"))
+            label = str(payload.get("label") or "").strip()
+            if not label:
+                raise ValueError("Missing label for a manually added detection")
+
+            df = DatabaseCore.read_df_from_database(
+                CONFIG["KITTYHACK_DATABASE_PATH"],
+                f"SELECT event_text FROM events WHERE id = {pid}",
+            )
+            if df.empty:
+                raise ValueError(f"Unknown photo id {pid}")
+            event_text = df.iloc[0]["event_text"]
+            objs = EventsRepo.read_event_from_json(event_text) if event_text else []
+
+            existing_feedback = DetectionFeedbackRepo.get_for_photo(
+                CONFIG["KITTYHACK_DATABASE_PATH"], pid
+            )
+            new_idx = len(objs)
+            while new_idx in existing_feedback:
+                new_idx += 1
+
+            result = DetectionFeedbackRepo.upsert(
+                CONFIG["KITTYHACK_DATABASE_PATH"],
+                photo_id=pid,
+                object_index=new_idx,
+                original_name=None,
+                original_probability=0,
+                x=x, y=y, width=width, height=height,
+                corrected_name=label,
+                confirmed=False,
+            )
+            if not result.success:
+                raise RuntimeError(result.message)
+
+            ui.notification_show(
+                _("Added: {name}").format(name=label), type="message", duration=3
+            )
+        except Exception as e:
+            logging.warning(f"[DETECTION_FEEDBACK] Failed to record a manually added detection: {e}")
+            ui.notification_show(
+                _("Failed to add the detection."), type="error", duration=5
+            )
 
     _photo_action_registered_ids: set = set()
 
@@ -622,6 +1033,7 @@ def register_photos(input, output, session, ctx: SessionContext):
                 input.button_cat_only(),
                 input.button_mouse_only(),
                 CONFIG["MOUSE_THRESHOLD"],
+                rfid_filter=_selected_cat_rfid_filter(),
             )
             per_page = max(1, int(CONFIG["ELEMENTS_PER_PAGE"]))
             total_pages = max(1, int(math.ceil(float(total_count) / float(per_page))))
@@ -641,6 +1053,7 @@ def register_photos(input, output, session, ctx: SessionContext):
                 CONFIG["MOUSE_THRESHOLD"],
                 page_index,
                 per_page,
+                rfid_filter=_selected_cat_rfid_filter(),
             )
         except Exception:
             df_photos = pd.DataFrame()
@@ -681,6 +1094,7 @@ def register_photos(input, output, session, ctx: SessionContext):
                         input.button_cat_only(),
                         input.button_mouse_only(),
                         CONFIG["MOUSE_THRESHOLD"],
+                        rfid_filter=_selected_cat_rfid_filter(),
                     )
 
                     if total_count == 0:
@@ -717,6 +1131,7 @@ def register_photos(input, output, session, ctx: SessionContext):
                         CONFIG["MOUSE_THRESHOLD"],
                         page_index,
                         per_page,
+                        rfid_filter=_selected_cat_rfid_filter(),
                     )
 
                     if not df_page.empty:
