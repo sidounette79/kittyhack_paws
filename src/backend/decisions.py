@@ -145,7 +145,19 @@ def conclude_motion_event_type(
             return EventType.MOTION_OUTSIDE_ONLY
         return EventType.MOTION_OUTSIDE_WITH_MOUSE
 
-    if first_motion_outside_mono < first_motion_inside_raw_mono:
+    # 04.10, Sid: real bug, found live via a Nala exit mislabeled "Un animal
+    # est entre" in Parcours (confirmed against the actual camera footage).
+    # first_motion_outside_mono == 0.0 is the sentinel for "outside motion
+    # never happened this block" - without the guard, 0.0 < any real
+    # positive timestamp is always True, so a pure inside-only motion block
+    # (the common case for a clean exit where the outside sensor never
+    # fires) was always concluded as an ENTRY. This is the actual function
+    # that decides the stored event_type (and therefore the Parcours text,
+    # the notification, presence tracking, everything) - a near-identical
+    # 0.0 guard was added earlier today to loop.py's own, SEPARATE log-only
+    # "Motion event conclusion" message, which only fixed what got printed,
+    # never this one.
+    if first_motion_outside_mono != 0.0 and first_motion_outside_mono < first_motion_inside_raw_mono:
         if no_mouse_detected:
             return EventType.CAT_WENT_INSIDE
         return EventType.CAT_WENT_INSIDE_WITH_MOUSE

@@ -307,6 +307,8 @@ def _ui_language() -> str:
     lang = str(CONFIG.get("LANGUAGE") or "en").strip().lower()
     if lang.startswith("de"):
         return "de"
+    if lang.startswith("fr"):
+        return "fr"
     if lang.startswith("en"):
         return "en"
     return "en"
@@ -376,6 +378,37 @@ def _page_text() -> dict[str, str]:
             "pending_msg": "Remote-Controller getrennt. Warte auf Timeout, bevor lokales Kittyhack startet.",
             "pending_idle": "Kein ausstehender Timeout.",
             "rebooting": "Neustart...",
+        },
+        "fr": {
+            "title_remote": "Kittyhack – Contrôle à distance",
+            "title_startup": "Démarrage de Kittyhack",
+            "h_remote": "Kittyhack est en mode contrôle à distance",
+            "h_wait": "En attente de connexion distante",
+            "remote_active": "Contrôle à distance actif",
+            "remote_ui": "Interface distante",
+            "remote_ui_unknown": "inconnue (IP du contrôleur pas encore disponible)",
+            "p_remote": (
+                "Cet appareil est actuellement contrôlé à distance. "
+                "L'interface Kittyhack normale sur cet appareil est arrêtée tant que le contrôle à distance est actif."
+            ),
+            "p_wait": "Cette Kittyflap est configurée pour attendre une connexion de contrôle à distance après un redémarrage.",
+            "autostart_in": "Démarrage automatique de Kittyhack dans",
+            "btn_skip": "Ignorer l'attente (démarrer Kittyhack maintenant)",
+            "btn_disable": "Désactiver l'attente après redémarrage",
+            "yes": "OUI",
+            "no": "NON",
+            "st_remote_active": "contrôle à distance actif",
+            "st_remote_connected": "Un contrôleur distant est connecté.",
+            "st_starting": "démarrage...",
+            "st_starting_msg": "Kittyhack démarre.",
+            "st_remote_attempt": "tentative de connexion distante détectée",
+            "st_remote_attempt_msg": "Tentative de contrôle à distance détectée. En attente du contrôleur...",
+            "seconds_suffix": " s",
+            "pending_start": "Démarrage automatique de Kittyhack dans",
+            "btn_reboot": "Redémarrer l'appareil",
+            "pending_msg": "Contrôleur distant déconnecté. Attente du délai avant démarrage local de Kittyhack.",
+            "pending_idle": "Aucun délai en attente.",
+            "rebooting": "Redémarrage...",
         },
     }
     return texts.get(lang, texts["en"])

@@ -9,6 +9,7 @@ import cv2
 import numpy as np
 import os
 import subprocess
+import shutil
 import re
 import shlex
 import threading
@@ -273,6 +274,17 @@ class VideoStream:
         self.journal_monitor_thread.start()
 
     def _monitor_journal_for_h264_errors(self, threshold=5, interval=20):
+        # 04.10, Sid ("tous les bugs qu'on trouve, on les corrige direct"):
+        # this reads the systemd journal, which only exists when kittyhack
+        # runs natively on the Kittyflap's own Pi via systemd. Inside this
+        # Docker container (remote-mode/FUNMEDIA) there is no systemd and no
+        # journalctl binary at all - not a missing package, a feature that
+        # structurally cannot apply here. Detect that up front and skip
+        # silently instead of crashing the thread on FileNotFoundError.
+        if shutil.which("journalctl") is None:
+            logging.info("[CAMERA] journalctl not available (no systemd in this environment, expected in Docker/remote-mode) - H264 journal error monitor disabled.")
+            return
+
         error_count = 0
         # Use monotonic time for intervals so system clock changes don't affect resets.
         last_reset = tm.monotonic()

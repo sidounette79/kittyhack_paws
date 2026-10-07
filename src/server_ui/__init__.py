@@ -4,12 +4,15 @@ from src.server_ui.context import create_session_context
 from src.server_ui.session_setup import register_session_setup
 from src.server_ui.photos import register_photos
 from src.server_ui.live_view import register_live_view
+from src.server_ui.journeys import register_journeys
 from src.server_ui.system_tab import register_system_tab
 from src.server_ui.cats import register_cats
+from src.server_ui.presence import register_presence
 from src.server_ui.ai_training import register_ai_training
 from src.server_ui.configuration import register_configuration
 from src.server_ui.wlan import register_wlan
 from src.server_ui.info import register_info
+from src.server_ui.remote_connection_log import register_remote_connection_log
 
 
 def register_all(input, output, session):
@@ -19,9 +22,12 @@ def register_all(input, output, session):
     register_session_setup(input, output, session, ctx)
     register_photos(input, output, session, ctx)
     register_live_view(input, output, session, ctx)
+    register_journeys(input, output, session, ctx)
     register_system_tab(input, output, session, ctx)
     register_cats(input, output, session, ctx)
+    register_presence(input, output, session, ctx)
     register_ai_training(input, output, session, ctx)
     register_configuration(input, output, session, ctx)
     register_wlan(input, output, session, ctx)
     register_info(input, output, session, ctx)
+    register_remote_connection_log(input, output, session, ctx)

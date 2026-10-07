@@ -104,13 +104,18 @@ class EventType:
     @staticmethod
     def to_icons(event_type):
         """Return Font Awesome / local SVG icon markup for an event type."""
+        # 04.10, Sid: "reprendre le code couleur vert/rouge sur l'indication
+        # des fleches" - vert = entree, rouge = sortie, meme convention que
+        # les badges maison/arbre de l'onglet Presence.
+        _in = lambda svg: f'<span class="kh-dir-in">{svg}</span>'
+        _out = lambda svg: f'<span class="kh-dir-out">{svg}</span>'
         return {
             EventType.MOTION_OUTSIDE_ONLY: [str(icon_svg("eye"))],
             EventType.MOTION_OUTSIDE_WITH_MOUSE: [str(icon_svg("hand")), icon_svg_local("mouse")],
-            EventType.CAT_WENT_INSIDE: [str(icon_svg("circle-down"))],
-            EventType.CAT_WENT_PROBABLY_INSIDE: [str(icon_svg("circle-down")), str(icon_svg("circle-question"))],
-            EventType.CAT_WENT_INSIDE_WITH_MOUSE: [str(icon_svg("circle-down"))],
-            EventType.CAT_WENT_OUTSIDE: [str(icon_svg("circle-up"))],
+            EventType.CAT_WENT_INSIDE: [_in(icon_svg("circle-down"))],
+            EventType.CAT_WENT_PROBABLY_INSIDE: [_in(icon_svg("circle-down")), str(icon_svg("circle-question"))],
+            EventType.CAT_WENT_INSIDE_WITH_MOUSE: [_in(icon_svg("circle-down"))],
+            EventType.CAT_WENT_OUTSIDE: [_out(icon_svg("circle-up"))],
             EventType.MANUALLY_UNLOCKED: [str(icon_svg("lock-open"))],
             EventType.MANUALLY_LOCKED: [str(icon_svg("lock"))],
             EventType.MAX_UNLOCK_TIME_EXCEEDED: [str(icon_svg("clock"))],
@@ -1450,23 +1455,41 @@ class DateTimeUtil:
 
     @staticmethod
     def get_local_date_from_utc_date(utc_date_string: str):
-        """Convert a UTC datetime string to the configured local timezone string."""
-        # Truncate the microseconds to 4 decimal places if necessary
-        if '.' in utc_date_string:
-            date_part, microseconds_part = utc_date_string.split('.')
-            microseconds_part = microseconds_part[:4]
-            utc_date_string = f"{date_part}.{microseconds_part}"
+        """Convert a UTC datetime string to the configured local timezone string.
 
-        # Convert the UTC date string to a datetime object
-        utc_datetime = datetime.strptime(utc_date_string, '%Y-%m-%d %H:%M:%S.%f')
+        04.10, Sid: real bug found (2h off between the Journey/Pictures tabs
+        and the Live view tab, which does its own correct conversion via
+        pandas). `events.created_at` is stored in two different formats
+        ('2026-10-03 20:45:15' with no offset at all on some rows,
+        '...19:58:49.1932+00:00' with microseconds+offset on others - both
+        seen in the same table). The old code (a) crashed outright on the
+        no-decimal format (strptime required '.%f'), and (b) for the format
+        it DID parse, built a naive datetime and called .astimezone() on it
+        - which assumes the naive value is already in the HOST's system
+        timezone, not UTC. Since this container's system tz is itself
+        Europe/Paris (not UTC), that was a no-op: the "converted" result was
+        just the raw UTC string handed back unchanged, silently 2h behind
+        real local time. Fixed by stripping any UTC suffix (we already know
+        every value here IS UTC) and explicitly attaching tzinfo=UTC before
+        converting, so .astimezone() has an actual conversion to do."""
+        s = utc_date_string.strip()
+        for suffix in ("+00:00", "Z"):
+            if s.endswith(suffix):
+                s = s[: -len(suffix)]
+                break
 
-        # Convert the UTC datetime object to the local timezone
+        if "." in s:
+            date_part, frac = s.split(".", 1)
+            frac = (frac + "000000")[:6]
+            s = f"{date_part}.{frac}"
+            fmt = "%Y-%m-%d %H:%M:%S.%f"
+        else:
+            fmt = "%Y-%m-%d %H:%M:%S"
+
+        utc_datetime = datetime.strptime(s, fmt).replace(tzinfo=timezone.utc)
         local_datetime = utc_datetime.astimezone(DateTimeUtil.get_timezone())
 
-        # Format the local datetime object to the specified string format
-        local_date_string = local_datetime.strftime('%Y-%m-%d %H:%M:%S.%f')[:-2]
-
-        return local_date_string
+        return local_datetime.strftime('%Y-%m-%d %H:%M:%S.%f')[:-2]
 
 class ImageUtil:
     """Image resize/process helpers for thumbnails and overlays."""

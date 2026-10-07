@@ -35,6 +35,7 @@ from src.server_ui.state import (
 )
 from src.server_ui.helpers import _disable_numeric_input, collapsible_section
 from src.server_ui.context import SessionContext
+from src.webauth import SESSION_COOKIE, _session_username, _check_credentials, set_password
 import src.startup as startup
 
 _ = set_language(CONFIG["LANGUAGE"])
@@ -44,6 +45,39 @@ if is_remote_mode():
 else:
     from src.magnets_rfid import Magnets
     from src.pir import Pir
+
+
+def _password_field_with_eye(field_id: str, label_text: str):
+    """A ui.input_password with a show/hide eye toggle overlaid on the input.
+
+    Pure DOM toggling (input.type + two stacked icon spans) via inline
+    onclick — no Shiny reactivity involved, so it can't interfere with the
+    normal input_password binding.
+    """
+    eye_id = f"{field_id}_eye"
+    eye_slash_id = f"{field_id}_eyeslash"
+    toggle_js = (
+        f"var p=document.getElementById('{field_id}');"
+        f"var e=document.getElementById('{eye_id}');"
+        f"var es=document.getElementById('{eye_slash_id}');"
+        "if(p.type==='password'){p.type='text';e.style.display='none';es.style.display='inline-flex';}"
+        "else{p.type='password';e.style.display='inline-flex';es.style.display='none';}"
+    )
+    return ui.div(
+        {"class": "kh-pwd-field"},
+        ui.input_password(field_id, label_text, value="", width="100%"),
+        ui.tags.button(
+            {
+                "type": "button",
+                "class": "kh-pwd-toggle",
+                "onclick": toggle_js,
+                "aria-label": _("Show/hide password"),
+                "tabindex": "-1",
+            },
+            ui.tags.span({"id": eye_id, "style": "display:inline-flex;"}, icon_svg("eye")),
+            ui.tags.span({"id": eye_slash_id, "style": "display:none;"}, icon_svg("eye-slash")),
+        ),
+    )
 
 
 def register_configuration(input, output, session, ctx: SessionContext):
@@ -142,7 +176,7 @@ def register_configuration(input, output, session, ctx: SessionContext):
                                 ui.input_select(
                                     "txtLanguage",
                                     _("Language"),
-                                    {"en": "English", "de": "Deutsch"},
+                                    {"en": "English", "de": "Deutsch", "fr": "Français"},
                                     selected=CONFIG["LANGUAGE"],
                                 ),
                             ),
@@ -163,6 +197,158 @@ def register_configuration(input, output, session, ctx: SessionContext):
                                     + ' <a href="https://en.wikipedia.org/wiki/List_of_tz_database_time_zones" target="_blank">Wikipedia</a> '
                                     + _("for valid timezone strings")
                                     + "</span>"
+                                ),
+                            ),
+                        ),
+                        ui.hr(),
+                        ui.row(
+                            ui.column(12, ui.h5(_("Change your password"))),
+                            ui.column(
+                                4,
+                                _password_field_with_eye(
+                                    "txtCurrentPassword", _("Current password")
+                                ),
+                            ),
+                            ui.column(
+                                4,
+                                _password_field_with_eye(
+                                    "txtNewPassword", _("New password")
+                                ),
+                            ),
+                            ui.column(
+                                4,
+                                _password_field_with_eye(
+                                    "txtNewPassword2", _("Confirm new password")
+                                ),
+                            ),
+                            ui.column(
+                                12,
+                                ui.input_action_button(
+                                    "bChangePassword",
+                                    _("Update password"),
+                                    icon=icon_svg("key"),
+                                    class_="btn-outline-primary",
+                                    style_="margin-top: 10px;",
+                                ),
+                                style_="margin-top: 4px;",
+                            ),
+                        ),
+                        ui.hr(),
+                        ui.row(
+                            ui.column(12, ui.h5(_("Push notifications"))),
+                            ui.column(
+                                12,
+                                ui.tags.p(
+                                    {
+                                        "id": "kh_webpush_status",
+                                        "data-unsupported": _("Not supported by this browser."),
+                                        "data-on-label": _("Notifications are enabled on this device."),
+                                        "data-off-label": _("Notifications are disabled on this device."),
+                                    },
+                                    _("Checking notification status..."),
+                                ),
+                            ),
+                            ui.column(
+                                12,
+                                ui.tags.button(
+                                    {
+                                        "id": "kh_webpush_toggle_btn",
+                                        "type": "button",
+                                        "class": "btn btn-outline-primary",
+                                        "data-enable-label": _("Enable"),
+                                        "data-disable-label": _("Disable"),
+                                    },
+                                    _("Enable"),
+                                ),
+                            ),
+                            ui.column(
+                                12,
+                                ui.markdown(
+                                    _(
+                                        "Get a notification on this device whenever a cat enters or exits through the flap."
+                                    )
+                                ),
+                                style_="color: grey; margin-top: 6px;",
+                            ),
+                        ),
+                        # 05.10, Sid ("liste des notifications... pouvoir
+                        # choisir lesquels j'active ou pas") - was first
+                        # built further down near the camera/PIR settings,
+                        # a confusing spot: moved next to the existing
+                        # Enable/Disable push toggle above, where she'd
+                        # actually look. One switch per notification type,
+                        # each reading the matching NOTIFY_* config key
+                        # checked in loop.py.
+                        ui.row(
+                            ui.column(
+                                6,
+                                ui.input_switch(
+                                    "btnNotifyCatEntered",
+                                    _("Cat entered"),
+                                    CONFIG["NOTIFY_CAT_ENTERED"],
+                                ),
+                            ),
+                            ui.column(
+                                6,
+                                ui.input_switch(
+                                    "btnNotifyCatExited",
+                                    _("Cat exited"),
+                                    CONFIG["NOTIFY_CAT_EXITED"],
+                                ),
+                            ),
+                        ),
+                        ui.row(
+                            ui.column(
+                                6,
+                                ui.input_switch(
+                                    "btnNotifyGlanceOutside",
+                                    _("Looked outside, didn't go out"),
+                                    CONFIG["NOTIFY_GLANCE_OUTSIDE"],
+                                ),
+                            ),
+                            ui.column(
+                                6,
+                                ui.input_switch(
+                                    "btnNotifyPreyDetected",
+                                    _("Prey detected"),
+                                    CONFIG["NOTIFY_PREY_DETECTED"],
+                                ),
+                            ),
+                        ),
+                        ui.row(
+                            ui.column(
+                                6,
+                                ui.input_switch(
+                                    "btnNotifyMotionOutside",
+                                    _("Motion detected outside (raw)"),
+                                    CONFIG["NOTIFY_MOTION_OUTSIDE"],
+                                ),
+                            ),
+                            ui.column(
+                                6,
+                                ui.input_switch(
+                                    "btnNotifyMotionInside",
+                                    _("Motion detected inside (raw)"),
+                                    CONFIG["NOTIFY_MOTION_INSIDE"],
+                                ),
+                            ),
+                        ),
+                        ui.row(
+                            ui.column(
+                                12,
+                                info_toggle(
+                                    "notify_types_info",
+                                    _("Explain push notification types"),
+                                    _(
+                                        "The first four match an actual event (a cat really came "
+                                        "in/went out/looked without passing/a prey was blocked) and "
+                                        "are on by default.\n\n"
+                                        "**Motion detected outside/inside (raw)** fire on the "
+                                        "underlying PIR/camera trigger itself, before it's known "
+                                        "whether anything will come of it - far more frequent (tens "
+                                        "to 50+ times a day), so they're off by default and, when "
+                                        "enabled, limited to one notification per 10 minutes."
+                                    ),
                                 ),
                             ),
                         ),
@@ -806,6 +992,48 @@ def register_configuration(input, output, session, ctx: SessionContext):
                         ui.row(
                             ui.column(
                                 12,
+                                ui.input_switch(
+                                    "btnBlockExitAfterPreyEntry",
+                                    _("Block exit after a prey-flagged entry"),
+                                    CONFIG["BLOCK_EXIT_AFTER_PREY_ENTRY_ENABLED"],
+                                ),
+                            ),
+                            ui.column(
+                                12,
+                                info_toggle(
+                                    "block_exit_after_prey_info",
+                                    _("Explain exit block after prey entry"),
+                                    _(
+                                        "Some cats drop a caught prey outside the flap, wait for the "
+                                        "entry lock to expire, come in prey-free, then reach a paw "
+                                        "back out to retrieve it. If enabled, a cat seen with a prey "
+                                        "is blocked from exiting for the duration below once their "
+                                        "entry is confirmed - even if that happens well after the "
+                                        "sighting.\n\n"
+                                        "**NOTE:** This is the global setting. It can also be "
+                                        "configured per cat in the `MANAGE CATS` section."
+                                    ),
+                                ),
+                            ),
+                        ),
+                        ui.row(
+                            ui.column(
+                                12,
+                                ui.input_slider(
+                                    "sldBlockExitAfterPreyEntryDuration",
+                                    _("Exit block duration after prey-flagged entry (in s)"),
+                                    min=30,
+                                    max=1800,
+                                    step=5,
+                                    width="90%",
+                                    value=CONFIG["BLOCK_EXIT_AFTER_PREY_ENTRY_DURATION"],
+                                ),
+                            ),
+                        ),
+                        ui.hr(),
+                        ui.row(
+                            ui.column(
+                                12,
                                 ui.input_select(
                                     "selectedModel",
                                     _("Version of the object detection model"),
@@ -951,6 +1179,72 @@ def register_configuration(input, output, session, ctx: SessionContext):
                                     + " "
                                     + _(
                                         "If one or both are not good, you may experience false triggers or your cat may not be detected correctly."
+                                    ),
+                                ),
+                            ),
+                        ),
+                        ui.row(
+                            ui.column(
+                                12,
+                                ui.input_switch(
+                                    "btnCombinePirAndCameraOutsideMotion",
+                                    _("Also use the PIR sensor alongside the camera"),
+                                    CONFIG["COMBINE_PIR_AND_CAMERA_OUTSIDE_MOTION"],
+                                    width="90%",
+                                ),
+                            ),
+                            ui.column(
+                                12,
+                                info_toggle(
+                                    "combine_pir_camera_info",
+                                    _("Explain combined PIR + camera detection"),
+                                    _(
+                                        "Neither sensor alone is perfectly reliable: the camera "
+                                        "tends to lose track of the cat once it's right at the "
+                                        "flap, while the PIR sensor is more prone to false "
+                                        "triggers from environmental changes (moving trees, "
+                                        "passers-by). With this enabled, outside motion is "
+                                        "detected if EITHER the camera OR the PIR sensor "
+                                        "reports it, instead of relying on the camera alone."
+                                    )
+                                    + "\n\n"
+                                    + _(
+                                        "**NOTE:** Only has an effect while `Use camera for motion detection` above is also enabled."
+                                    ),
+                                ),
+                            ),
+                        ),
+                        ui.row(
+                            ui.column(
+                                12,
+                                ui.input_switch(
+                                    "btnPauseCameraWhenIdle",
+                                    _("Pause camera analysis when idle (resume on PIR motion)"),
+                                    CONFIG["PAUSE_CAMERA_WHEN_IDLE"],
+                                    width="90%",
+                                ),
+                            ),
+                            ui.column(
+                                12,
+                                info_toggle(
+                                    "pause_camera_when_idle_info",
+                                    _("Explain pausing the camera when idle"),
+                                    _(
+                                        "The chatiere camera's continuous analysis is by far the "
+                                        "biggest CPU cost on the box. With this enabled, it only "
+                                        "runs for a short while after the PIR sensor last saw real "
+                                        "motion outside, instead of running non-stop."
+                                    )
+                                    + "\n\n"
+                                    + _(
+                                        "**Trade-off:** if the PIR sensor itself ever misses a very "
+                                        "brief passage, the camera won't wake up for it either in "
+                                        "that case - unlike the always-on default, which can "
+                                        "sometimes catch what the PIR misses."
+                                    )
+                                    + "\n\n"
+                                    + _(
+                                        "**NOTE:** Only has an effect while `Use camera for motion detection` above is also enabled."
                                     ),
                                 ),
                             ),
@@ -1461,8 +1755,21 @@ def register_configuration(input, output, session, ctx: SessionContext):
                                         "The oldest pictures will be deleted if the number of pictures exceeds this value."
                                     )
                                     + "  \n"
-                                    + _(
-                                        "The maximum number of pictures depends on the type of the Raspberry Pi, since some kittyflaps are equipped with 16GB and some with 32GB."
+                                    # 04.10, Sid: "ça dit que les photos s'enregistrent dans
+                                    # Kittyflap. Mais on est d'accord que ça s'enregistre dans
+                                    # FUNmedia ?" - oui, en remote-mode tout est stocke sur le
+                                    # device remote (voir doc/remote-mode.md: "new events are
+                                    # saved only on the remote device"), pas sur la Kittyflap -
+                                    # le texte Pi/16-32Go etait trompeur ici, specifique au
+                                    # mode target.
+                                    + (
+                                        _(
+                                            "In remote-mode, pictures are stored on this remote device's own disk, not on the Kittyflap."
+                                        )
+                                        if is_remote_mode()
+                                        else _(
+                                            "The maximum number of pictures depends on the type of the Raspberry Pi, since some kittyflaps are equipped with 16GB and some with 32GB."
+                                        )
                                     )
                                     + "  \n"
                                     + _(
@@ -2140,6 +2447,59 @@ def register_configuration(input, output, session, ctx: SessionContext):
                         style_="padding-left: 1rem !important; padding-right: 1rem !important;",
                     ),
                 ),
+                # --- Add new cat ---
+                # 09.09, Sid: moved here from its own top-level nav tab - adding a
+                # cat is a rare, one-off action, not something worth a permanent
+                # spot in the main navigation.
+                collapsible_section(
+                    "add_new_cat_section",
+                    _("Add new cat"),
+                    _("Register a new cat with its RFID chip."),
+                    ui.div(
+                        ui.output_ui("ui_add_new_cat"),
+                        class_="generic-container align-left",
+                        style_="padding-left: 1rem !important; padding-right: 1rem !important;",
+                    ),
+                ),
+                # --- System ---
+                # 09.09, Sid: same reasoning as "Add new cat" above - moved out of
+                # its own top-level nav tab into a collapsible section here.
+                collapsible_section(
+                    "system_section",
+                    _("System"),
+                    _("API tokens, reboot/shutdown, and update actions."),
+                    ui.div(
+                        ui.output_ui("ui_system"),
+                        class_="generic-container align-left",
+                        style_="padding-left: 1rem !important; padding-right: 1rem !important;",
+                    ),
+                ),
+                # --- Info ---
+                collapsible_section(
+                    "info_section",
+                    _("Info"),
+                    _("Version and connection information."),
+                    ui.div(
+                        ui.output_ui("ui_info"),
+                        class_="generic-container align-left",
+                        style_="padding-left: 1rem !important; padding-right: 1rem !important;",
+                    ),
+                ),
+                # --- Remote connection history (04.10, Sid) ---
+                (
+                    collapsible_section(
+                        "remote_connection_log",
+                        _("Remote connection history"),
+                        _("Connect/disconnect log with uptime and durations."),
+                        ui.div(
+                            ui.output_ui("ui_remote_connection_log"),
+                            class_="generic-container align-left",
+                            style_="padding-left: 1rem !important; padding-right: 1rem !important; position: relative;",
+                        ),
+                    )
+                    if is_remote_mode()
+                    else None
+                ),
                 # --- Remote-mode documentation ---
                 collapsible_section(
                     "remote_mode_documentation",
@@ -2176,6 +2536,19 @@ def register_configuration(input, output, session, ctx: SessionContext):
                         class_="generic-container align-left",
                         style_="padding-left: 1rem !important; padding-right: 1rem !important;",
                     ),
+                ),
+                # 05.10, Sid (page merge, step 2 - "ajouter un chat est
+                # normalement dans le menu configuration, car ca n'arrive
+                # pas souvent dans une vie d'humain esclave de chat"):
+                # moved here from the (now hidden) "Manage cats" tab. Same
+                # ui_add_new_cat() output, registered in cats.py's
+                # register_cats() as always - just rendered from a
+                # different page now.
+                collapsible_section(
+                    "add_new_cat_section",
+                    _("Add a new cat"),
+                    _("Register a new cat (name, RFID chip, picture, per-cat settings)."),
+                    ui.output_ui("ui_add_new_cat"),
                 ),
                 ui.br(),
                 ui.br(),
@@ -2220,6 +2593,53 @@ def register_configuration(input, output, session, ctx: SessionContext):
             value=max(input.sldCatThreshold(), input.sldMinThreshold()),
             min=input.sldMinThreshold(),
         )
+
+    @reactive.Effect
+    @reactive.event(input.bChangePassword)
+    def on_change_password():
+        # Independent of the big "Save all changes" flow on purpose: this touches
+        # webauth's own users_auth.json, not config.ini, and must never end up
+        # bundled with unrelated config fields.
+        try:
+            token = session.http_conn.cookies.get(SESSION_COOKIE)
+        except Exception:
+            token = None
+        username = _session_username(token)
+
+        current_pw = input.txtCurrentPassword()
+        new_pw = input.txtNewPassword()
+        new_pw2 = input.txtNewPassword2()
+
+        def _clear_fields():
+            ui.update_text("txtCurrentPassword", value="")
+            ui.update_text("txtNewPassword", value="")
+            ui.update_text("txtNewPassword2", value="")
+
+        if not username:
+            ui.notification_show(
+                _("Could not identify the current session. Please log in again."),
+                type="error",
+                duration=6,
+            )
+            return
+
+        if not _check_credentials(username, current_pw):
+            ui.notification_show(_("Current password is incorrect."), type="error", duration=6)
+            return
+
+        if len(new_pw) < 8:
+            ui.notification_show(
+                _("New password must be at least 8 characters long."), type="error", duration=6
+            )
+            return
+
+        if new_pw != new_pw2:
+            ui.notification_show(_("The new passwords do not match."), type="error", duration=6)
+            return
+
+        set_password(username, new_pw)
+        _clear_fields()
+        ui.notification_show(_("Password updated successfully."), type="message", duration=5)
 
     @reactive.Effect
     @reactive.event(input.bSaveKittyhackConfig)
@@ -2519,6 +2939,16 @@ def register_configuration(input, output, session, ctx: SessionContext):
         CONFIG["USE_CAMERA_FOR_MOTION_DETECTION"] = (
             input.btnUseCameraForMotionDetection()
         )
+        CONFIG["COMBINE_PIR_AND_CAMERA_OUTSIDE_MOTION"] = (
+            input.btnCombinePirAndCameraOutsideMotion()
+        )
+        CONFIG["PAUSE_CAMERA_WHEN_IDLE"] = input.btnPauseCameraWhenIdle()
+        CONFIG["NOTIFY_CAT_ENTERED"] = input.btnNotifyCatEntered()
+        CONFIG["NOTIFY_CAT_EXITED"] = input.btnNotifyCatExited()
+        CONFIG["NOTIFY_GLANCE_OUTSIDE"] = input.btnNotifyGlanceOutside()
+        CONFIG["NOTIFY_PREY_DETECTED"] = input.btnNotifyPreyDetected()
+        CONFIG["NOTIFY_MOTION_OUTSIDE"] = input.btnNotifyMotionOutside()
+        CONFIG["NOTIFY_MOTION_INSIDE"] = input.btnNotifyMotionInside()
         CONFIG["ALLOWED_TO_ENTER"] = AllowedToEnter(input.txtAllowedToEnter())
         CONFIG["LIVE_VIEW_REFRESH_INTERVAL"] = float(input.numLiveViewUpdateInterval())
         from src.baseconfig import AllowedToExit as ATE
@@ -2544,6 +2974,10 @@ def register_configuration(input, output, session, ctx: SessionContext):
             CONFIG["WLAN_TX_POWER"] = int(input.sldWlanTxPower())
         CONFIG["LOCK_DURATION_AFTER_PREY_DETECTION"] = int(
             input.sldLockAfterPreyDetect()
+        )
+        CONFIG["BLOCK_EXIT_AFTER_PREY_ENTRY_ENABLED"] = input.btnBlockExitAfterPreyEntry()
+        CONFIG["BLOCK_EXIT_AFTER_PREY_ENTRY_DURATION"] = int(
+            input.sldBlockExitAfterPreyEntryDuration()
         )
         CONFIG["MAX_PICTURES_PER_EVENT_WITH_RFID"] = int(
             input.numMaxPicturesPerEventWithRfid()

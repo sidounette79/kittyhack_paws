@@ -597,6 +597,8 @@ def run() -> None:
         logging.info(f"Database '{CONFIG['KITTYHACK_DATABASE_PATH']}' not found. Creating it...")
         DbMigrations.create_kittyhack_events_table(CONFIG['KITTYHACK_DATABASE_PATH'])
 
+    DbMigrations.enable_wal_mode(CONFIG['KITTYHACK_DATABASE_PATH'])
+
     if not DatabaseCore.check_if_table_exists(CONFIG['KITTYHACK_DATABASE_PATH'], "events"):
         logging.warning(f"Table 'events' not found in the kittyhack database. Creating it...")
         DbMigrations.create_kittyhack_events_table(CONFIG['KITTYHACK_DATABASE_PATH'])
@@ -632,6 +634,22 @@ def run() -> None:
         logging.warning(f"Legacy table 'photo' not found in the kittyhack database. Creating it...")
         DbMigrations.create_kittyhack_photo_table(CONFIG['KITTYHACK_DATABASE_PATH'])
 
+    if not DatabaseCore.check_if_table_exists(CONFIG['KITTYHACK_DATABASE_PATH'], "detection_feedback"):
+        logging.warning("Table 'detection_feedback' not found in the kittyhack database. Creating it...")
+        DbMigrations.create_detection_feedback_table(CONFIG['KITTYHACK_DATABASE_PATH'])
+
+    if not DatabaseCore.check_if_table_exists(CONFIG['KITTYHACK_DATABASE_PATH'], "model_review_queue"):
+        logging.warning("Table 'model_review_queue' not found in the kittyhack database. Creating it...")
+        DbMigrations.create_model_review_queue_table(CONFIG['KITTYHACK_DATABASE_PATH'])
+
+    if not DatabaseCore.check_if_table_exists(CONFIG['KITTYHACK_DATABASE_PATH'], "model_review_scanned_blocks"):
+        logging.warning("Table 'model_review_scanned_blocks' not found in the kittyhack database. Creating it...")
+        DbMigrations.create_model_review_scanned_blocks_table(CONFIG['KITTYHACK_DATABASE_PATH'])
+
+    if not DatabaseCore.check_if_table_exists(CONFIG['KITTYHACK_DATABASE_PATH'], "remote_connection_log"):
+        logging.warning("Table 'remote_connection_log' not found in the kittyhack database. Creating it...")
+        DbMigrations.create_remote_connection_log_table(CONFIG['KITTYHACK_DATABASE_PATH'])
+
     # Check if table "cats" exist in the kittyhack database. If not, create it.
     if not DatabaseCore.check_if_table_exists(CONFIG['KITTYHACK_DATABASE_PATH'], "cats"):
         logging.warning(f"Table 'cats' not found in the kittyhack database. Creating it...")
@@ -658,6 +676,12 @@ def run() -> None:
                     logging.warning(f"Column 'allow_exit' not found in the 'cats' table of {db}. Adding it...")
                     DatabaseCore.add_column_to_table(db, "cats", "allow_exit", "INTEGER DEFAULT 1")
                     DatabaseCore.write_stmt_to_database(db, "UPDATE cats SET allow_exit = 1 WHERE allow_exit IS NULL")
+                # 04.10, Sid: per-cat override for the new "block exit after a
+                # prey-flagged entry" feature (same pattern as enable_prey_detection).
+                if not DatabaseCore.check_if_column_exists(db, "cats", "block_exit_after_prey"):
+                    logging.warning(f"Column 'block_exit_after_prey' not found in the 'cats' table of {db}. Adding it...")
+                    DatabaseCore.add_column_to_table(db, "cats", "block_exit_after_prey", "INTEGER DEFAULT 1")
+                    DatabaseCore.write_stmt_to_database(db, "UPDATE cats SET block_exit_after_prey = 1 WHERE block_exit_after_prey IS NULL")
         except Exception as e:
             logging.error(f"Failed to ensure per-cat settings columns in database {db}: {e}")
 

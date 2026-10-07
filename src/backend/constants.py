@@ -10,3 +10,5 @@ LAZY_CAT_DELAY_CAM_MOTION = 12.0 # Keep the PIR active for an additional 12 seco
 FAST_EXIT_POST_CAPTURE_SECONDS = 6.0  # Extra recording after fast-lock exit crossing before finalizing the event
 EVENT_COOLDOWN_SECONDS = 3.0     # After an event is finalized, ignore all new motion triggers for this long (PIR settling)
 MAX_MOTION_BLOCK_SECONDS = 90.0  # Finalize a motion block after this time even if outside motion never falls cleanly
+CAMERA_IDLE_RESUME_HOLD_S = 20.0  # PAUSE_CAMERA_WHEN_IDLE: keep the chatiere camera model running this long after the last real PIR edge
+GLANCE_NOTIFICATION_COOLDOWN_S = 600.0  # 05.10, Sid: "a regarde" push notification - per-RFID cooldown, far more frequent than entry/exit so needs one

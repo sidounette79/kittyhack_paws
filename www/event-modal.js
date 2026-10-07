@@ -306,6 +306,12 @@
         this.fallbackMode = !!data.fallbackMode;
         this.blockId = String(data.blockId || '');
 
+        // 09.09, Sid: detection validate/correct feature.
+        this.correctionLabels = data.correctionLabels || [];
+        this.nsCorrection = data.nsCorrection || '';
+        this.i18n = data.i18n || {};
+        this._openCorrectionIdx = -1;
+
         this.currentIdx = 0;
         this.playing = true;
         this.playTimer = null;
@@ -323,6 +329,7 @@
         // Bound handlers for cleanup
         this._boundKeyDown = null;
         this._boundModalClick = null;
+        this._boundOverlayClick = null;
     }
 
     // ---- Initialisation ------------------------------------------------
@@ -474,9 +481,17 @@
     Player.prototype._renderOverlay = function (frame, idx) {
         if (!this.overlayContainer) return;
 
-        var html = '<div id="event_modal_overlay" style="position:absolute;inset:0;pointer-events:none;">';
+        // Any open correction popover belongs to the frame that was showing
+        // when it was opened - a frame change invalidates it.
+        this._openCorrectionIdx = -1;
+
+        var html = '<div id="event_modal_overlay" data-pid="' + (frame.pid != null ? frame.pid : '') + '" style="position:absolute;inset:0;pointer-events:none;">';
 
         if (this.overlayOn && !this.fallbackMode && frame.objects && frame.objects.length > 0) {
+            var labelSlots = _assignLabelSlots(frame.objects);
+            var slotPositions = [
+                ['top', 4], ['bottom', 4], ['top', 26], ['bottom', 26], ['top', 48], ['bottom', 48],
+            ];
             for (var i = 0; i < frame.objects.length; i++) {
                 var obj = frame.objects[i];
                 var nameL = (obj.name || '').toLowerCase();
@@ -494,7 +509,38 @@
                     strokeRgb = '0, 180, 0'; strokeHex = '#00b400';
                 }
 
-                var labelPos = (parseFloat(obj.y) || 0) < 16 ? 'bottom: -26px' : 'top: -26px';
+                // 04.10, Sid ("le tag est hors d'atteinte" / box without a visible label):
+                // placing the label OUTSIDE the box (top:-26px / bottom:-26px, offset from
+                // the box's OWN edges) breaks for a tall box that already spans most of the
+                // frame - "below the box's bottom" can be below the image too. Keep the
+                // label INSIDE the box instead, which is always within the visible frame
+                // by definition.
+                //
+                // 04.10, Sid ("deux carrés l'un sur l'autre... une fois en haut et une fois
+                // en bas"): two overlapping/nested boxes (e.g. a weaker secondary guess
+                // inside the main detection) tend to share a similar y, so picking the
+                // corner purely from each box's own y put both labels in the same spot.
+                // 05.10: slot comes from real overlap detection now
+                // (_assignLabelSlots), not just index parity, so 2+ boxes
+                // that actually collide always land on different spots -
+                // then only override to bottom if that box's own top is
+                // right up against the timestamp badge (top:12px).
+                var nearTop = (parseFloat(obj.y) || 0) < 8;
+                var slotPos = slotPositions[labelSlots[i] % slotPositions.length];
+                var side = slotPos[0], px = slotPos[1];
+                if (nearTop && side === 'top') side = 'bottom';
+                var labelPos = side + ': ' + px + 'px';
+                var reviewable = (obj.idx !== undefined && obj.idx !== null && this.nsCorrection);
+                var labelText = _escHtml(obj.name) + ' (' + Math.round(prob) + '%)';
+                if (obj.reviewed) {
+                    if (obj.reviewedAs === null) {
+                        labelText = '✗ ' + labelText;
+                    } else if (obj.reviewedAs && obj.reviewedAs !== obj.name) {
+                        labelText = '✓ ' + labelText + ' → ' + _escHtml(obj.reviewedAs);
+                    } else {
+                        labelText = '✓ ' + labelText;
+                    }
+                }
 
                 html += '<div style="position:absolute;'
                     + 'left:' + obj.x + '%;top:' + obj.y + '%;'
@@ -502,10 +548,13 @@
                     + 'border:2px solid ' + strokeHex + ';'
                     + 'background-color:rgba(' + strokeRgb + ',0.05);'
                     + 'pointer-events:none;z-index:3;">'
-                    + '<div style="position:absolute;' + labelPos + ';left:0px;'
+                    + '<div class="' + (reviewable ? 'kh-event-obj-label kh-event-obj-label-clickable' : 'kh-event-obj-label') + '"'
+                    + (reviewable ? (' data-obj-idx="' + obj.idx + '" data-obj-name="' + _escHtml(obj.name) + '"') : '')
+                    + ' style="position:absolute;' + labelPos + ';left:0px;'
                     + 'background-color:rgba(' + strokeRgb + ',0.7);color:white;'
-                    + 'padding:2px 5px;border-radius:5px;white-space:nowrap;font-size:12px;">'
-                    + _escHtml(obj.name) + ' (' + Math.round(prob) + '%)</div></div>';
+                    + 'padding:2px 5px;border-radius:5px;white-space:nowrap;font-size:12px;'
+                    + (reviewable ? 'pointer-events:auto;cursor:pointer;' : '') + '">'
+                    + labelText + '</div></div>';
             }
         }
 
@@ -526,9 +575,159 @@
         this.overlayContainer.innerHTML = html;
     };
 
+    // ---- Detection validate/correct popover -----------------------------
+
+    Player.prototype._onOverlayClick = function (e) {
+        var label = e.target.closest('.kh-event-obj-label-clickable');
+        var option = e.target.closest('[data-correction-action]');
+
+        if (option) {
+            e.stopPropagation();
+            var popover = option.closest('.kh-correction-popover');
+            var objIdx = popover ? parseInt(popover.getAttribute('data-obj-idx'), 10) : NaN;
+            var action = option.getAttribute('data-correction-action');
+            var correctedName = option.getAttribute('data-correction-name') || null;
+            this._closeCorrectionPopover();
+            if (!isNaN(objIdx)) this._submitCorrection(objIdx, action, correctedName);
+            return;
+        }
+
+        if (label) {
+            e.stopPropagation();
+            var idx = parseInt(label.getAttribute('data-obj-idx'), 10);
+            if (this._openCorrectionIdx === idx) {
+                this._closeCorrectionPopover();
+            } else {
+                this._openCorrectionPopover(label, idx);
+            }
+            return;
+        }
+
+        // Click elsewhere in the overlay - close any open popover.
+        this._closeCorrectionPopover();
+    };
+
+    Player.prototype._closeCorrectionPopover = function () {
+        var existing = this.overlayContainer && this.overlayContainer.querySelector('.kh-correction-popover');
+        if (existing) existing.remove();
+        this._openCorrectionIdx = -1;
+    };
+
+    Player.prototype._openCorrectionPopover = function (labelEl, objIdx) {
+        this._closeCorrectionPopover();
+        if (!this.overlayContainer) return;
+        this._openCorrectionIdx = objIdx;
+
+        var currentName = labelEl.getAttribute('data-obj-name') || '';
+        var i18n = this.i18n || {};
+
+        var html = '<div class="kh-correction-popover" data-obj-idx="' + objIdx + '">';
+        html += '<button type="button" class="kh-correction-option kh-correction-confirm" data-correction-action="confirm">'
+            + '✓ ' + _escHtml(i18n.confirm || 'Correct') + '</button>';
+        for (var i = 0; i < this.correctionLabels.length; i++) {
+            var lbl = this.correctionLabels[i];
+            if (lbl === currentName) continue;
+            html += '<button type="button" class="kh-correction-option" data-correction-action="correct" data-correction-name="'
+                + _escHtml(lbl) + '">' + _escHtml(lbl) + '</button>';
+        }
+        html += '<button type="button" class="kh-correction-option kh-correction-false-positive" data-correction-action="false_positive">'
+            + '✗ ' + _escHtml(i18n.falsePositive || 'Not a real detection') + '</button>';
+        html += '</div>';
+
+        var wrap = document.createElement('div');
+        wrap.innerHTML = html;
+        var popover = wrap.firstChild;
+
+        // Position just below (or above) the clicked label, relative to the
+        // overlay container - simpler and more robust than re-deriving the
+        // box's own x/y/w/h percentages for a popover of unknown size.
+        var containerRect = this.overlayContainer.getBoundingClientRect();
+        var labelRect = labelEl.getBoundingClientRect();
+        popover.style.position = 'absolute';
+        popover.style.zIndex = '10';
+        popover.style.left = Math.max(0, labelRect.left - containerRect.left) + 'px';
+        popover.style.top = (labelRect.bottom - containerRect.top + 4) + 'px';
+
+        this.overlayContainer.appendChild(popover);
+
+        // Keep the popover inside the visible container horizontally.
+        var popRect = popover.getBoundingClientRect();
+        if (popRect.right > containerRect.right) {
+            popover.style.left = Math.max(0, containerRect.width - popRect.width) + 'px';
+        }
+        // Flip above the label if there's not enough room below.
+        if (popRect.bottom > containerRect.bottom) {
+            popover.style.top = Math.max(0, (labelRect.top - containerRect.top) - popRect.height - 4) + 'px';
+        }
+    };
+
+    Player.prototype._submitCorrection = function (objIdx, action, correctedName) {
+        try {
+            var overlayEl = document.getElementById('event_modal_overlay');
+            var pid = overlayEl ? parseInt(overlayEl.getAttribute('data-pid'), 10) : NaN;
+            if (!this.nsCorrection || typeof Shiny === 'undefined' || !Shiny.setInputValue || isNaN(pid)) return;
+
+            Shiny.setInputValue(this.nsCorrection, JSON.stringify({
+                pid: pid,
+                idx: objIdx,
+                action: action,
+                correctedName: correctedName
+            }), { priority: 'event' });
+
+            // Optimistic local update so re-scrubbing to this frame shows the
+            // reviewed state immediately, without waiting on the server.
+            var frame = this.frames[this.currentIdx];
+            if (frame && frame.objects) {
+                for (var i = 0; i < frame.objects.length; i++) {
+                    if (frame.objects[i].idx === objIdx) {
+                        frame.objects[i].reviewed = true;
+                        frame.objects[i].reviewedAs = (action === 'confirm')
+                            ? frame.objects[i].name
+                            : (action === 'false_positive' ? null : correctedName);
+                        break;
+                    }
+                }
+            }
+            this._renderOverlay(frame, this.currentIdx);
+        } catch (e) {}
+    };
+
     function _escHtml(s) {
         if (!s) return '';
         return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    // 05.10, Sid ("les étiquettes se mettent toujours les unes sur les
+    // autres"): same fix as photos.py's _assign_label_slots - plain
+    // top/bottom-by-index alternation didn't check whether boxes actually
+    // overlap, so same-parity or 3+ overlapping detections could still
+    // collide. Greedy graph coloring: each object gets the lowest slot
+    // not already used by an object it overlaps.
+    function _boxesOverlap(a, b, pad) {
+        pad = pad || 2.0;
+        var ax1 = a.x - pad, ay1 = a.y - pad, ax2 = a.x + a.width + pad, ay2 = a.y + a.height + pad;
+        var bx1 = b.x - pad, by1 = b.y - pad, bx2 = b.x + b.width + pad, by2 = b.y + b.height + pad;
+        return ax1 < bx2 && ax2 > bx1 && ay1 < by2 && ay2 > by1;
+    }
+
+    function _assignLabelSlots(objects) {
+        var boxes = objects.map(function (o) {
+            return {
+                x: parseFloat(o.x) || 0, y: parseFloat(o.y) || 0,
+                width: parseFloat(o.width) || 0, height: parseFloat(o.height) || 0,
+            };
+        });
+        var slots = [];
+        for (var i = 0; i < boxes.length; i++) {
+            var used = {};
+            for (var j = 0; j < i; j++) {
+                if (_boxesOverlap(boxes[i], boxes[j])) used[slots[j]] = true;
+            }
+            var slot = 0;
+            while (used[slot]) slot++;
+            slots.push(slot);
+        }
+        return slots;
     }
 
     // ---- Scrubber (native range input) ---------------------------------
@@ -662,8 +861,18 @@
         var self = this;
         this.playTimer = setInterval(function () {
             if (self.destroyed || !self.playing) { self._stopPlayback(); return; }
-            var next = (self.currentIdx + 1) % self.frames.length;
-            self.showFrame(next);
+            // 04.10, Sid: "on peut empecher que les images tournent en
+            // boucle... ca fait les 100 et ca recommence en boucle" - stop
+            // at the last frame instead of wrapping back to 0.
+            if (self.currentIdx >= self.frames.length - 1) {
+                self.playing = false;
+                self._stopPlayback();
+                self._updatePlayPauseUI();
+                self._updateNavButtonsState();
+                self._updateScrubberPlayingState();
+                return;
+            }
+            self.showFrame(self.currentIdx + 1);
         }, intervalMs);
     };
 
@@ -788,6 +997,14 @@
         };
         modal.addEventListener('click', this._boundModalClick);
 
+        // Detection validate/correct popover - delegated on the (stable)
+        // overlay container, since its innerHTML is fully rebuilt on every
+        // frame change (see _renderOverlay).
+        if (this.overlayContainer) {
+            this._boundOverlayClick = function (e) { self._onOverlayClick(e); };
+            this.overlayContainer.addEventListener('click', this._boundOverlayClick);
+        }
+
         // Signal current frame index before Shiny processes download click
         try {
             var dlSingle = modal.querySelector('a[id$="btn_download_single"]');
@@ -900,6 +1117,10 @@
             var modal = this.root.closest('.modal-content') || this.root.closest('.modal') || document;
             modal.removeEventListener('click', this._boundModalClick);
             this._boundModalClick = null;
+        }
+        if (this._boundOverlayClick && this.overlayContainer) {
+            this.overlayContainer.removeEventListener('click', this._boundOverlayClick);
+            this._boundOverlayClick = null;
         }
     };
 

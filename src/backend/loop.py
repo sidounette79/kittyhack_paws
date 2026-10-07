@@ -1,4 +1,5 @@
 """Main backend control loop (door / motion / RFID / prey decisions)."""
+import os
 import threading
 import time as tm
 import logging
@@ -12,12 +13,15 @@ from src.helper import (
 )
 from src.database import (
     CatsRepo,
+    DatabaseCore,
     EventsRepo,
 )
 from src.mode import is_remote_mode
 from src.hardware_sim import create_hardware, FakeRfid
 from src.camera import image_buffer
 from src.event_timeline import TimelineAction, timeline_append
+from src.webpush import send_notification_to_all, register_notification_image
+from src.paths import pictures_thumbnails_dir
 
 from src.backend.constants import (
     TAG_TIMEOUT,
@@ -29,6 +33,8 @@ from src.backend.constants import (
     FAST_EXIT_POST_CAPTURE_SECONDS,
     EVENT_COOLDOWN_SECONDS,
     MAX_MOTION_BLOCK_SECONDS,
+    CAMERA_IDLE_RESUME_HOLD_S,
+    GLANCE_NOTIFICATION_COOLDOWN_S,
 )
 import src.backend.model_runtime as model_runtime
 import src.backend.mqtt_bridge as mqtt_bridge
@@ -180,6 +186,12 @@ def backend_main(
     timeline_rfid_cat_logged = None
     timeline_outside_reported = None
     previous_use_camera_for_motion = None
+    # 04.10, Sid ("peut-on choisir avec un bouton, pour voir l'impact CPU en
+    # direct"): PAUSE_CAMERA_WHEN_IDLE toggle - when on, the model only runs
+    # while PIR has seen motion recently (camera_idle_resume_until_mono),
+    # instead of analysing every frame continuously. See the pause()/resume()
+    # call site right after the PIR-combine block below.
+    camera_idle_resume_until_mono = 0.0
     exit_in_progress = False
     motion_block_active = False
     suppress_outside_motion_block = False
@@ -439,7 +451,7 @@ def backend_main(
                 logging.info("[BACKEND] Motion event conclusion: No one went inside.")
             else:
                 logging.info("[BACKEND] Motion event conclusion: Motion outside with mouse detected and entry blocked.")
-        elif first_motion_outside_mono < first_motion_inside_raw_mono:
+        elif first_motion_outside_mono != 0.0 and first_motion_outside_mono < first_motion_inside_raw_mono:
             if mouse_check_conditions["no_mouse_detected"]:
                 logging.info("[BACKEND] Motion event conclusion: Cat went inside.")
             else:
@@ -460,6 +472,34 @@ def backend_main(
             TimelineAction.EVENT_CONCLUSION,
             conclusion=str(event_type),
         )
+
+        # 04.10, Sid: "si proie detectee, puis entree validee, blocage de la
+        # sortie pendant x min" - a confirmed entry for the SAME cat a prey
+        # sighting was attributed to (any time earlier, not just this block -
+        # that's the whole point, the entry can happen long after the cat
+        # dropped the prey and the normal entry-block window has expired).
+        if event_type in (
+            EventType.CAT_WENT_INSIDE,
+            EventType.CAT_WENT_PROBABLY_INSIDE,
+            EventType.CAT_WENT_INSIDE_WITH_MOUSE,
+        ):
+            entering_rfid = tag_id if tag_id else tag_id_from_video
+            prey_rfid = getattr(backend_main, "prey_detection_rfid", None)
+            if entering_rfid and prey_rfid and entering_rfid == prey_rfid:
+                if CONFIG['BLOCK_EXIT_AFTER_PREY_ENTRY_ENABLED']:
+                    cat_settings_map_now = CatsRepo.get_cat_settings_map(CONFIG['KITTYHACK_DATABASE_PATH'])
+                    per_cat_ok = cat_settings_map_now.get(entering_rfid, {}).get('block_exit_after_prey', True)
+                    if per_cat_ok:
+                        if not hasattr(backend_main, "exit_block_until_mono_by_rfid"):
+                            backend_main.exit_block_until_mono_by_rfid = {}
+                        duration = float(CONFIG['BLOCK_EXIT_AFTER_PREY_ENTRY_DURATION'])
+                        backend_main.exit_block_until_mono_by_rfid[entering_rfid] = _mono() + duration
+                        logging.info(
+                            f"[BACKEND] Prey was seen with '{entering_rfid}' earlier; entry now confirmed, "
+                            f"blocking their exit for {duration:.0f}s (hidden-prey-retrieval guard)."
+                        )
+                # Consumed either way - don't let this sighting re-trigger on an unrelated later entry.
+                backend_main.prey_detection_rfid = None
 
         # Guard against state combinations where an outside-motion block is finalized
         # without a properly initialized outside start timestamp (e.g. block started from
@@ -511,6 +551,7 @@ def backend_main(
                                                             Event type: {all_events}
                                                             RFID tag: {tag_id or 'None'} 
                                                             Video tag: {tag_id_from_video or 'None'}""")
+        db_thread = None
         if ((len(ids_exceeding_mouse_th) + len(ids_exceeding_nomouse_th) + len(ids_exceeding_own_cat_th) > 0) or
             (event_type in [EventType.CAT_WENT_OUTSIDE]) or
             (tag_id is not None) or
@@ -552,13 +593,130 @@ def backend_main(
         if CONFIG.get('IMMEDIATE_LOCK_AFTER_PASSAGE'):
             event_cooldown_until_mono = _mono() + EVENT_COOLDOWN_SECONDS
 
+        rfid_for_event = tag_id if tag_id is not None else tag_id_from_video
+        cat_name = get_cat_name(rfid_for_event)
+        # get_cat_name() always returns a non-empty descriptive string (falls back
+        # to "No RFID found"/"Unknown RFID: xxx") - not suitable as a truthy check
+        # for "do we actually know which cat this is". Look the RFID up directly.
+        known_cat_name = cat_rfid_name_dict.get(rfid_for_event) if rfid_for_event else None
+
         if mqtt_bridge.mqtt_publisher:
-            if tag_id is not None:
-                cat_name = get_cat_name(tag_id)
-            else:
-                cat_name = get_cat_name(tag_id_from_video)
             mqtt_bridge.mqtt_publisher.publish_event_type(all_events, cat_name)
             mqtt_bridge.mqtt_publisher.publish_motion_outside(False)
+
+        # Native push notification, independent of MQTT/Home Assistant. Runs in
+        # its own thread (joining db_thread first) so the real just-captured
+        # photo can be attached instead of the cat's static profile picture -
+        # without blocking the main control loop on the DB write/thumbnail
+        # generation.
+        def _send_prey_push_notification(db_write_thread, event_list_str, known_cat, rfid):
+            if db_write_thread is not None:
+                db_write_thread.join(timeout=10.0)
+
+            event_list = [e.strip() for e in event_list_str.split(",")]
+            is_inside = any(e in ("cat_went_inside", "cat_went_inside_with_mouse") for e in event_list)
+            is_outside = "cat_went_outside" in event_list
+            is_glance = "motion_outside_only" in event_list
+            if not is_inside and not is_outside and not is_glance:
+                return
+
+            # 05.10, Sid ("notif a 17h52 qu'un chat est sorti alors que
+            # personne n'est sorti" - false positive traced to a motion
+            # event classified purely from PIR/beam timing, with ZERO
+            # identity confirmation: RFID tag None AND video-inferred tag
+            # None). `rfid` here is already rfid_for_event, the combined
+            # "RFID chip read OR video-model tag" value, so a falsy value
+            # means neither source identified a cat for this entry/exit.
+            # Scoped to is_inside/is_outside only - a glance naturally lacks
+            # an RFID read most of the time (the cat never touches the
+            # reader), so applying this there would silence nearly all
+            # glance notifications, which isn't what she asked for.
+            if (is_inside or is_outside) and not rfid:
+                return
+
+            # 05.10, Sid ("Untel a regarde" - minimum notification set): a
+            # glance (motion detected outside, no actual passage) is a real
+            # event type already, just never surfaced here before. Far more
+            # frequent than entry/exit though (hundreds of blocks/day for an
+            # active cat, some likely just wind/leaves, not a deliberate
+            # look) - a per-RFID cooldown keeps it from spamming every PIR
+            # blip near the door, unlike entry/exit which are naturally
+            # spaced out and need none.
+            if is_glance:
+                if not hasattr(backend_main, "last_glance_notification_mono_by_rfid"):
+                    backend_main.last_glance_notification_mono_by_rfid = {}
+                cooldown_key = rfid or "unknown"
+                last_sent = backend_main.last_glance_notification_mono_by_rfid.get(cooldown_key, 0.0)
+                if _mono() - last_sent < GLANCE_NOTIFICATION_COOLDOWN_S:
+                    return
+                backend_main.last_glance_notification_mono_by_rfid[cooldown_key] = _mono()
+
+            photo_url = None
+            # Only look up a fresh photo if a DB write actually happened for
+            # this event - otherwise the "newest" row would be a stale one
+            # from a previous, unrelated crossing.
+            try:
+                if db_write_thread is not None:
+                    # .join() above guarantees the write this notification is
+                    # for has completed; this loop processes one motion block
+                    # at a time, so the newest row is reliably ours.
+                    df = DatabaseCore.read_df_from_database(
+                        CONFIG['KITTYHACK_DATABASE_PATH'],
+                        "SELECT id FROM events ORDER BY id DESC LIMIT 1",
+                    )
+                else:
+                    df = None
+                if df is not None and not df.empty:
+                    thumb_path = os.path.join(pictures_thumbnails_dir(), f"{int(df.iloc[0]['id'])}.jpg")
+                    if os.path.exists(thumb_path):
+                        with open(thumb_path, "rb") as f:
+                            token = register_notification_image(f.read())
+                        photo_url = f"/notif-image/{token}.jpg"
+            except Exception as e:
+                logging.warning(f"[BACKEND] Could not attach event photo to push notification: {e}")
+
+            if not photo_url and rfid:
+                photo_url = f"/cat-photo/{rfid}.jpg"
+
+            try:
+                if is_inside:
+                    if not CONFIG['NOTIFY_CAT_ENTERED']:
+                        return
+                    body = (
+                        _("{cat} is back inside!").format(cat=known_cat)
+                        if known_cat else _("A cat came inside.")
+                    )
+                    send_notification_to_all(
+                        _("Kittyhack"), body, url="/", tag=f"kittyhack-inside-{_mono():.3f}", image=photo_url
+                    )
+                elif is_outside:
+                    if not CONFIG['NOTIFY_CAT_EXITED']:
+                        return
+                    body = (
+                        _("{cat} went outside!").format(cat=known_cat)
+                        if known_cat else _("A cat went outside.")
+                    )
+                    send_notification_to_all(
+                        _("Kittyhack"), body, url="/", tag=f"kittyhack-outside-{_mono():.3f}", image=photo_url
+                    )
+                else:
+                    if not CONFIG['NOTIFY_GLANCE_OUTSIDE']:
+                        return
+                    body = (
+                        _("{cat} looked outside but didn't go out.").format(cat=known_cat)
+                        if known_cat else _("A cat looked outside but didn't go out.")
+                    )
+                    send_notification_to_all(
+                        _("Kittyhack"), body, url="/", tag=f"kittyhack-glance-{_mono():.3f}", image=photo_url
+                    )
+            except Exception as e:
+                logging.warning(f"[BACKEND] Failed to send push notification: {e}")
+
+        threading.Thread(
+            target=_send_prey_push_notification,
+            args=(db_thread, all_events, known_cat_name, rfid_for_event),
+            daemon=True,
+        ).start()
 
         tag_id_from_video = None
         motion_timeline_entries = []
@@ -596,6 +754,7 @@ def backend_main(
         nonlocal known_rfid_tags, last_auto_model_recover_mono, last_fps_metadata_write_mono, last_inside_crossing, last_inside_raw_crossing, last_low_fps_check_mono, last_motion_inside_mono, last_motion_inside_raw_mono
         nonlocal last_motion_outside_mono, last_motion_outside_tm, last_outside_crossing, last_written_effective_fps, low_fps_window_count, motion_block_id, motion_inside, motion_inside_mono
         nonlocal motion_inside_raw, motion_inside_raw_mono, motion_outside, motion_outside_mono, motion_outside_raw, pending_exit_rfid_check, pending_fast_exit_finalize_mono, previous_use_camera_for_motion
+        nonlocal camera_idle_resume_until_mono
         nonlocal rfid_thread, suppress_entry_decision_after_fast_exit, suppress_inside_motion_block, suppress_outside_motion_block, tag_id, tag_id_from_video, tag_id_valid, tag_seen_mono
         nonlocal tag_timestamp, timeline_no_prey_logged, timeline_prey_logged, timeline_rfid_cat_logged, timeline_video_cat_logged, unlock_inside, unlock_inside_decision_made, unlock_inside_tm
         nonlocal unlock_outside_tm, wait_for_outside_rising_after_exit
@@ -708,13 +867,52 @@ def backend_main(
         last_inside_raw_crossing_prev = last_inside_raw_crossing
 
         if use_camera_for_motion:
-            # Decide if motion occured currently. Look up to 5 seconds into the past for images with cats
-            cat_imgs = image_buffer.get_filtered_ids_recent(seconds=5.0, min_own_cat_probability=CONFIG['CAT_THRESHOLD'])
+            # Decide if motion occured currently. Look up to 5 seconds into the past for images with cats.
+            # Uses CAT_MOTION_THRESHOLD (lower, just "a cat is there") rather than CAT_THRESHOLD
+            # (higher, "trust this specific identity enough to open without RFID") - 04.10, Sid:
+            # a single shared threshold meant lowering it to catch more real visits also made the
+            # Patoune/Nala video misidentification worse, so the two decisions are now independent.
+            cat_imgs = image_buffer.get_filtered_ids_recent(seconds=5.0, min_own_cat_probability=CONFIG['CAT_MOTION_THRESHOLD'])
             motion_outside = 1 if len(cat_imgs) > 0 else 0
             # Motion raw does not exist for the camera, so we set it to the same value as motion_outside
             motion_outside_raw = motion_outside
             # Still use PIR for inside motion
             __, motion_inside, __, motion_inside_raw = pir.get_states()
+
+            # 04.10, Sid ("pourquoi je peux pas avoir les deux?"): the camera
+            # tends to lose the cat right at the flap, PIR doesn't - so OR
+            # the two together instead of trusting the camera alone. Both
+            # signals already reach this process either way (PIR over the
+            # remote websocket, camera over its own stream), nothing extra
+            # to read.
+            if CONFIG['COMBINE_PIR_AND_CAMERA_OUTSIDE_MOTION']:
+                pir_outside, __, pir_outside_raw, __ = pir.get_states()
+                if pir_outside:
+                    motion_outside = 1
+                if pir_outside_raw:
+                    motion_outside_raw = 1
+
+            # 04.10, Sid: "activer camera quand PIR detecte un truc" - optional
+            # toggle so she can A/B the CPU impact live. The chatiere camera's
+            # continuous inference (model_runtime.model_handler) is the single
+            # biggest CPU cost on the box (measured ~260% of 400% total) - when
+            # this is on, it only runs for CAMERA_IDLE_RESUME_HOLD_S after the
+            # last real PIR edge instead of nonstop. Trade-off: if PIR itself
+            # ever misses a very brief passage (it has before - see 04.10
+            # CAT_MOTION_THRESHOLD split notes), the camera won't wake either in
+            # that exact case, unlike today's always-on behaviour.
+            if CONFIG.get('PAUSE_CAMERA_WHEN_IDLE'):
+                pir_outside_now, __, pir_outside_raw_now, __ = pir.get_states()
+                if pir_outside_now or pir_outside_raw_now:
+                    camera_idle_resume_until_mono = _mono() + CAMERA_IDLE_RESUME_HOLD_S
+                if _mono() < camera_idle_resume_until_mono:
+                    if model_runtime.model_handler.paused:
+                        model_runtime.model_handler.resume()
+                elif not model_runtime.model_handler.paused:
+                    model_runtime.model_handler.pause()
+            elif model_runtime.model_handler.paused:
+                # Toggle just got switched back off - don't leave it stuck paused.
+                model_runtime.model_handler.resume()
         else:
             motion_outside, motion_inside, motion_outside_raw, motion_inside_raw = pir.get_states()
 
@@ -860,7 +1058,7 @@ def backend_main(
             if use_camera_for_motion:
                 first_motion_outside_tm = _wall() - 0.5
                 first_motion_outside_mono = _mono() - 0.5
-                additional_log_info = f"| configured cat detection threshold: {CONFIG['CAT_THRESHOLD']} "
+                additional_log_info = f"| configured cat motion threshold: {CONFIG['CAT_MOTION_THRESHOLD']} "
             else:
                 first_motion_outside_tm = _wall()
                 first_motion_outside_mono = _mono()
@@ -873,7 +1071,24 @@ def backend_main(
             logging.info(f"[BACKEND] cat_settings_map: {cat_settings_map}")
             if mqtt_bridge.mqtt_publisher:
                 mqtt_bridge.mqtt_publisher.publish_motion_outside(True)
-        
+            # 05.10, Sid ("liste des notifications... pouvoir choisir"):
+            # off by default (see baseconfig.py) - a raw PIR/camera edge,
+            # not an actual event classification, so this fires far more
+            # often than any of the others. Global cooldown (not per-RFID,
+            # no tag read yet this early) reusing the same interval as the
+            # glance notification.
+            if CONFIG['NOTIFY_MOTION_OUTSIDE']:
+                last_sent = getattr(backend_main, "last_motion_outside_notification_mono", 0.0)
+                if _mono() - last_sent >= GLANCE_NOTIFICATION_COOLDOWN_S:
+                    backend_main.last_motion_outside_notification_mono = _mono()
+                    try:
+                        send_notification_to_all(
+                            _("Kittyhack"), _("Motion detected outside."),
+                            url="/", tag=f"kittyhack-motion-outside-{_mono():.3f}",
+                        )
+                    except Exception as e:
+                        logging.warning(f"[BACKEND] Failed to send motion-outside push notification: {e}")
+
         if last_inside_raw == 0 and motion_inside_raw == 1: # Inside motion detected
             logging.debug("[BACKEND] Motion detected INSIDE (raw)")
             first_motion_inside_raw_tm = _wall()
@@ -986,9 +1201,17 @@ def backend_main(
                 per_cat_exit_allowed = True
                 pending_exit_rfid_check = False
 
+            # 04.10, Sid: deny exit for a cat still inside the post-entry
+            # window set by the prey-sighting -> confirmed-entry logic above
+            # (hidden-prey-retrieval guard).
+            exit_blocked_after_prey = False
+            if CONFIG['BLOCK_EXIT_AFTER_PREY_ENTRY_ENABLED'] and tag_id:
+                until_mono = getattr(backend_main, "exit_block_until_mono_by_rfid", {}).get(tag_id, 0.0)
+                exit_blocked_after_prey = _mono() < until_mono
+
             # Only attempt unlock now if we are not waiting for an RFID tag
             if not pending_exit_rfid_check:
-                if check_allowed_to_exit() == True and per_cat_exit_allowed:
+                if check_allowed_to_exit() == True and per_cat_exit_allowed and not exit_blocked_after_prey:
                     if magnets.get_inside_state() == True:
                         logging.info("[BACKEND] Inside magnet is already unlocked. Only one magnet is allowed. --> Outside magnet will not be unlocked.")
                     else:
@@ -999,12 +1222,26 @@ def backend_main(
                             _timeline_log_outside_open()
                             # Mark this motion block as exit
                             exit_in_progress = True
+                elif exit_blocked_after_prey:
+                    logging.info(f"[BACKEND] Exit denied for '{tag_id}': blocked after a confirmed prey-flagged entry (hidden-prey-retrieval guard). YOU SHALL NOT PASS!")
                 else:
                     logging.info("[BACKEND] No cats are allowed to exit. YOU SHALL NOT PASS!")
-            
+
             # Publish the inside motion state to MQTT
             if mqtt_bridge.mqtt_publisher:
                 mqtt_bridge.mqtt_publisher.publish_motion_inside(True)
+            # 05.10, Sid - same reasoning as the outside one above.
+            if CONFIG['NOTIFY_MOTION_INSIDE']:
+                last_sent = getattr(backend_main, "last_motion_inside_notification_mono", 0.0)
+                if _mono() - last_sent >= GLANCE_NOTIFICATION_COOLDOWN_S:
+                    backend_main.last_motion_inside_notification_mono = _mono()
+                    try:
+                        send_notification_to_all(
+                            _("Kittyhack"), _("Motion detected inside."),
+                            url="/", tag=f"kittyhack-motion-inside-{_mono():.3f}",
+                        )
+                    except Exception as e:
+                        logging.warning(f"[BACKEND] Failed to send motion-inside push notification: {e}")
 
         # Turn off the RFID reader if no motion outside and inside
         if ( (motion_outside == 0) and (motion_inside == 0) and
@@ -1027,8 +1264,22 @@ def backend_main(
                 wait_for_outside_rising_after_exit = True
                 _timeline_log_outside_close()
 
-        # Check also for a cat via the camera, if the option is enabled and no RFID tag is detected
-        if CONFIG['USE_CAMERA_FOR_CAT_DETECTION'] and tag_id_from_video is None and motion_outside == 1:
+        # Check also for a cat via the camera, if the option is enabled.
+        #
+        # 05.10, Sid ("Patoune vient de sortir et la notif dit que Patoune
+        # est entré" investigation): a real bug, confirmed via logs from a
+        # live multi-cat block - Nala was video-matched once early on at
+        # 65% probability, then this whole check was skipped for the REST
+        # of the block (the old `tag_id_from_video is None` guard locked
+        # the very first match in forever), even though ~20 later frames in
+        # the SAME block showed Patoune instead, repeatedly, up to 92%. The
+        # block's video tag stayed "Nala" the entire time. Fix: keep
+        # re-scanning the full accumulated window every tick instead of
+        # stopping after the first hit, so a later, better-evidenced cat
+        # can correct an earlier weak match. Only log/update the timeline
+        # when the best candidate actually changes, to avoid spamming one
+        # log line per camera frame.
+        if CONFIG['USE_CAMERA_FOR_CAT_DETECTION'] and motion_outside == 1:
             imgs_with_cats = image_buffer.get_filtered_ids(first_motion_outside_tm, min_own_cat_probability=CONFIG['CAT_THRESHOLD'])
             if len(imgs_with_cats) > 0:
                 # Find the element with the highest probability
@@ -1043,11 +1294,11 @@ def backend_main(
                             max_prob = obj_probability
                             detected_cat = obj_name
                 if detected_cat != "":
-                    logging.info(f"[BACKEND] Detected cat '{detected_cat}' by video stream with probability {max_prob:.2f} in image ID {element}")
                     # Look for the cat name in the values of the dictionary
                     matching_tag = next((rfid for rfid, name in cat_rfid_name_dict.items() if name.lower() == detected_cat), None)
-                    if matching_tag:
+                    if matching_tag and matching_tag != tag_id_from_video:
                         tag_id_from_video = matching_tag
+                        logging.info(f"[BACKEND] Detected cat '{detected_cat}' by video stream with probability {max_prob:.2f} in image ID {element}")
                         logging.info(f"[BACKEND] Detected cat '{detected_cat}' matches RFID tag '{tag_id_from_video}'")
                         if timeline_video_cat_logged != matching_tag:
                             timeline_video_cat_logged = matching_tag
@@ -1142,7 +1393,13 @@ def backend_main(
                 logging.info("[BACKEND] Inside motion ended before RFID tag was detected; outside will remain locked.")
             elif tag_id is not None:
                 try:
-                    per_cat_exit_allowed2, _, exit_flag2 = resolve_per_cat_exit(
+                    # 05.10: NOT "_" - this function also calls the gettext _()
+                    # translator (prey push notification below), and Python
+                    # treats _ as local to the whole function once assigned
+                    # anywhere in it, even conditionally - that silently broke
+                    # _() with "cannot access local variable '_'" whenever this
+                    # branch hadn't run yet in a given pass.
+                    per_cat_exit_allowed2, _unused_reason2, exit_flag2 = resolve_per_cat_exit(
                         AllowedToExit.CONFIGURE_PER_CAT,
                         tag_id,
                         cat_settings_map,
@@ -1236,10 +1493,24 @@ def backend_main(
                     logging.info("[BACKEND] All cats are allowed to enter. Kitty is allowed to enter...")
 
         # Forget the tag after the tag timeout and no motion outside:
-        if ( (tag_id is not None) and 
+        # 04.10, Sid ("il est sorti mais il est dedans") - real bug, found
+        # from a genuine exit: Patoune's RFID was read at the start of a
+        # slow exit (cats that sniff/paw/hesitate before committing can take
+        # well over a minute start to finish), but by the time the motion
+        # block actually concluded, this condition had already wiped the
+        # tag - `motion_outside` can momentarily read 0 mid-passage (a lull
+        # in detection, not the cat leaving), and this check never looked at
+        # whether an event was still open. Result: the final "cat went
+        # outside" was written with no rfid, so Presence never updated and
+        # kept showing him as still inside. Added `not motion_block_active`
+        # so the tag survives for the whole currently-open event, exit or
+        # entry, and is only forgotten once that event has actually
+        # concluded.
+        if ( (tag_id is not None) and
             (tag_seen_mono > 0.0) and
             (_mono() > (tag_seen_mono + TAG_TIMEOUT)) and
-            (motion_outside == 0) ):
+            (motion_outside == 0) and
+            (not motion_block_active) ):
             rfid.set_tag(None, 0.0)
             tag_seen_mono = 0.0
             logging.info("[BACKEND] Tag timeout reached. Forget the tag.")
@@ -1340,9 +1611,57 @@ def backend_main(
             ):
                 backend_main.prey_detection_mono = _mono()
                 backend_main.prey_detection_tm = _wall()
+                # 04.10, Sid: Patoune's trick - drop the prey outside, wait out
+                # the entry-block window, come in prey-free, then reach a paw
+                # back out for it. Remember WHICH cat this sighting belongs to
+                # so a later confirmed entry (even well after this moment) can
+                # trigger the new post-entry exit block. Only set if not
+                # already set this detection streak (don't overwrite with None
+                # if the cat gets identified a beat later - the entry-time
+                # check below prefers tag_id at that moment anyway).
+                if not getattr(backend_main, "prey_detection_rfid", None):
+                    backend_main.prey_detection_rfid = tag_id if tag_id else tag_id_from_video
                 if not timeline_prey_logged:
                     timeline_prey_logged = True
                     timeline_append(motion_timeline_entries, TimelineAction.PREY_DETECTED)
+                    # 04.10, Sid: "est-ce que je reçois un message différent
+                    # [si une proie est détectée] pour pouvoir potentiellement
+                    # directement ouvrir la chatière si c'est faux" - jusqu'ici
+                    # NON: seules les notifs "cat went inside/outside" existent
+                    # (_send_prey_push_notification plus bas, malgré son nom,
+                    # n'a jamais eu de branche proie), donc une entrée bloquée
+                    # par une proie ne generait litteralement aucune notif.
+                    # Ajout d'une alerte dediee ici, avec la photo qui a
+                    # declenche la detection, pour qu'elle puisse juger sur
+                    # piece si c'est une vraie proie ou un faux positif.
+                    try:
+                        if CONFIG['NOTIFY_PREY_DETECTED']:
+                            prey_cat_name = get_cat_name(tag_id if tag_id else tag_id_from_video)
+                            prey_photo_url = None
+                            try:
+                                if ids_with_mouse:
+                                    best_id = max(
+                                        ids_with_mouse,
+                                        key=lambda i: getattr(image_buffer.get_by_id(i), "mouse_probability", 0.0) or 0.0,
+                                    )
+                                    elem = image_buffer.get_by_id(best_id)
+                                    img_bytes = (elem.modified_image or elem.original_image) if elem else None
+                                    if img_bytes:
+                                        token = register_notification_image(img_bytes)
+                                        prey_photo_url = f"/notif-image/{token}.jpg"
+                            except Exception as e:
+                                logging.warning(f"[BACKEND] Could not attach prey photo to push notification: {e}")
+
+                            lock_minutes = int(float(CONFIG['LOCK_DURATION_AFTER_PREY_DETECTION']) // 60)
+                            prey_body = _(
+                                "Prey detected ({cat}) - entry blocked for {minutes} min. "
+                                "False alarm? Reset the cooldown from Live view."
+                            ).format(cat=prey_cat_name, minutes=lock_minutes)
+                            send_notification_to_all(
+                                _("Kittyhack"), prey_body, url="/", tag=f"kittyhack-prey-{_mono():.3f}", image=prey_photo_url
+                            )
+                    except Exception as e:
+                        logging.warning(f"[BACKEND] Failed to send prey push notification: {e}")
                 logging.info(
                     f"[BACKEND] Detected prey in the images. Set prey detection times (mono={backend_main.prey_detection_mono}, wall={backend_main.prey_detection_tm})."
                 )

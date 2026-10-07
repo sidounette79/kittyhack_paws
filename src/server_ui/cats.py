@@ -24,6 +24,322 @@ else:
     from src.pir import Pir
 
 
+def build_cat_settings_card(data_row):
+    """One cat's full settings card (name/RFID/per-cat switches/photo/stats/
+    delete) - the body of the old per-row loop in ui_manage_cats(), pulled
+    out so presence.py's per-cat detail view (05.10, page merge step 2) can
+    render the exact same card for just the one selected cat, not just a
+    list of all of them. ui_manage_cats() below still calls this in its own
+    loop - same card, same input ids (f"mng_cat_..._{data_row['id']}"), same
+    manage_cat_save() handler reads them regardless of which page rendered
+    them."""
+    if data_row["cat_image"]:
+        try:
+            decoded_picture = base64.b64encode(data_row["cat_image"]).decode("utf-8")
+        except:
+            decoded_picture = None
+    else:
+        decoded_picture = None
+    img_html = (
+        f'<div style="text-align: center;"><img style="max-width: 400px !important;" '
+        f'src="data:image/jpeg;base64,{decoded_picture}" /></div>'
+        if decoded_picture
+        else '<div class="placeholder-image"><strong>'
+        + _("No picture found!")
+        + "</strong></div>"
+    )
+
+    entry_mode_per_cat = CONFIG["ALLOWED_TO_ENTER"].value == "configure_per_cat"
+    exit_mode_per_cat = CONFIG["ALLOWED_TO_EXIT"].value == "configure_per_cat"
+    entry_style = (
+        "padding-bottom: 20px;"
+        if entry_mode_per_cat
+        else "pointer-events: none; opacity: 0.6;"
+    )
+    exit_style = (
+        "padding-bottom: 20px;"
+        if exit_mode_per_cat
+        else "pointer-events: none; opacity: 0.6;"
+    )
+    prey_style = (
+        "padding-bottom: 20px;"
+        if CONFIG["MOUSE_CHECK_ENABLED"]
+        else "pointer-events: none; opacity: 0.6;"
+    )
+
+    settings_rows = []
+
+    # Cat specific settings header
+    settings_rows.append(
+        [
+            ui.row(
+                ui.column(
+                    12,
+                    ui.div(
+                        ui.markdown(_("##### Cat-specific settings")),
+                        style_="text-align: center;",
+                    ),
+                )
+            ),
+            ui.br(),
+        ]
+    )
+
+    # Prey detection
+    settings_rows.append(
+        ui.row(
+            ui.column(
+                12,
+                ui.div(
+                    ui.input_switch(
+                        id=f"mng_cat_prey_{data_row['id']}",
+                        label=_("Enable Prey detection"),
+                        value=bool(int(data_row.get("enable_prey_detection", 1))),
+                    ),
+                    style_=prey_style,
+                ),
+            )
+        )
+    )
+    if not CONFIG["MOUSE_CHECK_ENABLED"]:
+        settings_rows.append(
+            ui.row(
+                ui.column(
+                    12,
+                    ui.markdown(
+                        _(
+                            "**Disabled:** Global prey detection is turned off in the `CONFIGURATION` section. Enable `Detect prey` to use per-cat settings."
+                        )
+                    ),
+                    style_="color: grey;",
+                ),
+                style_="padding-bottom: 20px;",
+            )
+        )
+
+    # 04.10, Sid: per-cat override for "block exit after a
+    # prey-flagged entry" (hidden-prey-retrieval guard) - same
+    # pattern as the prey-detection switch just above.
+    settings_rows.append(
+        ui.row(
+            ui.column(
+                12,
+                ui.div(
+                    ui.input_switch(
+                        id=f"mng_cat_block_exit_after_prey_{data_row['id']}",
+                        label=_("Block exit after a prey-flagged entry"),
+                        value=bool(int(data_row.get("block_exit_after_prey", 1))),
+                    ),
+                    style_=prey_style,
+                ),
+            )
+        )
+    )
+    if not CONFIG["BLOCK_EXIT_AFTER_PREY_ENTRY_ENABLED"]:
+        settings_rows.append(
+            ui.row(
+                ui.column(
+                    12,
+                    ui.markdown(
+                        _(
+                            "**Disabled:** This is turned off globally in the `CONFIGURATION` section."
+                        )
+                    ),
+                    style_="color: grey;",
+                ),
+                style_="padding-bottom: 20px;",
+            )
+        )
+
+        # Allow entry switch
+    settings_rows.append(
+        ui.row(
+            ui.column(
+                12,
+                ui.div(
+                    ui.input_switch(
+                        id=f"mng_cat_allow_entry_{data_row['id']}",
+                        label=_("Allow entry"),
+                        value=bool(int(data_row.get("allow_entry", 1))),
+                    ),
+                    style_=entry_style,
+                ),
+            )
+        )
+    )
+    if not entry_mode_per_cat:
+        settings_rows.append(
+            ui.row(
+                ui.column(
+                    12,
+                    ui.markdown(
+                        _(
+                            "**Disabled:** This feature is only available in `Individual configuration per cat` mode for entry."
+                        )
+                    ),
+                    style_="color: grey;",
+                ),
+                style_="padding-bottom: 20px;",
+            )
+        )
+
+        # Allow exit switch
+    settings_rows.append(
+        ui.row(
+            ui.column(
+                12,
+                ui.div(
+                    ui.input_switch(
+                        id=f"mng_cat_allow_exit_{data_row['id']}",
+                        label=_("Allow exit"),
+                        value=bool(int(data_row.get("allow_exit", 1))),
+                    ),
+                    style_=exit_style,
+                ),
+            )
+        )
+    )
+    # Show warning if per-cat exit mode is active but no RFID assigned
+    if exit_mode_per_cat and not data_row.get("rfid"):
+        settings_rows.append(
+            ui.row(
+                ui.column(
+                    12,
+                    ui.markdown(
+                        f"{icon_svg('triangle-exclamation', margin_left='-0.1em')} "
+                        + _(
+                            "This cat has no RFID configured. The individual exit per cat works only for cats with a RFID chip!"
+                        )
+                    ),
+                    style_="color:#b94a48;",
+                ),
+                style_="padding-bottom: 20px;",
+            )
+        )
+    if not exit_mode_per_cat:
+        settings_rows.append(
+            ui.row(
+                ui.column(
+                    12,
+                    ui.markdown(
+                        _(
+                            "**Disabled:** This feature is only available in `Individual configuration per cat` mode for exit."
+                        )
+                    ),
+                    style_="color: grey;",
+                ),
+                style_="padding-bottom: 20px;",
+            )
+        )
+
+    settings_section = ui.div(
+        ui.div(
+            *settings_rows,
+            class_="cat-settings-container",
+        ),
+        class_="align-left",
+    )
+
+    # --- Stats (OnlyCat/Flappie-inspired, 05.10, Sid) ---
+    stats_html = ""
+    if data_row["rfid"]:
+        stats = CatsRepo.get_cat_stats(
+            CONFIG["KITTYHACK_DATABASE_PATH"], data_row["rfid"], days=30
+        )
+        busiest = (
+            _("{}:00").format(stats["busiest_hour"])
+            if stats["busiest_hour"] is not None
+            else "—"
+        )
+        stats_html = f'''
+        <div class="kh-cat-stats" style="display:flex; flex-wrap:wrap; gap:8px; justify-content:center; padding: 8px 0 16px 0;">
+            <div class="badge text-bg-secondary">{_("Entries")}: {stats["entries"]}</div>
+            <div class="badge text-bg-secondary">{_("Exits")}: {stats["exits"]}</div>
+            <div class="badge text-bg-secondary">{_("Glances")}: {stats["glances"]}</div>
+            <div class="badge text-bg-danger">{_("Prey blocked")}: {stats["prey_blocked"]}</div>
+            <div class="badge text-bg-secondary">{_("Busiest hour")}: {busiest}</div>
+        </div>
+        <div style="text-align:center; opacity:0.65; font-size:0.85rem; margin-top:-8px; padding-bottom: 8px;">
+            {_("Last 30 days")}
+        </div>'''
+
+    # --- Assemble card ---
+    return ui.card(
+        ui.card_header(
+            ui.div(
+                ui.column(
+                    12,
+                    ui.input_text(
+                        id=f"mng_cat_name_{data_row['id']}",
+                        label=_("Name"),
+                        value=data_row["name"],
+                        width="100%",
+                    ),
+                ),
+                ui.br(),
+                ui.column(
+                    12,
+                    ui.input_text(
+                        id=f"mng_cat_rfid_{data_row['id']}",
+                        label=_("RFID"),
+                        value=data_row["rfid"],
+                        width="100%",
+                    ),
+                ),
+                ui.column(
+                    12,
+                    ui.div(
+                        id=f"mng_cat_rfid_status_{data_row['id']}",
+                        class_="rfid-status rfid-empty",
+                    ),
+                ),
+                ui.column(
+                    12,
+                    ui.help_text(
+                        _(
+                            "NOTE: This is NOT the number which stands in the booklet of your vet! You must use the the ID, which is read by the Kittyflap. It is 16 characters long and consists of numbers (0-9) and letters (A-F)."
+                        )
+                    ),
+                ),
+                ui.column(
+                    12,
+                    ui.help_text(
+                        _(
+                            "If you have entered the RFID correctly here, the name of the cat will be displayed in the [PICTURES] section."
+                        )
+                    ),
+                ),
+                ui.br(),
+                settings_section,
+                ui.br(),
+                ui.column(
+                    12,
+                    uix.input_file(
+                        id=f"mng_cat_pic_{data_row['id']}",
+                        label=_("Change Picture"),
+                        accept=[".jpg", ".png"],
+                        width="100%",
+                    ),
+                ),
+            )
+        ),
+        ui.HTML(img_html),
+        ui.HTML(stats_html) if stats_html else None,
+        ui.card_footer(
+            ui.div(
+                ui.input_checkbox(
+                    id=f"mng_cat_del_{data_row['id']}",
+                    label=_("Delete {} from the database").format(data_row["name"]),
+                    value=False,
+                ),
+                style_="padding-top: 20px; display: flex; justify-content: center;",
+            )
+        ),
+        full_screen=False,
+        class_="image-container",
+    )
+
+
 def register_cats(input, output, session, ctx: SessionContext):
     """Register Manage Cats / Add Cat tab handlers."""
 
@@ -37,266 +353,7 @@ def register_cats(input, output, session, ctx: SessionContext):
         )
         if not df_cats.empty:
             for __, data_row in df_cats.iterrows():
-                # --- Picture ---
-                if data_row["cat_image"]:
-                    try:
-                        decoded_picture = base64.b64encode(
-                            data_row["cat_image"]
-                        ).decode("utf-8")
-                    except:
-                        decoded_picture = None
-                else:
-                    decoded_picture = None
-                img_html = (
-                    f'<div style="text-align: center;"><img style="max-width: 400px !important;" '
-                    f'src="data:image/jpeg;base64,{decoded_picture}" /></div>'
-                    if decoded_picture
-                    else '<div class="placeholder-image"><strong>'
-                    + _("No picture found!")
-                    + "</strong></div>"
-                )
-
-                entry_mode_per_cat = (
-                    CONFIG["ALLOWED_TO_ENTER"].value == "configure_per_cat"
-                )
-                exit_mode_per_cat = (
-                    CONFIG["ALLOWED_TO_EXIT"].value == "configure_per_cat"
-                )
-                entry_style = (
-                    "padding-bottom: 20px;"
-                    if entry_mode_per_cat
-                    else "pointer-events: none; opacity: 0.6;"
-                )
-                exit_style = (
-                    "padding-bottom: 20px;"
-                    if exit_mode_per_cat
-                    else "pointer-events: none; opacity: 0.6;"
-                )
-                prey_style = (
-                    "padding-bottom: 20px;"
-                    if CONFIG["MOUSE_CHECK_ENABLED"]
-                    else "pointer-events: none; opacity: 0.6;"
-                )
-
-                settings_rows = []
-
-                # Cat specific settings header
-                settings_rows.append(
-                    [
-                        ui.row(
-                            ui.column(
-                                12,
-                                ui.div(
-                                    ui.markdown(_("##### Cat-specific settings")),
-                                    style_="text-align: center;",
-                                ),
-                            )
-                        ),
-                        ui.br(),
-                    ]
-                )
-
-                # Prey detection
-                settings_rows.append(
-                    ui.row(
-                        ui.column(
-                            12,
-                            ui.div(
-                                ui.input_switch(
-                                    id=f"mng_cat_prey_{data_row['id']}",
-                                    label=_("Enable Prey detection"),
-                                    value=bool(
-                                        int(data_row.get("enable_prey_detection", 1))
-                                    ),
-                                ),
-                                style_=prey_style,
-                            ),
-                        )
-                    )
-                )
-                if not CONFIG["MOUSE_CHECK_ENABLED"]:
-                    settings_rows.append(
-                        ui.row(
-                            ui.column(
-                                12,
-                                ui.markdown(
-                                    _(
-                                        "**Disabled:** Global prey detection is turned off in the `CONFIGURATION` section. Enable `Detect prey` to use per-cat settings."
-                                    )
-                                ),
-                                style_="color: grey;",
-                            ),
-                            style_="padding-bottom: 20px;",
-                        )
-                    )
-
-                    # Allow entry switch
-                settings_rows.append(
-                    ui.row(
-                        ui.column(
-                            12,
-                            ui.div(
-                                ui.input_switch(
-                                    id=f"mng_cat_allow_entry_{data_row['id']}",
-                                    label=_("Allow entry"),
-                                    value=bool(int(data_row.get("allow_entry", 1))),
-                                ),
-                                style_=entry_style,
-                            ),
-                        )
-                    )
-                )
-                if not entry_mode_per_cat:
-                    settings_rows.append(
-                        ui.row(
-                            ui.column(
-                                12,
-                                ui.markdown(
-                                    _(
-                                        "**Disabled:** This feature is only available in `Individual configuration per cat` mode for entry."
-                                    )
-                                ),
-                                style_="color: grey;",
-                            ),
-                            style_="padding-bottom: 20px;",
-                        )
-                    )
-
-                    # Allow exit switch
-                settings_rows.append(
-                    ui.row(
-                        ui.column(
-                            12,
-                            ui.div(
-                                ui.input_switch(
-                                    id=f"mng_cat_allow_exit_{data_row['id']}",
-                                    label=_("Allow exit"),
-                                    value=bool(int(data_row.get("allow_exit", 1))),
-                                ),
-                                style_=exit_style,
-                            ),
-                        )
-                    )
-                )
-                # Show warning if per-cat exit mode is active but no RFID assigned
-                if exit_mode_per_cat and not data_row.get("rfid"):
-                    settings_rows.append(
-                        ui.row(
-                            ui.column(
-                                12,
-                                ui.markdown(
-                                    f"{icon_svg('triangle-exclamation', margin_left='-0.1em')} "
-                                    + _(
-                                        "This cat has no RFID configured. The individual exit per cat works only for cats with a RFID chip!"
-                                    )
-                                ),
-                                style_="color:#b94a48;",
-                            ),
-                            style_="padding-bottom: 20px;",
-                        )
-                    )
-                if not exit_mode_per_cat:
-                    settings_rows.append(
-                        ui.row(
-                            ui.column(
-                                12,
-                                ui.markdown(
-                                    _(
-                                        "**Disabled:** This feature is only available in `Individual configuration per cat` mode for exit."
-                                    )
-                                ),
-                                style_="color: grey;",
-                            ),
-                            style_="padding-bottom: 20px;",
-                        )
-                    )
-
-                settings_section = ui.div(
-                    ui.div(
-                        *settings_rows,
-                        class_="cat-settings-container",
-                    ),
-                    class_="align-left",
-                )
-
-                # --- Assemble card ---
-                ui_cards.append(
-                    ui.card(
-                        ui.card_header(
-                            ui.div(
-                                ui.column(
-                                    12,
-                                    ui.input_text(
-                                        id=f"mng_cat_name_{data_row['id']}",
-                                        label=_("Name"),
-                                        value=data_row["name"],
-                                        width="100%",
-                                    ),
-                                ),
-                                ui.br(),
-                                ui.column(
-                                    12,
-                                    ui.input_text(
-                                        id=f"mng_cat_rfid_{data_row['id']}",
-                                        label=_("RFID"),
-                                        value=data_row["rfid"],
-                                        width="100%",
-                                    ),
-                                ),
-                                ui.column(
-                                    12,
-                                    ui.div(
-                                        id=f"mng_cat_rfid_status_{data_row['id']}",
-                                        class_="rfid-status rfid-empty",
-                                    ),
-                                ),
-                                ui.column(
-                                    12,
-                                    ui.help_text(
-                                        _(
-                                            "NOTE: This is NOT the number which stands in the booklet of your vet! You must use the the ID, which is read by the Kittyflap. It is 16 characters long and consists of numbers (0-9) and letters (A-F)."
-                                        )
-                                    ),
-                                ),
-                                ui.column(
-                                    12,
-                                    ui.help_text(
-                                        _(
-                                            "If you have entered the RFID correctly here, the name of the cat will be displayed in the [PICTURES] section."
-                                        )
-                                    ),
-                                ),
-                                ui.br(),
-                                settings_section,
-                                ui.br(),
-                                ui.column(
-                                    12,
-                                    uix.input_file(
-                                        id=f"mng_cat_pic_{data_row['id']}",
-                                        label=_("Change Picture"),
-                                        accept=[".jpg", ".png"],
-                                        width="100%",
-                                    ),
-                                ),
-                            )
-                        ),
-                        ui.HTML(img_html),
-                        ui.card_footer(
-                            ui.div(
-                                ui.input_checkbox(
-                                    id=f"mng_cat_del_{data_row['id']}",
-                                    label=_("Delete {} from the database").format(
-                                        data_row["name"]
-                                    ),
-                                    value=False,
-                                ),
-                                style_="padding-top: 20px; display: flex; justify-content: center;",
-                            )
-                        ),
-                        full_screen=False,
-                        class_="image-container",
-                    )
-                )
+                ui_cards.append(build_cat_settings_card(data_row))
             return ui.div(
                 ui.tags.div(
                     {
@@ -359,9 +416,30 @@ def register_cats(input, output, session, ctx: SessionContext):
                 db_allow_entry = bool(int(data_row.get("allow_entry", 1)))
                 db_allow_exit = bool(int(data_row.get("allow_exit", 1)))
 
+                # 05.10, Sid (page merge, step 2 - "supprimer la page gerer
+                # les chats"): this loop used to assume every cat's card was
+                # rendered on screen at once (the old all-cats list page).
+                # Now a single cat's card can be the only one rendered (the
+                # presence detail view, one cat at a time) - reading an
+                # input id that was never rendered would compare against
+                # None and look like "changed to blank", which would wipe
+                # that cat's data. Skip any cat whose own name field isn't
+                # actually present rather than risk that.
+                if f"mng_cat_name_{db_id}" not in input:
+                    continue
+
                 card_name = input[f"mng_cat_name_{db_id}"]()
                 card_rfid = input[f"mng_cat_rfid_{db_id}"]().strip().upper()
                 card_prey = input[f"mng_cat_prey_{db_id}"]()
+                db_block_exit_after_prey = bool(int(data_row.get("block_exit_after_prey", 1)))
+                card_block_exit_after_prey = input[
+                    f"mng_cat_block_exit_after_prey_{db_id}"
+                ]()
+                if db_block_exit_after_prey != card_block_exit_after_prey:
+                    updated_cats.append(db_id)
+                    CatsRepo.set_block_exit_after_prey(
+                        CONFIG["KITTYHACK_DATABASE_PATH"], db_id, card_block_exit_after_prey
+                    )
                 # Only read new per-cat switches if the mode is per-cat; otherwise keep previous DB values
                 if CONFIG["ALLOWED_TO_ENTER"].value == "configure_per_cat":
                     card_allow_entry = input[f"mng_cat_allow_entry_{db_id}"]()

@@ -148,6 +148,18 @@ SETTINGS_SCHEMA: list[Setting] = [
     _S("PERIODIC_JOBS_INTERVAL", 900, "int"),
     _S("ALLOWED_TO_ENTER", "all", "enum", enum_cls=AllowedToEnter),
     _S("MOUSE_CHECK_ENABLED", True, "bool", save_as_str=True),
+    # 05.10, Sid ("liste des notifications... pouvoir choisir lesquels"):
+    # per-type push-notification toggles. The first four match existing
+    # behavior (all were already sent unconditionally) - default True so
+    # nothing changes for anyone upgrading. Motion in/out default False:
+    # far more frequent than the others (54/10 times in one day on her own
+    # flap), would spam anyone who didn't explicitly ask for them.
+    _S("NOTIFY_CAT_ENTERED", True, "bool"),
+    _S("NOTIFY_CAT_EXITED", True, "bool"),
+    _S("NOTIFY_GLANCE_OUTSIDE", True, "bool"),
+    _S("NOTIFY_PREY_DETECTED", True, "bool"),
+    _S("NOTIFY_MOTION_OUTSIDE", False, "bool"),
+    _S("NOTIFY_MOTION_INSIDE", False, "bool"),
     _S("MIN_SECONDS_TO_ANALYZE", 1.5, "float", save_fmt="{:.1f}"),
     _S("SHOW_IMAGES_WITH_OVERLAY", True, "bool"),
     _S("LIVE_VIEW_REFRESH_INTERVAL", 5.0, "float"),
@@ -165,6 +177,14 @@ SETTINGS_SCHEMA: list[Setting] = [
     _S("GROUP_PICTURES_TO_EVENTS", True, "bool"),
     _S("TFLITE_MODEL_VERSION", "original_kittyflap_model_v2"),
     _S("LOCK_DURATION_AFTER_PREY_DETECTION", 300, "int"),
+    # 04.10, Sid: Patoune drops a caught prey outside the flap, waits out the
+    # entry-block window, comes in prey-free (so the entry-side check never
+    # sees it), then reaches a paw back out to drag it in. These two close
+    # that: once a cat identified near a prey sighting is later confirmed
+    # entering, block THEIR exit for a window - same global+per-cat override
+    # pattern as MOUSE_CHECK_ENABLED/enable_prey_detection.
+    _S("BLOCK_EXIT_AFTER_PREY_ENTRY_ENABLED", True, "bool", save_as_str=True),
+    _S("BLOCK_EXIT_AFTER_PREY_ENTRY_DURATION", 180, "int"),
     _S("MAX_PICTURES_PER_EVENT_WITH_RFID", 100, "int"),
     _S("MAX_PICTURES_PER_EVENT_WITHOUT_RFID", 30, "int"),
     _S("USE_ALL_CORES_FOR_IMAGE_PROCESSING", False, "bool"),
@@ -191,8 +211,31 @@ SETTINGS_SCHEMA: list[Setting] = [
     _S("STARTUP_SHUTDOWN_FLAG", False, "bool"),
     _S("NOT_GRACEFUL_SHUTDOWNS", 0, "int"),
     _S("USE_CAMERA_FOR_CAT_DETECTION", False, "bool"),
+    # CAT_THRESHOLD: "trust this specific identity enough to open without RFID" (video-RFID match).
     _S("CAT_THRESHOLD", 70.0, "float"),
+    # CAT_MOTION_THRESHOLD: "a registered cat is there at all" (camera-based outside motion trigger).
+    # 04.10, Sid: split from CAT_THRESHOLD because a single shared value forced a trade-off -
+    # lowering it to catch real passages (Pookie, two real nose/paw attempts that topped out at
+    # 79% and never reached the old 80% CAT_THRESHOLD) also made video misidentification worse
+    # (Nala confused for Patoune at 87%). Lower than CAT_THRESHOLD on purpose; only gates whether
+    # a motion block starts, not whether the door actually unlocks for a specific cat.
+    _S("CAT_MOTION_THRESHOLD", 55.0, "float"),
     _S("USE_CAMERA_FOR_MOTION_DETECTION", False, "bool"),
+    # 04.10, Sid: "le plus fiable c'est PIR ou camera? pourquoi pas les
+    # deux?" - neither is strictly better (camera loses the cat once it's
+    # right at the flap, PIR is more prone to false triggers from
+    # environmental changes); both signals already reach the remote device
+    # simultaneously, so combining them (OR) was a software choice, not a
+    # hardware limit. Only meaningful when USE_CAMERA_FOR_MOTION_DETECTION
+    # is also on (nothing to combine with camera off).
+    _S("COMBINE_PIR_AND_CAMERA_OUTSIDE_MOTION", False, "bool"),
+    # 04.10, Sid ("un bouton pour voir l'impact CPU en direct"): off by default
+    # so the A/B comparison starts from today's known-working always-on
+    # behaviour. When on, the chatiere camera model only runs for
+    # CAMERA_IDLE_RESUME_HOLD_S after the last real PIR edge instead of
+    # continuously - see the PAUSE_CAMERA_WHEN_IDLE block in loop.py for the
+    # trade-off (a PIR miss means the camera won't wake either, in that case).
+    _S("PAUSE_CAMERA_WHEN_IDLE", False, "bool"),
     _S("CAMERA_SOURCE", "internal"),  # can be "internal" or "ip_camera"
     _S("IP_CAMERA_URL", ""),
     _S("ENABLE_IP_CAMERA_DECODE_SCALE_PIPELINE", False, "bool"),

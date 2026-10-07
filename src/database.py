@@ -622,9 +622,10 @@ class EventsRepo:
                       cats_only=False, 
                       mouse_only=False, 
                       mouse_probability=0.0, 
-                      page_index = 0, 
+                      page_index = 0,
                       elements_per_page = sys.maxsize,
-                      ignore_deleted = True):
+                      ignore_deleted = True,
+                      rfid_filter = ""):
         """Query events/photos with filters and optional paging (newest first)."""
         # Discover optional columns once to keep queries compatible across schema versions.
         columns_info = DatabaseCore.read_column_info_from_database(database, "events")
@@ -650,7 +651,10 @@ class EventsRepo:
             stmt = f"SELECT {columns} FROM events WHERE created_at BETWEEN '{date_start}' AND '{date_end}'"
         if mouse_only:
             stmt = f"{stmt} AND mouse_probability >= {mouse_probability}"
-        if cats_only:
+        # A specific cat takes priority over the generic cats_only checkbox.
+        if rfid_filter:
+            stmt = f"{stmt} AND rfid = '{rfid_filter.replace(chr(39), chr(39)+chr(39))}'"
+        elif cats_only:
             stmt = f"{stmt} AND rfid != ''"
         # reverse the row order, based on column 'id', so that the newest events are at the top
         stmt = f"{stmt} ORDER BY id DESC"
@@ -744,6 +748,7 @@ class EventsRepo:
         mouse_only: bool = False,
         mouse_probability: float = 0.0,
         ignore_deleted: bool = True,
+        rfid_filter: str = "",
     ) -> int:
         """Count event rows matching the same filters as ``db_get_photos``."""
         try:
@@ -757,7 +762,11 @@ class EventsRepo:
 
             if mouse_only:
                 where += f" AND mouse_probability >= {float(mouse_probability)}"
-            if cats_only:
+            # 04.10, Sid ("filtre par nom de chat"): a specific cat takes priority
+            # over the generic cats_only checkbox - picking a cat already implies "has a cat".
+            if rfid_filter:
+                where += f" AND rfid = '{rfid_filter.replace(chr(39), chr(39)+chr(39))}'"
+            elif cats_only:
                 where += " AND rfid != ''"
 
             stmt = f"SELECT COUNT(*) AS count FROM events WHERE {where}"
@@ -1388,12 +1397,17 @@ class EventsRepo:
             return Result(False, "unexpected_error")
 
     @staticmethod
-    def db_get_motion_blocks(database: str, block_count: int = 0, date_start="2020-01-01 00:00:00", date_end="2100-12-31 23:59:59", cats_only=False, mouse_only=False, mouse_probability=0.0):
+    def db_get_motion_blocks(database: str, block_count: int = 0, date_start="2020-01-01 00:00:00", date_end="2100-12-31 23:59:59", cats_only=False, mouse_only=False, mouse_probability=0.0, rfid_filter=""):
         """Return distinct motion blocks matching filters (newest first)."""
         columns = "block_id, created_at, event_type, rfid, event_text"
         where_clauses = ["deleted != 1", f"created_at BETWEEN '{date_start}' AND '{date_end}'"]
 
-        if cats_only:
+        # 04.10, Sid ("filtre par nom de chat ne marche pas sur la vue groupée"):
+        # the grouped-by-events view (Photos tab) goes through this function, not
+        # db_count_photos/db_get_photos - needed the same filter here too.
+        if rfid_filter:
+            where_clauses.append(f"rfid = '{rfid_filter.replace(chr(39), chr(39)+chr(39))}'")
+        elif cats_only:
             where_clauses.append("rfid != ''")
         if mouse_only:
             where_clauses.append(f"mouse_probability >= {mouse_probability}")
@@ -1643,10 +1657,66 @@ class CatsRepo:
         if return_data == ReturnDataCatDB.all:
              columns = "*"
         elif return_data == ReturnDataCatDB.all_except_photos:
-            columns = "id, created_at, name, rfid, enable_prey_detection, allow_entry, allow_exit"
+            columns = "id, created_at, name, rfid, enable_prey_detection, allow_entry, allow_exit, block_exit_after_prey"
 
         stmt = f"SELECT {columns} FROM cats"
         return DatabaseCore.read_df_from_database(database, stmt)
+
+    @staticmethod
+    def db_get_cat_image_by_rfid(database: str, rfid: str):
+        """Return the cat_image JPEG blob for one rfid, or None."""
+        stmt = f"SELECT cat_image FROM cats WHERE rfid = '{str(rfid).replace(chr(39), '')}' LIMIT 1"
+        df = DatabaseCore.read_df_from_database(database, stmt)
+        if df.empty or not df.iloc[0]["cat_image"]:
+            return None
+        return df.iloc[0]["cat_image"]
+
+    @staticmethod
+    def get_cat_stats(database: str, rfid: str, days: int = 30) -> dict:
+        """Entries/exits/prey-blocked/glances (distinct motion blocks, not raw
+        photo rows - a single visit can produce hundreds of rows) and busiest
+        hour for one cat over the last `days`.
+
+        05.10, Sid (OnlyCat/Flappie-inspired cat profile stats): counting
+        raw `events` rows instead of DISTINCT block_id was tried first and
+        gave wildly inflated numbers (thousands for one real visit, since
+        every analyzed frame is its own row) - confirmed live against real
+        data before settling on this.
+        """
+        safe_rfid = str(rfid).replace(chr(39), chr(39) + chr(39))
+        since = f"datetime('now', '-{int(days)} days')"
+
+        def count_blocks(event_type_prefix: str) -> int:
+            df = DatabaseCore.read_df_from_database(
+                database,
+                f"""SELECT COUNT(DISTINCT block_id) as n FROM events
+                    WHERE rfid = '{safe_rfid}' AND created_at >= {since}
+                    AND event_type LIKE '{event_type_prefix}%'""",
+            )
+            return int(df.iloc[0]["n"]) if not df.empty else 0
+
+        entries = count_blocks("cat_went_inside") + count_blocks("cat_went_probably_inside")
+        exits = count_blocks("cat_went_outside")
+        prey_blocked = count_blocks("motion_outside_with_mouse")
+        glances = count_blocks("motion_outside_only")
+
+        hour_df = DatabaseCore.read_df_from_database(
+            database,
+            f"""SELECT CAST(strftime('%H', created_at) AS INTEGER) as hour, COUNT(DISTINCT block_id) as n
+                FROM events
+                WHERE rfid = '{safe_rfid}' AND created_at >= {since}
+                AND (event_type LIKE 'cat_went_inside%' OR event_type LIKE 'cat_went_outside%')
+                GROUP BY hour ORDER BY n DESC LIMIT 1""",
+        )
+        busiest_hour = int(hour_df.iloc[0]["hour"]) if not hour_df.empty else None
+
+        return {
+            "entries": entries,
+            "exits": exits,
+            "prey_blocked": prey_blocked,
+            "glances": glances,
+            "busiest_hour": busiest_hour,
+        }
 
     @staticmethod
     def db_get_all_rfid_tags(database: str):
@@ -1766,7 +1836,7 @@ class CatsRepo:
     def get_cat_settings_map(database: str) -> dict:
         """Map RFID (or lowercase name) → per-cat prey/entry/exit settings."""
         try:
-            df = DatabaseCore.read_df_from_database(database, "SELECT name, rfid, enable_prey_detection, allow_entry, allow_exit FROM cats")
+            df = DatabaseCore.read_df_from_database(database, "SELECT name, rfid, enable_prey_detection, allow_entry, allow_exit, block_exit_after_prey FROM cats")
             settings = {}
             if df.empty:
                 return settings
@@ -1775,15 +1845,26 @@ class CatsRepo:
                 epd = row['enable_prey_detection'] if 'enable_prey_detection' in row and pd.notna(row['enable_prey_detection']) else 1
                 ae = row['allow_entry'] if 'allow_entry' in row and pd.notna(row['allow_entry']) else 1
                 ax = row['allow_exit'] if 'allow_exit' in row and pd.notna(row['allow_exit']) else 1
+                beap = row['block_exit_after_prey'] if 'block_exit_after_prey' in row and pd.notna(row['block_exit_after_prey']) else 1
                 settings[key] = {
                     'enable_prey_detection': bool(int(epd)),
                     'allow_entry': bool(int(ae)),
                     'allow_exit': bool(int(ax)),
+                    'block_exit_after_prey': bool(int(beap)),
                 }
             return settings
         except Exception as e:
             logging.error(f"[DATABASE] Failed to build cat settings map: {e}")
             return {}
+
+    @staticmethod
+    def set_block_exit_after_prey(database: str, cat_id: int, value: bool) -> Result:
+        """04.10, Sid: dedicated setter for the new per-cat toggle (kept
+        separate from db_update_cat_data_by_id to avoid threading a new
+        parameter through every existing call site of that function)."""
+        return DatabaseCore.write_stmt_to_database(
+            database, f"UPDATE cats SET block_exit_after_prey = {int(bool(value))} WHERE id = {int(cat_id)}"
+        )
 
     @staticmethod
     def get_cat_name_rfid_dict(database: str):
@@ -1841,6 +1922,355 @@ class CatsRepo:
             return None
 
 
+class DetectionFeedbackRepo:
+    """Human corrections on individual model detections (09.09, Sid — inline
+    validate/correct in the event modal, see EventsRepo.create_json_from_event
+    for the JSON shape being corrected)."""
+
+    @staticmethod
+    def upsert(
+        database: str,
+        photo_id: int,
+        object_index: int,
+        original_name: str,
+        original_probability: float,
+        x: float,
+        y: float,
+        width: float,
+        height: float,
+        corrected_name: str | None,
+        confirmed: bool,
+    ) -> Result:
+        """Record (or replace) the correction for one (photo_id, object_index)."""
+        result = DatabaseCore.lock_database()
+        if not result.success:
+            return result
+
+        try:
+            conn = sqlite3.connect(database, timeout=30)
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO detection_feedback
+                    (photo_id, object_index, original_name, original_probability, x, y, width, height, corrected_name, confirmed, created_at, exported_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+                ON CONFLICT(photo_id, object_index) DO UPDATE SET
+                    original_name = excluded.original_name,
+                    original_probability = excluded.original_probability,
+                    x = excluded.x, y = excluded.y, width = excluded.width, height = excluded.height,
+                    corrected_name = excluded.corrected_name,
+                    confirmed = excluded.confirmed,
+                    created_at = excluded.created_at,
+                    exported_at = NULL
+                """,
+                (
+                    int(photo_id), int(object_index), original_name, float(original_probability),
+                    float(x), float(y), float(width), float(height),
+                    corrected_name, int(bool(confirmed)),
+                    DateTimeUtil.get_utc_date_string(tm.time()),
+                ),
+            )
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            error_message = f"[DATABASE] Failed to record detection feedback for photo {photo_id}: {e}"
+            logging.error(error_message)
+            return Result(False, error_message)
+        else:
+            return Result(True, "")
+        finally:
+            DatabaseCore.release_database()
+
+    @staticmethod
+    def get_for_photo(database: str, photo_id: int) -> dict:
+        """Map object_index -> feedback row dict for one photo (empty dict if none)."""
+        try:
+            df = DatabaseCore.read_df_from_database(
+                database,
+                f"SELECT * FROM detection_feedback WHERE photo_id = {int(photo_id)}",
+            )
+            if df.empty:
+                return {}
+            return {int(row["object_index"]): row.to_dict() for __, row in df.iterrows()}
+        except Exception as e:
+            logging.error(f"[DATABASE] Failed to read detection feedback for photo {photo_id}: {e}")
+            return {}
+
+    @staticmethod
+    def get_for_photos(database: str, photo_ids: list[int]) -> dict:
+        """Map photo_id -> {object_index -> feedback row dict}, batched for a whole event block."""
+        ids = [int(p) for p in photo_ids if p is not None]
+        if not ids:
+            return {}
+        try:
+            id_list = ",".join(str(i) for i in ids)
+            df = DatabaseCore.read_df_from_database(
+                database,
+                f"SELECT * FROM detection_feedback WHERE photo_id IN ({id_list})",
+            )
+            if df.empty:
+                return {}
+            out: dict = {}
+            for __, row in df.iterrows():
+                pid = int(row["photo_id"])
+                out.setdefault(pid, {})[int(row["object_index"])] = row.to_dict()
+            return out
+        except Exception as e:
+            logging.error(f"[DATABASE] Failed to batch-read detection feedback: {e}")
+            return {}
+
+    @staticmethod
+    def get_pending_export_count(database: str) -> int:
+        """Number of corrections not yet exported to Label Studio."""
+        try:
+            df = DatabaseCore.read_df_from_database(
+                database,
+                "SELECT COUNT(*) as c FROM detection_feedback WHERE exported_at IS NULL",
+            )
+            if df.empty:
+                return 0
+            return int(df.iloc[0]["c"])
+        except Exception as e:
+            logging.error(f"[DATABASE] Failed to count pending detection feedback: {e}")
+            return 0
+
+    @staticmethod
+    def get_pending_corrections(database: str, limit: int = 500) -> "pd.DataFrame":
+        """04.10, Sid ("le bouton pour envoyer les corrections"): rows not yet
+        pushed to Label Studio, oldest first."""
+        return DatabaseCore.read_df_from_database(
+            database,
+            f"SELECT * FROM detection_feedback WHERE exported_at IS NULL ORDER BY id ASC LIMIT {int(limit)}",
+        )
+
+    @staticmethod
+    def mark_exported(database: str, ids: list[int]) -> Result:
+        """Stamp the given detection_feedback rows as exported (now, UTC)."""
+        if not ids:
+            return Result(True, "")
+        result = DatabaseCore.lock_database()
+        if not result.success:
+            return result
+        try:
+            conn = sqlite3.connect(database, timeout=30)
+            cursor = conn.cursor()
+            now = DateTimeUtil.get_utc_date_string(tm.time())
+            placeholders = ", ".join("?" * len(ids))
+            cursor.execute(
+                f"UPDATE detection_feedback SET exported_at = ? WHERE id IN ({placeholders})",
+                [now] + [int(i) for i in ids],
+            )
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            error_message = f"[DATABASE] Failed to mark detection feedback as exported: {e}"
+            logging.error(error_message)
+            return Result(False, error_message)
+        else:
+            return Result(True, "")
+        finally:
+            DatabaseCore.release_database()
+
+
+class ModelReviewRepo:
+    """05.10, Sid ("outil pour réévaluer le modèle actuel sur d'anciennes
+    photos déjà étiquetées, sans écraser les données"): one row per photo
+    where re-running the CURRENT model disagreed with what's stored in
+    events.event_text. Read-only against events/detection_feedback - this
+    table is purely a review queue Sid clears by hand (Keep old / Confirm
+    new), the actual correction only ever lands in detection_feedback via
+    the existing, already-proven pipeline."""
+
+    @staticmethod
+    def upsert_disagreement(
+        database: str,
+        photo_id: int,
+        old_object_index: int | None,
+        old_name: str | None,
+        old_probability: float,
+        new_name: str,
+        new_probability: float,
+        x: float, y: float, width: float, height: float,
+        model_version: str,
+    ) -> Result:
+        result = DatabaseCore.lock_database()
+        if not result.success:
+            return result
+        try:
+            conn = sqlite3.connect(database, timeout=30)
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO model_review_queue
+                    (photo_id, old_object_index, old_name, old_probability, new_name, new_probability,
+                     new_x, new_y, new_width, new_height, model_version, status, created_at, reviewed_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, NULL)
+                ON CONFLICT(photo_id, model_version) DO UPDATE SET
+                    old_object_index = excluded.old_object_index,
+                    old_name = excluded.old_name,
+                    old_probability = excluded.old_probability,
+                    new_name = excluded.new_name,
+                    new_probability = excluded.new_probability,
+                    new_x = excluded.new_x, new_y = excluded.new_y,
+                    new_width = excluded.new_width, new_height = excluded.new_height,
+                    status = 'pending',
+                    created_at = excluded.created_at,
+                    reviewed_at = NULL
+                """,
+                (
+                    int(photo_id),
+                    (int(old_object_index) if old_object_index is not None else None),
+                    old_name, float(old_probability or 0),
+                    new_name, float(new_probability or 0),
+                    float(x), float(y), float(width), float(height),
+                    model_version,
+                    DateTimeUtil.get_utc_date_string(tm.time()),
+                ),
+            )
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            error_message = f"[DATABASE] Failed to record model review disagreement for photo {photo_id}: {e}"
+            logging.error(error_message)
+            return Result(False, error_message)
+        else:
+            return Result(True, "")
+        finally:
+            DatabaseCore.release_database()
+
+    @staticmethod
+    def get_pending(database: str, limit: int = 200) -> pd.DataFrame:
+        # 06.10, Sid ("je peine à savoir si c'est un autre événement" /
+        # "rajouter ce qu'a donné le RFID"): model_review_queue only stores
+        # photo_id - block_id and rfid live on the events row, joined in here
+        # so the review UI can group by event and show the RFID without an
+        # extra query per row.
+        return DatabaseCore.read_df_from_database(
+            database,
+            "SELECT q.*, e.block_id AS event_block_id, e.rfid AS event_rfid "
+            "FROM model_review_queue q LEFT JOIN events e ON e.id = q.photo_id "
+            f"WHERE q.status = 'pending' ORDER BY q.id ASC LIMIT {int(limit)}",
+        )
+
+    @staticmethod
+    def get_one(database: str, review_id: int) -> dict | None:
+        """05.10, Sid ("ça se ferme toujours + écran gris"): a single-row
+        lookup for the Keep old/Confirm new/Other click handlers - with
+        thousands of pending rows, re-fetching and pandas-filtering up to
+        10000 rows on every click (the old approach) was part of what made
+        each click slow enough to starve the websocket heartbeat."""
+        df = DatabaseCore.read_df_from_database(
+            database, f"SELECT * FROM model_review_queue WHERE id = {int(review_id)}"
+        )
+        return df.iloc[0].to_dict() if not df.empty else None
+
+    @staticmethod
+    def get_pending_count(database: str) -> int:
+        try:
+            df = DatabaseCore.read_df_from_database(
+                database, "SELECT COUNT(*) as c FROM model_review_queue WHERE status = 'pending'"
+            )
+            return int(df.iloc[0]["c"]) if not df.empty else 0
+        except Exception as e:
+            logging.error(f"[DATABASE] Failed to count pending model review items: {e}")
+            return 0
+
+    @staticmethod
+    def mark_reviewed(database: str, review_id: int, status: str) -> Result:
+        """``status``: 'kept_old' or 'confirmed_new'."""
+        result = DatabaseCore.lock_database()
+        if not result.success:
+            return result
+        try:
+            conn = sqlite3.connect(database, timeout=30)
+            conn.execute(
+                "UPDATE model_review_queue SET status = ?, reviewed_at = ? WHERE id = ?",
+                (status, DateTimeUtil.get_utc_date_string(tm.time()), int(review_id)),
+            )
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            error_message = f"[DATABASE] Failed to mark model review item {review_id} reviewed: {e}"
+            logging.error(error_message)
+            return Result(False, error_message)
+        else:
+            return Result(True, "")
+        finally:
+            DatabaseCore.release_database()
+
+    @staticmethod
+    def get_scanned_block_ids(database: str, model_version: str) -> set:
+        """05.10, Sid ("une fois que j'ai fait les 50, ça lance les 50
+        précédents?"): which motion blocks the pilot has already scanned for
+        THIS model version, so the next pilot run naturally advances to
+        older, not-yet-seen events instead of re-scanning the same window
+        and clobbering her already-made Keep old / Confirm new decisions."""
+        try:
+            df = DatabaseCore.read_df_from_database(
+                database,
+                "SELECT block_id FROM model_review_scanned_blocks WHERE model_version = "
+                f"'{model_version}'",
+            )
+            return set(int(b) for b in df["block_id"].tolist()) if not df.empty else set()
+        except Exception as e:
+            logging.error(f"[DATABASE] Failed to read scanned model-review blocks: {e}")
+            return set()
+
+    @staticmethod
+    def mark_blocks_scanned(database: str, block_ids: list, model_version: str) -> Result:
+        if not block_ids:
+            return Result(True, "")
+        result = DatabaseCore.lock_database()
+        if not result.success:
+            return result
+        try:
+            conn = sqlite3.connect(database, timeout=30)
+            now = DateTimeUtil.get_utc_date_string(tm.time())
+            conn.executemany(
+                "INSERT OR IGNORE INTO model_review_scanned_blocks (block_id, model_version, scanned_at) VALUES (?, ?, ?)",
+                [(int(b), model_version, now) for b in block_ids],
+            )
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            error_message = f"[DATABASE] Failed to mark model-review blocks scanned: {e}"
+            logging.error(error_message)
+            return Result(False, error_message)
+        else:
+            return Result(True, "")
+        finally:
+            DatabaseCore.release_database()
+
+
+class RemoteConnectionLogRepo:
+    """04.10, Sid: remote<->Kittyflap connect/disconnect history, so she can
+    actually see over days/weeks whether the link holds up - not just trust
+    the live dot."""
+
+    @staticmethod
+    def log_event(database: str, event: str, reason: str, host: str) -> None:
+        result = DatabaseCore.lock_database()
+        if not result.success:
+            return
+        try:
+            conn = sqlite3.connect(database, timeout=30)
+            conn.execute(
+                "INSERT INTO remote_connection_log (created_at, event, reason, host) VALUES (?, ?, ?, ?)",
+                (DateTimeUtil.get_utc_date_string(tm.time()), event, reason or "", host or ""),
+            )
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            logging.error(f"[DATABASE] Failed to log remote connection event: {e}")
+        finally:
+            DatabaseCore.release_database()
+
+    @staticmethod
+    def get_recent(database: str, limit: int = 200) -> pd.DataFrame:
+        stmt = f"SELECT created_at, event, reason, host FROM remote_connection_log ORDER BY id DESC LIMIT {int(limit)}"
+        return DatabaseCore.read_df_from_database(database, stmt)
+
+
 class DbMigrations:
     """Table creation and one-shot migrations between kittyflap/kittyhack schemas."""
 
@@ -1870,6 +2300,106 @@ class DbMigrations:
         result = DatabaseCore.write_stmt_to_database(database, stmt)
         if result.success:
             logging.info(f"[DATABASE] Successfully created the 'events' table in the database '{database}'.")
+        return result
+
+    @staticmethod
+    def create_detection_feedback_table(database: str):
+        """Create the ``detection_feedback`` table if missing.
+
+        One row per human-reviewed detection (09.09, Sid — "je valide ou
+        invalide les détections... faire apprendre au modèle"): a photo's
+        ``event_text`` JSON already carries the model's per-object guesses
+        (name/probability/bbox, see EventsRepo.create_json_from_event) — this
+        table records Sid's correction on top of one specific object, keyed
+        by (photo_id, object_index) into that same JSON list. `exported_at`
+        stays NULL until the correction has actually been pushed to Label
+        Studio as a pre-annotated task, so the AI Training tab can show a
+        real "N corrections waiting to be sent" count instead of guessing.
+        """
+        stmt = """
+            CREATE TABLE IF NOT EXISTS detection_feedback (
+                id INTEGER PRIMARY KEY,
+                photo_id INTEGER NOT NULL,
+                object_index INTEGER NOT NULL,
+                original_name TEXT,
+                original_probability REAL,
+                x REAL,
+                y REAL,
+                width REAL,
+                height REAL,
+                corrected_name TEXT,
+                confirmed BOOLEAN,
+                created_at DATETIME,
+                exported_at DATETIME,
+                UNIQUE(photo_id, object_index)
+            )
+        """
+        result = DatabaseCore.write_stmt_to_database(database, stmt)
+        if result.success:
+            logging.info(f"[DATABASE] Successfully created the 'detection_feedback' table in the database '{database}'.")
+        return result
+
+    @staticmethod
+    def create_model_review_queue_table(database: str):
+        """Create the ``model_review_queue`` table if missing.
+
+        05.10, Sid ("outil pour réévaluer le modèle actuel sur les anciennes
+        photos déjà étiquetées"): one row per photo where re-running the
+        currently active model disagreed with what's stored in
+        events.event_text. UNIQUE(photo_id, model_version) so re-running the
+        pilot with the same active model just refreshes pending rows instead
+        of duplicating them. Purely a review queue - never written to by
+        anything except the retroactive-review job, never read by anything
+        except the AI Training tab's review UI.
+        """
+        stmt = """
+            CREATE TABLE IF NOT EXISTS model_review_queue (
+                id INTEGER PRIMARY KEY,
+                photo_id INTEGER NOT NULL,
+                old_object_index INTEGER,
+                old_name TEXT,
+                old_probability REAL,
+                new_name TEXT,
+                new_probability REAL,
+                new_x REAL,
+                new_y REAL,
+                new_width REAL,
+                new_height REAL,
+                model_version TEXT,
+                status TEXT NOT NULL DEFAULT 'pending',
+                created_at DATETIME,
+                reviewed_at DATETIME,
+                UNIQUE(photo_id, model_version)
+            )
+        """
+        result = DatabaseCore.write_stmt_to_database(database, stmt)
+        if result.success:
+            logging.info(f"[DATABASE] Successfully created the 'model_review_queue' table in the database '{database}'.")
+        return result
+
+    @staticmethod
+    def create_model_review_scanned_blocks_table(database: str):
+        """Create the ``model_review_scanned_blocks`` table if missing.
+
+        05.10, Sid: tracks which motion blocks the retroactive-review pilot
+        has already scanned per model_version, so a second "Run pilot" click
+        advances to the next, older, not-yet-seen batch of events instead of
+        re-scanning (and re-flagging/clobbering already-reviewed decisions
+        in) the same window. Scoped per model_version on purpose - training
+        and activating a new model should make every block eligible for a
+        fresh look again.
+        """
+        stmt = """
+            CREATE TABLE IF NOT EXISTS model_review_scanned_blocks (
+                block_id INTEGER NOT NULL,
+                model_version TEXT NOT NULL,
+                scanned_at DATETIME,
+                PRIMARY KEY (block_id, model_version)
+            )
+        """
+        result = DatabaseCore.write_stmt_to_database(database, stmt)
+        if result.success:
+            logging.info(f"[DATABASE] Successfully created the 'model_review_scanned_blocks' table in the database '{database}'.")
         return result
 
     @staticmethod
@@ -1921,6 +2451,27 @@ class DbMigrations:
             return Result(True, "")
         finally:
             DatabaseCore.release_database()
+
+    @staticmethod
+    def create_remote_connection_log_table(database: str):
+        """04.10, Sid: "rubrique info qui recense les deconnexions...
+        duree en ligne, que je puisse me rendre compte que ca tient la
+        route" - persisted (not just in-memory RemoteControlClient state)
+        so it survives every kittyhack-remote restart and actually builds
+        up a real history over days/weeks."""
+        stmt = """
+            CREATE TABLE IF NOT EXISTS remote_connection_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at DATETIME,
+                event TEXT,
+                reason TEXT,
+                host TEXT
+            )
+        """
+        result = DatabaseCore.write_stmt_to_database(database, stmt)
+        if result.success:
+            logging.info(f"[DATABASE] Successfully created the 'remote_connection_log' table in the database '{database}'.")
+        return result
 
     @staticmethod
     def create_kittyhack_cats_table(database: str):
@@ -2107,6 +2658,36 @@ class DbMigrations:
         finally:
             DatabaseCore.release_database()
 
+    @staticmethod
+    def enable_wal_mode(database: str) -> Result:
+        """Switch to WAL journal mode, if not already active.
+
+        04.10, Sid: Photos/Live view were slow (measured 451ms live vs 49ms on
+        an idle copy of the same DB) because the default rollback-journal mode
+        blocks readers while the backend loop writes. WAL lets one writer and
+        many readers run concurrently. One-shot, idempotent (set on the DB file
+        itself), safe to call on every boot.
+        """
+        result = DatabaseCore.lock_database()
+        if not result.success:
+            return result
+
+        try:
+            conn = sqlite3.connect(database, timeout=30)
+            cursor = conn.cursor()
+            cursor.execute("PRAGMA journal_mode=WAL")
+            mode = cursor.fetchone()[0]
+            conn.close()
+        except Exception as e:
+            error_message = f"[DATABASE] Failed to enable WAL mode on database '{database}': {e}"
+            logging.error(error_message)
+            return Result(False, error_message)
+        else:
+            logging.info(f"[DATABASE] journal_mode for database '{database}' is now '{mode}'.")
+            return Result(True, "")
+        finally:
+            DatabaseCore.release_database()
+
 
 # ---------------------------------------------------------------------------
 # Compatibility aliases (keep `from src.database import *` working)
@@ -2165,6 +2746,13 @@ get_cat_names_list = CatsRepo.get_cat_names_list
 get_cat_thumbnail = CatsRepo.get_cat_thumbnail
 create_kittyhack_events_table = DbMigrations.create_kittyhack_events_table
 create_motion_timeline_table = DbMigrations.create_motion_timeline_table
+create_detection_feedback_table = DbMigrations.create_detection_feedback_table
+detection_feedback_upsert = DetectionFeedbackRepo.upsert
+detection_feedback_get_for_photo = DetectionFeedbackRepo.get_for_photo
+detection_feedback_get_for_photos = DetectionFeedbackRepo.get_for_photos
+detection_feedback_pending_export_count = DetectionFeedbackRepo.get_pending_export_count
+create_model_review_queue_table = DbMigrations.create_model_review_queue_table
+create_model_review_scanned_blocks_table = DbMigrations.create_model_review_scanned_blocks_table
 create_kittyhack_photo_table = DbMigrations.create_kittyhack_photo_table
 create_kittyhack_cats_table = DbMigrations.create_kittyhack_cats_table
 migrate_cats_to_kittyhack = DbMigrations.migrate_cats_to_kittyhack

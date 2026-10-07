@@ -1480,12 +1480,30 @@ class LabelStudioInstall:
 
     @staticmethod
     def get_labelstudio_installed_version():
-        """Return installed Label Studio version from its venv, or None."""
+        """Return installed Label Studio version from its venv, or None.
+
+        In a remote-mode Docker deployment there is no local venv at all -
+        Label Studio runs as its own sibling container instead - so fall
+        back to asking it directly over the network via its public
+        /api/version endpoint (no auth required).
+        """
         try:
             venv_python = os.path.join(LABELSTUDIO_PATH, LABELSTUDIO_VENV, "bin", "python")
 
             # Check if Label Studio is installed
             if not os.path.exists(LABELSTUDIO_PATH) or not os.path.exists(venv_python):
+                try:
+                    from src.labelstudio_api import LabelStudioAPI
+                    resp = requests.get(
+                        f"{LabelStudioAPI.DEFAULT_HOST if '://' in LabelStudioAPI.DEFAULT_HOST else 'http://' + LabelStudioAPI.DEFAULT_HOST}:{LabelStudioAPI.DEFAULT_PORT}/api/version",
+                        timeout=5,
+                    )
+                    if resp.ok:
+                        version = resp.json().get("release")
+                        if version:
+                            return version
+                except Exception as e:
+                    logging.info(f"[SYSTEM] Could not reach external Label Studio for version check: {e}")
                 logging.info("[SYSTEM] Label Studio is not installed.")
                 return None
 
@@ -1548,7 +1566,13 @@ class LabelStudioInstall:
 
     @staticmethod
     def get_labelstudio_status():
-        """True if the labelstudio systemd service is active."""
+        """True if Label Studio is active - via systemd locally, or over the
+        network when it runs as its own sibling Docker container (remote-mode
+        Docker deployments have no systemd at all, so systemctl isn't even
+        on disk there)."""
+        if not os.path.exists("/usr/bin/systemctl"):
+            from src.labelstudio_api import LabelStudioAPI
+            return LabelStudioAPI.is_labelstudio_available()
         try:
             result = subprocess.run(
                 ["/usr/bin/systemctl", "is-active", "labelstudio"],

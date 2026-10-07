@@ -5,6 +5,7 @@ import os
 from src.paths import pictures_thumbnails_dir, pictures_original_dir
 from src.api import ApiMiddleware
 from src.webauth import WebAuthMiddleware
+from src.webpush import WebPushMiddleware
 
 path_www = os.path.join(os.path.dirname(__file__), "www")
 path_doc_diagrams = os.path.join(os.path.dirname(__file__), "doc", "diagrams")
@@ -13,6 +14,18 @@ path_doc_diagrams = os.path.join(os.path.dirname(__file__), "doc", "diagrams")
 # (no base64 embedding for the event modal).
 path_thumbs = pictures_thumbnails_dir()
 path_originals = pictures_original_dir()
+
+# Latest-frame previews from the multi-camera watchdog (Reolink terrace/catio
+# cameras) - written by watchdog.py onto the shared /data volume, served
+# here so the "Presence" page can show them without a second HTTP server.
+path_watchdog_frames = "/data/watchdog_frames"
+os.makedirs(path_watchdog_frames, exist_ok=True)
+
+# 09.09, Sid: same idea for the detection-triggered outdoor-camera training
+# samples (watchdog.py's TRAINING_SAMPLES_DIR) - served straight from disk
+# so the new Journey tab can show them without base64-embedding.
+path_watchdog_samples = "/data/watchdog_training_samples"
+os.makedirs(path_watchdog_samples, exist_ok=True)
 
 # ---------------------------------------------------------------------------
 # Tab routing middleware
@@ -25,8 +38,8 @@ path_originals = pictures_original_dir()
 # ---------------------------------------------------------------------------
 
 TAB_PATHS = frozenset({
-    "live-view", "pictures", "manage-cats", "add-new-cat",
-    "ai-training", "system", "configuration", "wlan-configuration", "info",
+    "live-view", "journey", "pictures", "manage-cats",
+    "ai-training", "configuration", "wlan-configuration",
 })
 
 
@@ -57,6 +70,8 @@ shiny_app = App(
 		"/thumb": path_thumbs,
 		"/orig": path_originals,
 		"/diagrams": path_doc_diagrams,
+		"/watchdog-frame": path_watchdog_frames,
+		"/watchdog-sample": path_watchdog_samples,
 		"/": path_www,
 	},
 )
@@ -73,6 +88,6 @@ shiny_app = App(
 # ("admin") are seeded on first run only (users_auth.json, gitignored) —
 # change them from day one via src.webauth.set_password().
 app = WebAuthMiddleware(
-    ApiMiddleware(TabRoutingMiddleware(shiny_app)),
+    WebPushMiddleware(ApiMiddleware(TabRoutingMiddleware(shiny_app))),
     seed_users={"sidounette": "admin", "xacarr": "admin"},
 )

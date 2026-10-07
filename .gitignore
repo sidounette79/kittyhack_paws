@@ -20,6 +20,9 @@ api_tokens.json
 users_auth.json
 watchdog_token.json
 sessions.json
+watchdog_secrets.json
+vapid_private_key.pem
+webpush_subscriptions.json
 ignore_*
 .vscode/settings.json
 config.remote.ini
@@ -33,3 +36,4 @@ config.remote.ini
 .coverage.*
 htmlcov/
 .pytest_cache/
+*.pt
