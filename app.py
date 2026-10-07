@@ -39,7 +39,7 @@ os.makedirs(path_watchdog_samples, exist_ok=True)
 # ---------------------------------------------------------------------------
 
 TAB_PATHS = frozenset({
-    "live-view", "journey", "pictures", "manage-cats",
+    "presence", "live-view", "journey", "chronology", "pictures", "manage-cats",
     "ai-training", "configuration", "wlan-configuration",
 })
 

@@ -831,8 +831,10 @@ document.addEventListener("DOMContentLoaded", function() {
         // Map nav_panel value → URL pathname.
         // Must match the TAB_PATHS set in the Python TabRoutingMiddleware (app.py).
         var TAB_ROUTES = {
+            'presence':            '/presence/',
             'live-view':           '/live-view/',
             'journey':             '/journey/',
+            'chronology':          '/chronology/',
             'pictures':            '/pictures/',
             'manage-cats':         '/manage-cats/',
             'ai-training':         '/ai-training/',
