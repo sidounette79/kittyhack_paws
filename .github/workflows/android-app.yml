@@ -57,11 +57,49 @@ jobs:
         # content of the Firebase-generated google-services.json (Settings
         # > Secrets and variables > Actions). Firebase project setup itself
         # is a manual step Sid has to do in the Firebase console - see the
-        # project README/report for exact steps. Skipped (not failed) until
-        # that secret exists - the build will still run, just without a
-        # working push-notifications plugin until Firebase is wired in.
+        # project README/report for exact steps.
+        #
+        # 07.10: this step was previously unverified, unlike the keystore
+        # decode step below - it silently stayed "skipped" on EVERY build
+        # since FCM was wired in (the secret was never actually set), and
+        # the stale comment that used to be here ("just without a working
+        # push-notifications plugin") was WRONG: @capacitor/push-notifications
+        # links `firebase-messaging` into the APK unconditionally, and
+        # Firebase's own FirebaseInitProvider auto-initializes at process
+        # start (before any UI) regardless of whether the Firebase config
+        # resources this plugin generates from google-services.json exist.
+        # Without them, that auto-init throws and the WHOLE APP crashes on
+        # every launch - this is exactly what happened with build 12.
+        # Now hardened the same way as the keystore step: validate the
+        # decode actually produced non-trivial, valid JSON with the
+        # expected package_name, so a missing/garbled secret fails loudly
+        # here instead of silently shipping a crashing APK.
         if: ${{ env.GOOGLE_SERVICES_JSON != '' }}
-        run: echo "$GOOGLE_SERVICES_JSON" | base64 -d > android/app/google-services.json
+        run: |
+          set +e
+          echo "$GOOGLE_SERVICES_JSON" | base64 -d > android/app/google-services.json 2>/tmp/gsjson_decode.err
+          decode_status=$?
+          if [ $decode_status -ne 0 ]; then
+            echo "::error::base64 -d failed (exit ${decode_status}): $(cat /tmp/gsjson_decode.err). The GOOGLE_SERVICES_JSON secret is probably not valid base64."
+            exit 1
+          fi
+          size=$(stat -c%s android/app/google-services.json 2>/dev/null || echo 0)
+          echo "Decoded google-services.json size: ${size} bytes"
+          if [ "$size" -lt 50 ]; then
+            echo "::error::Decoded google-services.json is suspiciously small (${size} bytes) - the secret is likely empty, truncated, or a placeholder."
+            exit 1
+          fi
+          package_name=$(python3 -c "import json; d=json.load(open('android/app/google-services.json')); print(d['client'][0]['client_info']['android_client_info']['package_name'])" 2>/tmp/gsjson_parse.err)
+          if [ $? -ne 0 ]; then
+            echo "::error::Decoded file is not valid google-services.json JSON: $(cat /tmp/gsjson_parse.err)"
+            exit 1
+          fi
+          echo "::notice::google-services.json package_name: ${package_name}"
+          if [ "$package_name" != "ch.sidounette.kittyhack" ]; then
+            echo "::error::package_name (${package_name}) does not match applicationId (ch.sidounette.kittyhack) - this WILL fail the Gradle build."
+            exit 1
+          fi
+          set -e
 
       - name: Decode signing keystore
         if: ${{ env.KITTYHACK_KEYSTORE_BASE64 != '' }}
