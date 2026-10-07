@@ -78,7 +78,27 @@ jobs:
         # garbage file that only fails much later at the Gradle signing
         # step with a far less obvious error.
         run: |
-          echo "$KITTYHACK_KEYSTORE_BASE64" | tr -d '[:space:]' | base64 -d > android/app/kittyhack-release.jks
+          set +e
+          # 07.10, Sid: second attempt still failed with exit 1 and NO
+          # visible reason (log download needs admin rights I don't have,
+          # only ::error:: annotations are visible to me) - almost
+          # certainly base64 -d itself erroring out (missing '=' padding
+          # from a copy-paste that trimmed trailing characters is the
+          # classic cause), which under the shell's default errexit killed
+          # the script before ever reaching last attempt's own checks.
+          # set +e here so THIS script survives long enough to report
+          # exactly what happened instead of just "exit code 1".
+          raw="$(echo "$KITTYHACK_KEYSTORE_BASE64" | tr -d '[:space:]')"
+          len=${#raw}
+          pad=$(( (4 - len % 4) % 4 ))
+          for i in $(seq 1 $pad); do raw="${raw}="; done
+          echo "Secret length after stripping whitespace: ${len} chars (added ${pad} padding '=' to reach a multiple of 4)."
+          decode_err=$(printf '%s' "$raw" | base64 -d > android/app/kittyhack-release.jks 2>&1)
+          decode_status=$?
+          if [ $decode_status -ne 0 ]; then
+            echo "::error::base64 -d failed (exit ${decode_status}): ${decode_err}. KITTYHACK_KEYSTORE_BASE64 secret is not valid base64 - re-copy it from kittyhack-release.jks.base64 in the generate-keystore.yml artifact, the whole content of that file and nothing else."
+            exit 1
+          fi
           size=$(stat -c%s android/app/kittyhack-release.jks 2>/dev/null || echo 0)
           echo "Decoded keystore size: ${size} bytes"
           if [ "$size" -lt 100 ]; then
@@ -86,8 +106,12 @@ jobs:
             exit 1
           fi
           keytool -list -keystore android/app/kittyhack-release.jks \
-            -storepass "$KITTYHACK_KEYSTORE_PASSWORD" -alias "$KITTYHACK_KEY_ALIAS" \
-            || { echo "::error::keytool could not read the decoded keystore with the given alias/password - check KITTYHACK_KEYSTORE_PASSWORD/KITTYHACK_KEY_ALIAS secrets."; exit 1; }
+            -storepass "$KITTYHACK_KEYSTORE_PASSWORD" -alias "$KITTYHACK_KEY_ALIAS"
+          if [ $? -ne 0 ]; then
+            echo "::error::keytool could not read the decoded keystore with the given alias/password - check KITTYHACK_KEYSTORE_PASSWORD/KITTYHACK_KEY_ALIAS secrets match what generate-keystore.yml's README.txt said."
+            exit 1
+          fi
+          set -e
 
       - name: Sync Capacitor
         run: node node_modules/.bin/cap sync android
