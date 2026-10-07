@@ -363,9 +363,9 @@ class StatePublisher:
         """Publish the current ALLOWED_TO_EXIT value (localized label)."""
         topic = MQTTConfig.topics["allowed_to_exit"]
         translations = {
-            AllowedToExit.ALLOW: {"en": "Allow exit", "de": "Ausgang erlauben"},
-            AllowedToExit.DENY: {"en": "Do not allow exit", "de": "Ausgang verbieten"},
-            AllowedToExit.CONFIGURE_PER_CAT: {"en": "Per-cat configuration", "de": "Separate Konfiguration pro Katze"}
+            AllowedToExit.ALLOW: {"en": "Allow exit", "de": "Ausgang erlauben", "fr": "Autoriser la sortie"},
+            AllowedToExit.DENY: {"en": "Do not allow exit", "de": "Ausgang verbieten", "fr": "Interdire la sortie"},
+            AllowedToExit.CONFIGURE_PER_CAT: {"en": "Per-cat configuration", "de": "Separate Konfiguration pro Katze", "fr": "Configuration par chat"}
         }
         friendly = translations.get(allowed, {}).get(CONFIG['LANGUAGE'], allowed.value)
         if self.mqtt_client.connected:
@@ -597,37 +597,17 @@ class StatePublisher:
         }
 
         # Language-dependent labels
-        is_de = CONFIG['LANGUAGE'] == "de"
-        allowed_exit_options = (
-            [
-                "Ausgang erlauben",
-                "Ausgang verbieten",
-                "Separate Konfiguration pro Katze"
-            ]
-            if is_de
-            else [
-                "Allow exit",
-                "Do not allow exit",
-                "Per-cat configuration"
-            ]
-        )
-        allowed_enter_options = (
-            [
-                "Alle Katzen",
-                "Alle Katzen mit RFID-Chip",
-                "Nur registrierte Katzen",
-                "Keine Katzen",
-                "Separate Konfiguration pro Katze",
-            ]
-            if is_de
-            else [
-                "All cats",
-                "All cats with RFID",
-                "Only registered cats",
-                "No cats",
-                "Separate configuration per cat",
-            ]
-        )
+        _lang = CONFIG['LANGUAGE'] if CONFIG['LANGUAGE'] in ("de", "fr") else "en"
+        allowed_exit_options = {
+            "en": ["Allow exit", "Do not allow exit", "Per-cat configuration"],
+            "de": ["Ausgang erlauben", "Ausgang verbieten", "Separate Konfiguration pro Katze"],
+            "fr": ["Autoriser la sortie", "Interdire la sortie", "Configuration par chat"],
+        }[_lang]
+        allowed_enter_options = {
+            "en": ["All cats", "All cats with RFID", "Only registered cats", "No cats", "Separate configuration per cat"],
+            "de": ["Alle Katzen", "Alle Katzen mit RFID-Chip", "Nur registrierte Katzen", "Keine Katzen", "Separate Konfiguration pro Katze"],
+            "fr": ["Tous les chats", "Tous les chats avec RFID", "Chats enregistrés uniquement", "Aucun chat", "Configuration par chat"],
+        }[_lang]
         
         # Define all entities to create
         entities = {
@@ -751,23 +731,28 @@ class StatePublisher:
         translations = {
             "all": {
                 "en": "All cats",
-                "de": "Alle Katzen"
+                "de": "Alle Katzen",
+                "fr": "Tous les chats"
             },
             "all_rfids": {
                 "en": "All cats with RFID",
-                "de": "Alle Katzen mit RFID-Chip"
+                "de": "Alle Katzen mit RFID-Chip",
+                "fr": "Tous les chats avec RFID"
             },
             "known": {
                 "en": "Only registered cats",
-                "de": "Nur registrierte Katzen"
+                "de": "Nur registrierte Katzen",
+                "fr": "Chats enregistrés uniquement"
             },
             "none": {
                 "en": "No cats",
-                "de": "Keine Katzen"
+                "de": "Keine Katzen",
+                "fr": "Aucun chat"
             },
             "configure_per_cat": {
                 "en": "Separate configuration per cat",
-                "de": "Separate Konfiguration pro Katze"
+                "de": "Separate Konfiguration pro Katze",
+                "fr": "Configuration par chat"
             }
         }
         

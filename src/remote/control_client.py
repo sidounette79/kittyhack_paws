@@ -59,6 +59,7 @@ class RemoteControlClient:
         # retry and no error shown). See PENDING_MAGNET_COMMAND_STALE_S below.
         self._pending_magnet_commands: dict[str, float] = {}
         self._manual_disconnect = threading.Event()
+        self._last_logged_state: str | None = None
 
         self._sync_tmp_path: str | None = None
         self._sync_started_at: float = 0.0
@@ -172,7 +173,7 @@ class RemoteControlClient:
                 asyncio.run_coroutine_threadsafe(_close_socket(), loop)
             except Exception:
                 pass
-        self._set_disconnected_state()
+        self._set_disconnected_state("manual_disconnect")
 
     def queue_magnet_command(self, command: str) -> None:
         cmd = str(command or "").strip()
@@ -420,7 +421,7 @@ class RemoteControlClient:
         except Exception as e:
             logging.error(f"[REMOTE_CTRL] Client thread crashed: {e}")
 
-    def _set_disconnected_state(self) -> None:
+    def _set_disconnected_state(self, reason: str = "") -> None:
         self._connected.clear()
         self._ready_for_use.clear()
         self._control_acquired = False
@@ -429,6 +430,22 @@ class RemoteControlClient:
         self._target_shutdown_ack_event.set()
         with self._lock:
             self._pending_magnet_commands.clear()
+        # 04.10, Sid: "rubrique info qui recense les deconnexions... que je
+        # puisse me rendre compte que ca tient la route" - persisted history,
+        # dedup-guarded so the repeated calls on this exact path (exception
+        # handler + finally both call this; the manual-disconnect loop calls
+        # it every 0.5s while already disconnected) don't spam one log row
+        # per call, only one row per real transition.
+        if self._last_logged_state != "disconnected":
+            self._last_logged_state = "disconnected"
+            try:
+                from src.database import RemoteConnectionLogRepo
+                RemoteConnectionLogRepo.log_event(
+                    CONFIG.get("KITTYHACK_DATABASE_PATH", "kittyhack.db"),
+                    "disconnected", reason, CONFIG.get("REMOTE_TARGET_HOST", ""),
+                )
+            except Exception:
+                pass
 
     async def _main(self) -> None:
         timeout_s = float(CONFIG.get("REMOTE_CONTROL_TIMEOUT") or 10.0)
@@ -439,7 +456,7 @@ class RemoteControlClient:
 
         while not sigterm_monitor.stop_now:
             if self._manual_disconnect.is_set():
-                self._set_disconnected_state()
+                self._set_disconnected_state("manual_disconnect")
                 await asyncio.sleep(0.5)
                 continue
 
@@ -481,6 +498,16 @@ class RemoteControlClient:
                     self._ever_connected.set()
                     self._last_rx = time.time()
                     logging.info("[REMOTE_CTRL] Control acquired.")
+                    if self._last_logged_state != "connected":
+                        self._last_logged_state = "connected"
+                        try:
+                            from src.database import RemoteConnectionLogRepo
+                            RemoteConnectionLogRepo.log_event(
+                                CONFIG.get("KITTYHACK_DATABASE_PATH", "kittyhack.db"),
+                                "connected", "", CONFIG.get("REMOTE_TARGET_HOST", ""),
+                            )
+                        except Exception:
+                            pass
 
                     # trigger sync if needed (best-effort)
                     self.request_sync_if_needed()
@@ -516,7 +543,7 @@ class RemoteControlClient:
                             await self._handle_json(msg)
 
             except Exception as e:
-                self._set_disconnected_state()
+                self._set_disconnected_state(str(e))
                 if not self._manual_disconnect.is_set():
                     logging.warning(f"[REMOTE_CTRL] Connection lost: {e}")
                     await asyncio.sleep(backoff)
@@ -526,7 +553,7 @@ class RemoteControlClient:
                     await asyncio.sleep(0.5)
             finally:
                 # Also clear state on clean websocket close (no exception path).
-                self._set_disconnected_state()
+                self._set_disconnected_state("connection closed")
 
     async def _handle_json(self, raw: str) -> None:
         try:
