@@ -98,7 +98,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # 07.10, Sid (found while depositing the first build on OLDMEDIA):
+          # gh release's `file#label` syntax only sets a display LABEL, the
+          # stored asset filename stays the original basename regardless -
+          # rename the local copy first so the actual downloadable filename
+          # is correct too, not just how it's labeled in the GitHub UI.
+          cp "android/app/build/outputs/apk/debug/app-debug.apk" "kittyhack-build-${{ github.run_number }}.apk"
           gh release create "android-build-${{ github.run_number }}" \
-            "android/app/build/outputs/apk/debug/app-debug.apk#kittyhack-build-${{ github.run_number }}.apk" \
+            "kittyhack-build-${{ github.run_number }}.apk" \
             --title "Kittyhack Android build ${{ github.run_number }}" \
             --notes "Automated build from commit ${{ github.sha }}."
