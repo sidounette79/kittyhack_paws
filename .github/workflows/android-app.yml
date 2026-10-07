@@ -93,8 +93,15 @@ jobs:
           pad=$(( (4 - len % 4) % 4 ))
           for i in $(seq 1 $pad); do raw="${raw}="; done
           echo "Secret length after stripping whitespace: ${len} chars (added ${pad} padding '=' to reach a multiple of 4)."
-          decode_err=$(printf '%s' "$raw" | base64 -d > android/app/kittyhack-release.jks 2>&1)
+          # 07.10, Sid: previous attempt's `2>&1` landed AFTER the `>file`
+          # redirect, so it duplicated stderr onto the FILE, not into the
+          # $() capture (which only ever sees stdout - empty by
+          # construction once stdout is redirected to the file). That's why
+          # the error text came back blank last time. stderr now goes to
+          # its own separate file instead.
+          printf '%s' "$raw" | base64 -d > android/app/kittyhack-release.jks 2>/tmp/base64_decode.err
           decode_status=$?
+          decode_err=$(cat /tmp/base64_decode.err)
           if [ $decode_status -ne 0 ]; then
             echo "::error::base64 -d failed (exit ${decode_status}): ${decode_err}. KITTYHACK_KEYSTORE_BASE64 secret is not valid base64 - re-copy it from kittyhack-release.jks.base64 in the generate-keystore.yml artifact, the whole content of that file and nothing else."
             exit 1
