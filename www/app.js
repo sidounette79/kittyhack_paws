@@ -832,14 +832,12 @@ document.addEventListener("DOMContentLoaded", function() {
         // Must match the TAB_PATHS set in the Python TabRoutingMiddleware (app.py).
         var TAB_ROUTES = {
             'live-view':           '/live-view/',
+            'journey':             '/journey/',
             'pictures':            '/pictures/',
             'manage-cats':         '/manage-cats/',
-            'add-new-cat':         '/add-new-cat/',
             'ai-training':         '/ai-training/',
-            'system':              '/system/',
             'configuration':       '/configuration/',
-            'wlan-configuration':  '/wlan-configuration/',
-            'info':                '/info/'
+            'wlan-configuration':  '/wlan-configuration/'
         };
 
         // Reverse mapping: pathname → tab value (with and without trailing slash).
@@ -1231,8 +1229,206 @@ document.addEventListener("DOMContentLoaded", function() {
             if (!thumb) return;
             // Ignore clicks on action buttons within card footer
             if (e.target.closest('.kh-photo-actions') || e.target.closest('a') || e.target.closest('button')) return;
+            // 05.10, Sid: "tag directement depuis ces photos" - don't open the
+            // lightbox while this card is armed for drawing a missed-detection
+            // box, or on the click that follows finishing a drag.
+            if (thumb.dataset.khDrawing === '1') return;
             e.preventDefault();
             openLightbox(thumb.getAttribute('data-orig-src'));
         });
+    })();
+
+    // ---- Collapsible sections: survive a Shiny re-render ----
+    // 05.10, Sid ("quand je clique, ça referme la section déroulable - ça me
+    // fait la même chose quand je dois envoyer à Label Studio"): every
+    // action button inside a collapsible_section (helpers.py) bumps a
+    // reload_trigger, which makes Shiny fully replace that section's DOM
+    // node with fresh HTML - collapsed by default (collapsible_section
+    // always renders class="collapse", no "show"). Bootstrap's open/closed
+    // state is just that CSS class, so it never survives the replacement,
+    // even though nothing about the click itself was meant to close
+    // anything. Fix: remember which section ids are open (via Bootstrap's
+    // own show/hide events), and re-apply "show" as soon as the DOM changes
+    // - watched directly via MutationObserver rather than a shiny:value
+    // listener (05.10, second round: the shiny:value approach silently did
+    // nothing - nothing elsewhere in this codebase uses that event, so
+    // there was no actual proof Shiny-for-Python's JS fires it; a
+    // MutationObserver reacts to the real DOM replacement itself, with no
+    // assumption about which internal event Shiny does or doesn't emit).
+    (function initCollapsibleStatePersistence() {
+        const openSections = new Set();
+
+        // 07.10, Sid ("le menu principal deroulant, celui des onglets, ne
+        // se referme plus non plus"): the mobile navbar's hamburger menu
+        // (.navbar-collapse) is ALSO a Bootstrap .collapse component, same
+        // as collapsible_section's own collapsible divs - this listener was
+        // tracking and force-reopening BOTH indiscriminately. The navbar
+        // should always just close on its own click handler (see "Collapse
+        // navbar on nav-link click" above); only persist real
+        // collapsible_section ids.
+        function isNavbarCollapse(el) {
+            return !!(el && el.classList && el.classList.contains('navbar-collapse'));
+        }
+
+        document.addEventListener('shown.bs.collapse', function(e) {
+            if (e.target && e.target.id && !isNavbarCollapse(e.target)) openSections.add(e.target.id);
+        });
+        document.addEventListener('hidden.bs.collapse', function(e) {
+            if (e.target && e.target.id) openSections.delete(e.target.id);
+        });
+
+        function restoreOpenSections() {
+            if (openSections.size === 0) return;
+            openSections.forEach(function(id) {
+                const el = document.getElementById(id);
+                if (!el || isNavbarCollapse(el) || el.classList.contains('show')) return;
+                el.classList.add('show');
+                const btn = document.querySelector('[data-bs-target="#' + id + '"]');
+                if (btn) btn.setAttribute('aria-expanded', 'true');
+            });
+        }
+
+        if (window.MutationObserver) {
+            const observer = new MutationObserver(function() {
+                requestAnimationFrame(restoreOpenSections);
+            });
+            observer.observe(document.body, { childList: true, subtree: true });
+        } else {
+            document.addEventListener('shiny:value', function() {
+                requestAnimationFrame(restoreOpenSections);
+            });
+        }
+    })();
+
+    // 04.10, Sid ("si je swipe de droite a gauche, ca change d'onglet?") -
+    // tab order matches ui.py's _nav_items (ui.navset_bar id="main_nav").
+    // Swipe right-to-left (finger moves left) = next tab, like flipping a page forward.
+    (function() {
+        const TAB_ORDER = [
+            'presence', 'live-view', 'journey', 'chronology', 'pictures',
+            'manage-cats', 'ai-training', 'configuration', 'wlan-configuration',
+        ];
+        const SWIPE_MIN_DISTANCE = 70;   // px - avoid triggering on small accidental drags
+        const SWIPE_MAX_DURATION = 600;  // ms - a real swipe, not a slow drag
+        const SWIPE_MAX_VERTICAL = 60;   // px - reject mostly-vertical swipes (page scrolling)
+
+        let touchStartX = 0;
+        let touchStartY = 0;
+        let touchStartTime = 0;
+        let touchStartIgnored = false;
+
+        document.addEventListener('touchstart', function(e) {
+            if (e.touches.length !== 1) return;
+            // Ignore swipes starting inside the photo/event modal - their own
+            // gesture handling (if any) takes priority there.
+            touchStartIgnored = !!e.target.closest(
+                '#event_modal_overlay, #event_modal_root, .kh-photo-modal-backdrop'
+            );
+            if (touchStartIgnored) return;
+            touchStartX = e.touches[0].clientX;
+            touchStartY = e.touches[0].clientY;
+            touchStartTime = Date.now();
+        }, { passive: true });
+
+        document.addEventListener('touchend', function(e) {
+            if (touchStartIgnored || !touchStartTime) return;
+            const touch = e.changedTouches[0];
+            const deltaX = touch.clientX - touchStartX;
+            const deltaY = touch.clientY - touchStartY;
+            const elapsed = Date.now() - touchStartTime;
+            touchStartTime = 0;
+
+            if (elapsed > SWIPE_MAX_DURATION) return;
+            if (Math.abs(deltaX) < SWIPE_MIN_DISTANCE) return;
+            if (Math.abs(deltaY) > SWIPE_MAX_VERTICAL) return;
+
+            const activeLink = document.querySelector(
+                '#main_nav .nav-link.active[data-value]'
+            );
+            if (!activeLink) return;
+            const currentIndex = TAB_ORDER.indexOf(activeLink.getAttribute('data-value'));
+            if (currentIndex === -1) return;
+
+            const nextIndex = deltaX < 0 ? currentIndex + 1 : currentIndex - 1;
+            if (nextIndex < 0 || nextIndex >= TAB_ORDER.length) return;
+
+            // Tabs absent from the DOM (e.g. wlan-configuration in remote mode)
+            // simply yield no target - swiping past the last real tab does nothing.
+            const targetLink = document.querySelector(
+                '#main_nav .nav-link[data-value="' + TAB_ORDER[nextIndex] + '"]'
+            );
+            if (targetLink) {
+                targetLink.click();
+            }
+        }, { passive: true });
+    })();
+
+    // 07.10, Sid ("une barre de navigation fixe en bas avec des icones"):
+    // wires the server-rendered #kh_bottom_nav buttons (ui.py's
+    // _bottom_nav_bar()) to the same tab-switching Shiny already does via
+    // .nav-link[data-value] clicks, and keeps the active icon in sync with
+    // whichever tab is actually showing (including when it's one of the
+    // "more" items, so the hamburger icon itself highlights too).
+    (function initBottomNav() {
+        const bar = document.getElementById('kh_bottom_nav');
+        if (!bar) return;
+        const moreBtn = document.getElementById('kh_bottom_nav_more_btn');
+        const moreMenu = document.getElementById('kh_bottom_nav_more_menu');
+
+        function activateTabValue(tabValue) {
+            const link = document.querySelector('#main_nav .nav-link[data-value="' + tabValue + '"]');
+            if (link) link.click();
+        }
+
+        bar.querySelectorAll('.kh-bottom-nav-item[data-tab-value]').forEach(function (btn) {
+            btn.addEventListener('click', function () {
+                activateTabValue(btn.getAttribute('data-tab-value'));
+                if (moreMenu) moreMenu.hidden = true;
+            });
+        });
+
+        if (moreMenu) {
+            moreMenu.querySelectorAll('.kh-bottom-nav-more-item[data-tab-value]').forEach(function (btn) {
+                btn.addEventListener('click', function () {
+                    activateTabValue(btn.getAttribute('data-tab-value'));
+                    moreMenu.hidden = true;
+                });
+            });
+        }
+
+        if (moreBtn && moreMenu) {
+            moreBtn.addEventListener('click', function (e) {
+                e.stopPropagation();
+                moreMenu.hidden = !moreMenu.hidden;
+            });
+            document.addEventListener('click', function (e) {
+                if (!moreMenu.hidden && !moreMenu.contains(e.target) && e.target !== moreBtn && !moreBtn.contains(e.target)) {
+                    moreMenu.hidden = true;
+                }
+            });
+        }
+
+        function syncActiveState() {
+            const activeLink = document.querySelector('#main_nav .nav-link.active[data-value]');
+            const activeValue = activeLink ? activeLink.getAttribute('data-value') : null;
+            bar.querySelectorAll('.kh-bottom-nav-item[data-tab-value]').forEach(function (btn) {
+                btn.classList.toggle('active', btn.getAttribute('data-tab-value') === activeValue);
+            });
+            if (moreMenu) {
+                moreMenu.querySelectorAll('.kh-bottom-nav-more-item[data-tab-value]').forEach(function (btn) {
+                    btn.classList.toggle('active', btn.getAttribute('data-tab-value') === activeValue);
+                });
+                if (moreBtn) {
+                    moreBtn.classList.toggle('active', !!moreMenu.querySelector('.active[data-tab-value]'));
+                }
+            }
+        }
+
+        syncActiveState();
+        const navEl = document.getElementById('main_nav');
+        if (navEl && window.MutationObserver) {
+            const observer = new MutationObserver(syncActiveState);
+            observer.observe(navEl, { attributes: true, attributeFilter: ['class'], subtree: true });
+        }
     })();
 });

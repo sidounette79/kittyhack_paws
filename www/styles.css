@@ -26,6 +26,14 @@
     overflow: hidden;
 }
 
+.navbar-logo-img {
+    height: 52px;
+    width: auto;
+    max-width: 100%;
+    object-fit: contain;
+    margin: 2px 0;
+}
+
 /* On desktop, keep the theme toggle on the far right */
 @media (min-width: 1400px) {
     .theme-toggle-container {
@@ -242,6 +250,52 @@ html[data-bs-theme="dark"] .spinner {
     border-radius: 8px;
 }
 
+.kh-model-review-row {
+    border: 1px solid var(--bs-border-color, #444);
+    border-radius: 8px;
+    padding: 0.5rem;
+}
+
+/* 06.10, Sid ("deux événements quasi similaires, je peine à les distinguer
+   en mode nuit - juste deux couleurs en alternance suffit"): toggled onto
+   every other EVENT (not every other row - several rows can share one
+   event), see ui_model_review's alt_row logic. Low-opacity overlay so it
+   still reads correctly in dark mode. */
+.kh-model-review-row-alt {
+    background-color: rgba(13, 110, 253, 0.14);
+}
+
+.kh-model-review-thumb {
+    width: 160px;
+    height: 120px;
+    flex-shrink: 0;
+    overflow: hidden;
+    border-radius: 6px;
+}
+
+.kh-model-review-thumb img {
+    width: 100% !important;
+    height: 100% !important;
+    object-fit: cover;
+}
+
+/* 06.10, Sid ("rendre le contrôle praticable depuis un smartphone"): the
+   row is a fixed-width horizontal flex (thumb + text + buttons) - fine on
+   desktop, but on a phone viewport (~390px) that overflows sideways and
+   cuts off the action buttons entirely. Stack vertically below ~480px. */
+@media (max-width: 480px) {
+    .kh-model-review-row {
+        flex-direction: column !important;
+        align-items: stretch !important;
+    }
+
+    .kh-model-review-thumb {
+        width: 100%;
+        height: auto;
+        aspect-ratio: 4 / 3;
+    }
+}
+
 /* Footer layout for per-photo action buttons */
 .kh-photo-footer-row {
     display: flex;
@@ -366,6 +420,208 @@ html[data-bs-theme="dark"] .kh-photo-modal-close:hover {
     border-radius: 5px;
     white-space: nowrap;
     font-size: 12px;
+}
+
+/* 05.10, Sid: manually-added (not model-detected) box - green instead of
+   red so it's visually obvious which boxes are a human addition. */
+.kh-detect-box-manual {
+    border-color: #22c55e;
+    background-color: rgba(34, 197, 94, 0.05);
+}
+
+.kh-detect-box-manual .kh-detect-label {
+    background-color: rgba(22, 163, 74, 0.85);
+}
+
+/* 09.09, Sid: validate/correct - a real <button>, not a div (see
+   photos.py), so it needs a UA-style reset to still look like the plain
+   pill it always was, plus pointer-events re-enabled since its parent
+   .kh-detect-box is deliberately click-through (pointer-events:none) for
+   every other purpose (the lightbox open-on-click behind it). */
+.kh-detect-label-clickable {
+    border: none;
+    font: inherit;
+    line-height: normal;
+    pointer-events: auto;
+    cursor: pointer;
+    text-decoration: underline dotted;
+    text-underline-offset: 2px;
+}
+
+.kh-detect-label-clickable:hover {
+    filter: brightness(1.2);
+}
+
+/* 09.09, Sid: Journey tab - correlated timeline of flap events + outdoor
+   watchdog captures. */
+.kh-journey-list {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    padding: 8px 0;
+}
+
+.kh-journey-item {
+    border-radius: 10px;
+    padding: 10px;
+    background: rgba(248, 249, 250, 0.95);
+    border: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+html[data-bs-theme="dark"] .kh-journey-item {
+    background: rgba(33, 37, 41, 0.92);
+    border-color: rgba(255, 255, 255, 0.08);
+}
+
+.kh-journey-event-main {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.kh-journey-event-thumb {
+    width: 72px;
+    height: 72px;
+    object-fit: cover;
+    border-radius: 8px;
+    flex-shrink: 0;
+}
+
+.kh-journey-event-info {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    font-size: 0.95rem;
+}
+
+.kh-journey-event-time {
+    font-weight: 600;
+}
+
+.kh-journey-event-action {
+    margin-left: auto;
+    flex-shrink: 0;
+}
+
+.kh-journey-event-cat {
+    opacity: 0.8;
+}
+
+.kh-journey-cluster {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px dashed rgba(0, 0, 0, 0.12);
+}
+
+html[data-bs-theme="dark"] .kh-journey-cluster {
+    border-top-color: rgba(255, 255, 255, 0.15);
+}
+
+.kh-journey-solo {
+    padding: 10px;
+}
+
+/* 06.10, Sid ("un truc simple et immediatement lisible comme sureflap, mais
+   on garde l'icone pour voir les photos"): Chronologie's flat list - one
+   compact row per flap event, no inline thumbnail, no camera-capture
+   cluster. kh-chrono-list is a modifier on top of .kh-journey-list (keeps
+   its gap/flex-column layout), .kh-chrono-event a tighter row style than
+   the full .kh-journey-item card. */
+.kh-chrono-list {
+    gap: 4px;
+}
+
+.kh-chrono-event {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 12px;
+}
+
+.kh-chrono-event-info {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    font-size: 0.95rem;
+    flex-wrap: wrap;
+}
+
+.kh-chrono-event-time {
+    font-weight: 600;
+    opacity: 0.75;
+    font-size: 0.85rem;
+    white-space: nowrap;
+}
+
+.kh-chrono-event-cat {
+    font-weight: 500;
+}
+
+.kh-journey-cluster-standalone {
+    border-top: none;
+    margin-top: 0;
+    padding-top: 0;
+}
+
+.kh-journey-capture {
+    position: relative;
+    width: 150px;
+    flex-shrink: 0;
+}
+
+.kh-journey-capture img {
+    display: block;
+    width: 100%;
+    height: 112px;
+    object-fit: cover;
+    border-radius: 8px;
+}
+
+.kh-journey-capture-label {
+    font-size: 0.75rem;
+    opacity: 0.75;
+    margin-top: 2px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.kh-journey-capture-actions {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    display: flex;
+    gap: 4px;
+}
+
+.kh-journey-action-btn {
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    border-radius: 6px;
+    background: rgba(0, 0, 0, 0.55);
+    color: #fff;
+    cursor: pointer;
+}
+
+.kh-journey-action-btn svg {
+    height: 0.85rem !important;
+    width: auto !important;
+}
+
+.kh-journey-action-btn:hover {
+    background: rgba(0, 0, 0, 0.75);
+}
+
+.kh-journey-action-delete:hover {
+    background: rgba(220, 53, 69, 0.85);
 }
 
 /* Event modal: picture loading spinner overlay */
@@ -498,6 +754,73 @@ html[data-bs-theme="dark"] .event-modal-picture-spinner {
 /* Hidden when JS marks that an image exists */
 .event-modal-picture-wrap.has-image .event-modal-picture-spinner {
     opacity: 0;
+}
+
+/* --- Detection validate/correct (09.09, Sid) --- */
+
+.kh-event-obj-label-clickable {
+    text-decoration: underline dotted;
+    text-underline-offset: 2px;
+}
+
+.kh-event-obj-label-clickable:hover {
+    filter: brightness(1.2);
+}
+
+/* 05.10, Sid: manual "tag a missed detection" drawing mode */
+.kh-photo-thumb.kh-add-detection-mode {
+    cursor: crosshair;
+    outline: 2px dashed #22c55e;
+    outline-offset: -2px;
+}
+
+.kh-draw-rect {
+    position: absolute;
+    border: 2px dashed #22c55e;
+    background-color: rgba(34, 197, 94, 0.15);
+    pointer-events: none;
+}
+
+.kh-correction-popover {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    background: rgba(20, 20, 20, 0.95);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 8px;
+    padding: 4px;
+    min-width: 160px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+    pointer-events: auto;
+}
+
+.kh-correction-option {
+    display: block;
+    width: 100%;
+    text-align: left;
+    background: transparent;
+    border: none;
+    color: #fff;
+    font-size: 12.5px;
+    padding: 5px 8px;
+    border-radius: 5px;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.kh-correction-option:hover {
+    background: rgba(255, 255, 255, 0.15);
+}
+
+.kh-correction-confirm {
+    color: #86efac;
+}
+
+.kh-correction-false-positive {
+    color: #fca5a5;
+    border-top: 1px solid rgba(255, 255, 255, 0.12);
+    margin-top: 2px;
+    padding-top: 6px;
 }
 
 .generic-container table {
@@ -2627,5 +2950,970 @@ html[data-bs-theme="dark"] .live-view-pill--muted {
 
 html[data-bs-theme="dark"] .live-view-banner {
     border-color: rgba(255, 255, 255, 0.12);
+}
+
+/* --- Presence tab (SureFlap-style dashboard) --- */
+
+.kh-presence-doors {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 12px;
+}
+
+@media (min-width: 700px) {
+    .kh-presence-doors {
+        grid-template-columns: repeat(2, minmax(260px, 320px));
+    }
+}
+
+.kh-presence-door-card {
+    aspect-ratio: 1 / 1;
+}
+
+.kh-presence-door-card .card-body {
+    display: flex;
+    align-items: center;
+}
+
+.kh-presence-door-row {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    gap: 10px;
+    width: 100%;
+}
+
+.kh-presence-door-state {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 1rem;
+    opacity: 0.85;
+}
+
+.kh-presence-door-state svg {
+    height: 1rem;
+    width: auto;
+}
+
+.kh-big-touch-btn {
+    min-height: 54px;
+    width: 100%;
+    font-size: 0.95rem;
+    font-weight: 600;
+    border-radius: 12px !important;
+    white-space: normal;
+}
+
+.kh-presence-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 14px;
+}
+
+@media (min-width: 700px) {
+    .kh-presence-grid {
+        grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    }
+}
+
+.kh-presence-card {
+    background: var(--bs-body-bg);
+    border: 1px solid rgba(0, 0, 0, 0.08);
+    border-radius: 14px;
+    overflow: hidden;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+    padding: 16px 10px 14px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+}
+
+html[data-bs-theme="dark"] .kh-presence-card {
+    border-color: rgba(255, 255, 255, 0.1);
+}
+
+.kh-presence-photo-wrap {
+    position: relative;
+    width: 72%;
+    max-width: 140px;
+}
+
+.kh-presence-photo {
+    display: block;
+    width: 100%;
+    aspect-ratio: 1 / 1;
+    object-fit: cover;
+    border-radius: 50%;
+}
+
+.kh-presence-photo-placeholder {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    aspect-ratio: 1 / 1;
+    border-radius: 50%;
+    background: rgba(0, 0, 0, 0.06);
+    color: rgba(0, 0, 0, 0.3);
+}
+
+.kh-presence-photo-placeholder svg {
+    height: 2.5rem;
+    width: auto;
+}
+
+html[data-bs-theme="dark"] .kh-presence-photo-placeholder {
+    background: rgba(255, 255, 255, 0.06);
+    color: rgba(255, 255, 255, 0.3);
+}
+
+.kh-presence-status-badge {
+    position: absolute;
+    top: -2px;
+    right: -2px;
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 3px solid var(--bs-body-bg);
+}
+
+.kh-presence-status-badge svg {
+    height: 1rem;
+    width: auto;
+}
+
+.kh-presence-badge-inside {
+    background: rgba(34, 197, 94, 0.28);
+    color: rgb(21, 128, 61);
+}
+
+.kh-presence-badge-outside {
+    background: rgba(99, 102, 241, 0.28);
+    color: rgb(67, 56, 202);
+}
+
+.kh-presence-badge-unknown {
+    background: rgba(107, 114, 128, 0.22);
+    color: rgb(75, 85, 99);
+}
+
+html[data-bs-theme="dark"] .kh-presence-badge-inside {
+    background: rgba(34, 197, 94, 0.3);
+    color: rgb(134, 239, 172);
+}
+
+html[data-bs-theme="dark"] .kh-presence-badge-outside {
+    background: rgba(99, 102, 241, 0.32);
+    color: rgb(199, 199, 253);
+}
+
+html[data-bs-theme="dark"] .kh-presence-badge-unknown {
+    background: rgba(156, 163, 175, 0.22);
+    color: rgb(209, 213, 219);
+}
+
+.kh-presence-card-body {
+    padding-top: 10px;
+    width: 100%;
+}
+
+.kh-presence-name {
+    font-weight: 700;
+    font-size: 1.05rem;
+    margin-bottom: 6px;
+}
+
+.kh-presence-location {
+    font-weight: 600;
+    font-size: 0.95rem;
+}
+
+.kh-presence-elapsed {
+    margin-top: 2px;
+    font-size: 0.8rem;
+    opacity: 0.65;
+}
+
+/* --- Shared in/out color convention (04.10, Sid) - same green/red as the
+   Presence tab's house/tree badges, reused for arrow icons and direction
+   text in the Journey ("Parcours") timeline and the Live view events table. */
+.kh-dir-in {
+    color: rgb(21, 128, 61);
+}
+
+.kh-dir-in svg {
+    fill: rgb(21, 128, 61);
+}
+
+.kh-dir-out {
+    color: rgb(185, 28, 28);
+}
+
+.kh-dir-out svg {
+    fill: rgb(185, 28, 28);
+}
+
+html[data-bs-theme="dark"] .kh-dir-in {
+    color: rgb(134, 239, 172);
+}
+
+html[data-bs-theme="dark"] .kh-dir-in svg {
+    fill: rgb(134, 239, 172);
+}
+
+html[data-bs-theme="dark"] .kh-dir-out {
+    color: rgb(252, 165, 165);
+}
+
+html[data-bs-theme="dark"] .kh-dir-out svg {
+    fill: rgb(252, 165, 165);
+}
+
+/* 07.10, Sid ("boubou est passe devant = jete un oeil"): a glance - neither
+   in nor out - gets its own neutral/amber tone instead of green or red. */
+.kh-dir-glance {
+    color: rgb(161, 98, 7);
+}
+
+html[data-bs-theme="dark"] .kh-dir-glance {
+    color: rgb(253, 224, 71);
+}
+
+.kh-presence-card-clickable {
+    cursor: pointer;
+    transition: transform 0.1s ease;
+}
+
+.kh-presence-card-clickable:active {
+    transform: scale(0.97);
+}
+
+/* --- Presence: per-cat detail view (03.10, "details en plus" style SureFlap) --- */
+
+.kh-presence-detail-header {
+    position: relative;
+    padding: 18px 16px 24px;
+    border-radius: 14px;
+    background-color: rgba(0, 0, 0, 0.5);
+    background-size: cover;
+    background-position: center 25%;
+    text-align: center;
+    color: #fff;
+    overflow: hidden;
+}
+
+.kh-presence-detail-header::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    backdrop-filter: blur(14px);
+    background: rgba(0, 0, 0, 0.35);
+}
+
+.kh-presence-detail-header > * {
+    position: relative;
+}
+
+.kh-presence-detail-back {
+    position: absolute;
+    top: 14px;
+    left: 10px;
+    cursor: pointer;
+    width: 34px;
+    height: 34px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.kh-presence-detail-back svg {
+    height: 1.2rem;
+    width: auto;
+}
+
+.kh-presence-detail-avatar {
+    width: 100px;
+    height: 100px;
+    border-radius: 50%;
+    object-fit: cover;
+    border: 3px solid #fff;
+    margin: 0 auto 10px;
+    display: block;
+}
+
+.kh-presence-detail-name {
+    font-size: 1.3rem;
+    font-weight: 700;
+    text-shadow: 0 1px 4px rgba(0, 0, 0, 0.6);
+}
+
+.kh-presence-stats-day-summary {
+    opacity: 0.6;
+    font-size: 0.8rem;
+    margin-left: 6px;
+}
+
+.kh-presence-tl-track {
+    position: relative;
+    height: 14px;
+    border-radius: 7px;
+    background: var(--bs-tertiary-bg, rgba(0, 0, 0, 0.06));
+    margin-top: 6px;
+}
+
+html[data-bs-theme="dark"] .kh-presence-tl-track {
+    background: rgba(255, 255, 255, 0.08);
+}
+
+.kh-presence-tl-gridline {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 1px;
+    background: rgba(128, 128, 128, 0.25);
+}
+
+.kh-presence-tl-tick {
+    position: absolute;
+    top: -2px;
+    width: 3px;
+    height: 18px;
+    border-radius: 2px;
+    transform: translateX(-50%);
+}
+
+.kh-presence-tl-tick-wrap {
+    position: absolute;
+    top: -2px;
+    width: 3px;
+    height: 18px;
+}
+
+.kh-presence-tl-tick-wrap .kh-presence-tl-tick {
+    position: static;
+    width: 100%;
+    height: 100%;
+    transform: none;
+}
+
+.kh-presence-tl-tick-btn {
+    position: absolute;
+    top: -8px;
+    left: -10px;
+    width: 23px;
+    height: 34px;
+}
+
+.kh-presence-tl-tick-btn button {
+    width: 100%;
+    height: 100%;
+    padding: 0;
+    background: transparent !important;
+    border: none !important;
+    opacity: 0;
+    cursor: pointer;
+}
+
+.kh-presence-tl-tick-in {
+    background: rgb(34, 197, 94);
+}
+
+.kh-presence-tl-tick-out {
+    background: rgb(239, 68, 68);
+}
+
+.kh-presence-tl-tick-prey {
+    background: rgb(59, 130, 246);
+}
+
+.kh-presence-tl-legend {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    font-size: 0.8rem;
+    opacity: 0.75;
+    margin: 14px 0 4px;
+}
+
+.kh-presence-tl-legend-dot {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    margin-left: 10px;
+}
+
+.kh-presence-tl-legend-dot:first-child {
+    margin-left: 0;
+}
+
+.kh-presence-day-strip {
+    display: flex;
+    justify-content: space-between;
+    gap: 4px;
+    overflow-x: auto;
+    padding: 14px 2px;
+}
+
+.kh-presence-day-pill {
+    cursor: pointer;
+    flex: 1 1 0;
+    min-width: 34px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    padding: 6px 0;
+    border-radius: 999px;
+    font-size: 0.8rem;
+    color: var(--bs-body-color);
+    opacity: 0.6;
+}
+
+.kh-presence-day-pill-selected {
+    background: rgb(99, 102, 241);
+    color: #fff;
+    opacity: 1;
+    font-weight: 700;
+}
+
+.kh-presence-day-num {
+    font-weight: 700;
+}
+
+.kh-presence-day-abbr {
+    font-size: 0.7rem;
+    text-transform: lowercase;
+}
+
+.kh-presence-detail-status {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    border-radius: 14px;
+    padding: 16px 18px;
+    margin: 4px 0 18px;
+}
+
+.kh-presence-detail-status.kh-presence-badge-inside {
+    background: rgba(34, 197, 94, 0.16);
+}
+
+.kh-presence-detail-status.kh-presence-badge-outside {
+    background: rgba(99, 102, 241, 0.16);
+}
+
+.kh-presence-detail-status.kh-presence-badge-unknown {
+    background: rgba(107, 114, 128, 0.16);
+}
+
+html[data-bs-theme="dark"] .kh-presence-detail-status.kh-presence-badge-inside {
+    background: rgba(34, 197, 94, 0.2);
+}
+
+html[data-bs-theme="dark"] .kh-presence-detail-status.kh-presence-badge-outside {
+    background: rgba(99, 102, 241, 0.22);
+}
+
+html[data-bs-theme="dark"] .kh-presence-detail-status.kh-presence-badge-unknown {
+    background: rgba(156, 163, 175, 0.18);
+}
+
+.kh-presence-detail-status-text {
+    font-weight: 700;
+    font-size: 1.1rem;
+}
+
+.kh-presence-detail-status-elapsed {
+    font-size: 0.85rem;
+    opacity: 0.75;
+    margin-top: 2px;
+}
+
+.kh-presence-detail-status-icon {
+    width: 46px;
+    height: 46px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(255, 255, 255, 0.5);
+}
+
+html[data-bs-theme="dark"] .kh-presence-detail-status-icon {
+    background: rgba(255, 255, 255, 0.12);
+}
+
+.kh-presence-detail-status-icon svg {
+    height: 1.3rem;
+    width: auto;
+}
+
+.kh-presence-status-icon-clickable {
+    cursor: pointer;
+    box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.5) inset;
+}
+
+.kh-presence-status-icon-clickable:active {
+    transform: scale(0.92);
+}
+
+.kh-presence-detail-label {
+    text-align: center;
+    font-size: 0.9rem;
+    opacity: 0.7;
+    margin-bottom: 6px;
+}
+
+.kh-presence-detail-lastentry {
+    text-align: center;
+    margin-bottom: 18px;
+}
+
+.kh-presence-detail-rel {
+    font-weight: 700;
+    font-size: 1.15rem;
+}
+
+.kh-presence-detail-abs {
+    font-size: 0.9rem;
+    opacity: 0.6;
+    margin-left: 6px;
+}
+
+.kh-presence-detail-noentry {
+    text-align: center;
+    opacity: 0.6;
+    margin-bottom: 18px;
+}
+
+.kh-presence-detail-stats {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+}
+
+.kh-presence-detail-stats-3col {
+    grid-template-columns: 1fr 1fr 1fr;
+}
+
+.kh-presence-detail-stats-3col .kh-presence-detail-stat-value {
+    font-size: 1.1rem;
+}
+
+.kh-presence-detail-stat-box {
+    background: var(--bs-tertiary-bg, rgba(0, 0, 0, 0.04));
+    border-radius: 12px;
+    padding: 14px 10px;
+    text-align: center;
+}
+
+html[data-bs-theme="dark"] .kh-presence-detail-stat-box {
+    background: rgba(255, 255, 255, 0.06);
+}
+
+.kh-presence-detail-stat-value {
+    font-weight: 700;
+    font-size: 1.3rem;
+}
+
+.kh-presence-detail-stat-label {
+    font-size: 0.8rem;
+    opacity: 0.65;
+    margin-top: 2px;
+}
+
+.kh-presence-stat-box-clickable {
+    cursor: pointer;
+}
+
+.kh-presence-stat-box-clickable:active {
+    transform: scale(0.97);
+}
+
+/* 07.10, Sid ("quand je clique sur Entree, j'ai le filtre de la
+   chronologie"): the active/expanded stat tile stands out, and the
+   resulting event list gets a little breathing room below the tiles. */
+.kh-presence-stat-box-active {
+    outline: 2px solid var(--bs-primary, #0d6efd);
+    outline-offset: -2px;
+}
+
+.kh-presence-events-filtered {
+    margin-top: 10px;
+}
+
+.kh-presence-events-filtered:empty {
+    margin-top: 0;
+}
+
+/* 05.10, Sid (page merge, step 1): photo -> "Manage cats" settings */
+.kh-presence-avatar-clickable {
+    cursor: pointer;
+}
+
+.kh-presence-avatar-clickable:active {
+    transform: scale(0.95);
+}
+
+/* --- Presence: weekly stats drill-down ("Acces" tab, style SureFlap) --- */
+
+.kh-presence-stats-header {
+    position: relative;
+    text-align: center;
+    padding: 4px 0 2px;
+}
+
+.kh-presence-stats-title {
+    font-weight: 700;
+    font-size: 1.1rem;
+}
+
+.kh-presence-stats-tabs {
+    display: flex;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    margin: 10px 0 14px;
+}
+
+html[data-bs-theme="light"] .kh-presence-stats-tabs {
+    border-bottom-color: rgba(0, 0, 0, 0.1);
+}
+
+.kh-presence-stats-tab {
+    flex: 1;
+    text-align: center;
+    padding: 8px 4px;
+    cursor: pointer;
+    opacity: 0.55;
+    font-weight: 600;
+    font-size: 0.95rem;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+}
+
+.kh-presence-stats-tab-active {
+    opacity: 1;
+    color: rgb(99, 102, 241);
+    border-bottom-color: rgb(99, 102, 241);
+}
+
+.kh-presence-stats-nav {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 18px;
+    margin-bottom: 16px;
+}
+
+.kh-presence-stats-nav-arrow {
+    cursor: pointer;
+    width: 30px;
+    height: 30px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.kh-presence-stats-nav-arrow svg {
+    height: 1rem;
+    width: auto;
+}
+
+.kh-presence-stats-nav-arrow-disabled {
+    opacity: 0.25;
+    cursor: default;
+}
+
+.kh-presence-stats-nav-label {
+    font-weight: 600;
+    min-width: 120px;
+    text-align: center;
+}
+
+.kh-presence-stats-day-list {
+    margin-top: 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+
+.kh-presence-stats-day-row {
+    display: grid;
+    grid-template-columns: 70px 1fr;
+    grid-template-rows: auto auto;
+    column-gap: 10px;
+    align-items: center;
+}
+
+.kh-presence-stats-day-abbr {
+    font-weight: 600;
+}
+
+.kh-presence-stats-day-date {
+    opacity: 0.6;
+    font-size: 0.85rem;
+}
+
+.kh-presence-stats-day-value {
+    text-align: right;
+    font-weight: 600;
+    font-size: 0.9rem;
+}
+
+.kh-presence-stats-day-bar-track {
+    grid-column: 1 / -1;
+    height: 10px;
+    border-radius: 999px;
+    background: var(--bs-tertiary-bg, rgba(0, 0, 0, 0.06));
+    overflow: hidden;
+}
+
+html[data-bs-theme="dark"] .kh-presence-stats-day-bar-track {
+    background: rgba(255, 255, 255, 0.08);
+}
+
+.kh-presence-stats-day-bar-fill {
+    height: 100%;
+    border-radius: 999px;
+    background: rgb(99, 102, 241);
+}
+
+/* --- Password field show/hide eye toggle --- */
+
+.kh-pwd-field {
+    position: relative;
+}
+
+.kh-pwd-field input {
+    padding-right: 2.4rem;
+}
+
+.kh-pwd-toggle {
+    position: absolute;
+    right: 6px;
+    bottom: 6px;
+    height: 28px;
+    width: 28px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: none;
+    border: none;
+    cursor: pointer;
+    opacity: 0.65;
+    color: inherit;
+    padding: 0;
+}
+
+.kh-pwd-toggle:hover {
+    opacity: 1;
+}
+
+.kh-pwd-toggle svg {
+    height: 0.95rem;
+    width: auto;
+}
+
+/* --- Outdoor watchdog camera previews (Live tab) --- */
+
+/* 09.09, Sid: bslib's fillable navset panel is a flex column with no
+   built-in scrolling - the live-view card (fill=True, the intended
+   "grow to fill leftover space" item) and its footer card can end up
+   claiming the whole tab-pane's height, squeezing/clipping whatever
+   comes after them (events teaser, outdoor cameras) down to a sliver.
+   Let this specific tab-pane scroll instead of silently clipping, and
+   stop the trailing output blocks from being shrink candidates. */
+.tab-pane[data-value="live-view"] {
+    overflow-y: auto;
+}
+
+#ui_last_events,
+#ui_outdoor_cameras {
+    flex-shrink: 0 !important;
+}
+
+/* 09.09, Sid: hand-styled "card" look for the plain div returned by
+   ui_outdoor_cameras() - see the comment there for why it's not a real
+   ui.card(). */
+.kh-wdcam-container {
+    text-align: left;
+    overflow: visible !important;
+    flex-shrink: 0 !important;
+    background: var(--bs-body-bg);
+    border: 1px solid rgba(0, 0, 0, 0.08);
+    border-radius: 14px;
+    padding: 14px 16px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+}
+
+html[data-bs-theme="dark"] .kh-wdcam-container {
+    border-color: rgba(255, 255, 255, 0.1);
+}
+
+.kh-wdcam-title {
+    margin-bottom: 12px;
+}
+
+/* 09.09, Sid: CSS Grid's auto-fill needs a definite container width to
+   compute column count - under bslib's mobile stacked-flow fallback that
+   width can resolve as indeterminate, collapsing the grid (and every
+   image inside it) to zero-size with no visible error. A plain flex
+   column has no such ambiguity, so it's the mobile/base layout. Now that
+   this whole block is a plain div (not a bslib card), its own width is
+   always well-defined, so side-by-side columns on wider screens are safe
+   too - just via flex-wrap, not grid auto-fill. */
+.kh-wdcam-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    min-height: 1px;
+}
+
+@media (min-width: 576px) {
+    .kh-wdcam-grid {
+        flex-direction: row;
+        flex-wrap: wrap;
+    }
+
+    .kh-wdcam-card {
+        flex: 1 1 220px;
+    }
+}
+
+.kh-wdcam-card {
+    border-radius: 10px;
+    overflow: hidden;
+    background: rgba(0, 0, 0, 0.04);
+}
+
+html[data-bs-theme="dark"] .kh-wdcam-card {
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.kh-wdcam-img {
+    display: block;
+    width: 100%;
+    height: 180px;
+    object-fit: cover;
+    background: #111;
+}
+
+.kh-wdcam-img.kh-wdcam-error {
+    opacity: 0.3;
+}
+
+.kh-wdcam-label {
+    padding: 6px 8px;
+    font-size: 0.85rem;
+    opacity: 0.8;
+}
+
+.kh-wdcam-hint {
+    margin-top: 8px;
+    font-size: 0.78rem;
+    opacity: 0.55;
+}
+
+/* 07.10, Sid ("une barre de navigation fixe en bas avec des icones"): mobile
+   bottom nav, hidden on wider screens (the existing fixed-top navbar stays
+   the only nav there). Shown via a plain max-width media query - no JS
+   needed just to toggle visibility. */
+.kh-bottom-nav {
+    display: none;
+}
+
+@media (max-width: 768px) {
+    .kh-bottom-nav {
+        display: flex;
+        position: fixed;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        z-index: 1040;
+        background: var(--bs-body-bg);
+        border-top: 1px solid var(--bs-border-color, rgba(0, 0, 0, 0.12));
+        padding-bottom: env(safe-area-inset-bottom, 0);
+    }
+
+    /* Room at the bottom of the page so content doesn't end up hidden
+       behind the fixed bar. */
+    body {
+        padding-bottom: calc(56px + env(safe-area-inset-bottom, 0));
+    }
+}
+
+.kh-bottom-nav-item {
+    flex: 1 1 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    padding: 6px 2px;
+    border: none;
+    background: transparent;
+    color: inherit;
+    opacity: 0.6;
+    font-size: 0.68rem;
+    line-height: 1.1;
+}
+
+.kh-bottom-nav-item.active {
+    opacity: 1;
+    color: var(--bs-primary, #0d6efd);
+}
+
+.kh-bottom-nav-item svg {
+    width: 20px;
+    height: 20px;
+}
+
+.kh-bottom-nav-label {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
+}
+
+.kh-bottom-nav-more-menu {
+    position: fixed;
+    left: 8px;
+    right: 8px;
+    bottom: calc(56px + env(safe-area-inset-bottom, 0) + 6px);
+    z-index: 1041;
+    background: var(--bs-body-bg);
+    border: 1px solid var(--bs-border-color, rgba(0, 0, 0, 0.12));
+    border-radius: 10px;
+    box-shadow: 0 4px 18px rgba(0, 0, 0, 0.25);
+    overflow: hidden;
+}
+
+.kh-bottom-nav-more-item {
+    display: block;
+    width: 100%;
+    text-align: left;
+    padding: 12px 16px;
+    border: none;
+    border-bottom: 1px solid var(--bs-border-color, rgba(0, 0, 0, 0.08));
+    background: transparent;
+    color: inherit;
+    font-size: 0.95rem;
+}
+
+.kh-bottom-nav-more-item:last-child {
+    border-bottom: none;
+}
+
+.kh-bottom-nav-more-item.active {
+    color: var(--bs-primary, #0d6efd);
+    font-weight: 600;
 }
 
