@@ -15,6 +15,14 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    # 07.10, Sid (real error from the GitHub Actions UI - the API never
+    # surfaced it): "secrets" cannot be referenced directly inside an `if:`
+    # expression, that's a documented GitHub Actions restriction, not
+    # something specific to this workflow - the whole file failed to parse
+    # (0 jobs created) because of it. Fix: expose it as a job-level env var
+    # first, then check THAT in `if:` instead of `secrets.*` directly.
+    env:
+      GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
     defaults:
       run:
         working-directory: android-app
@@ -41,9 +49,7 @@ jobs:
         # project README/report for exact steps. Skipped (not failed) until
         # that secret exists - the build will still run, just without a
         # working push-notifications plugin until Firebase is wired in.
-        if: ${{ secrets.GOOGLE_SERVICES_JSON != '' }}
-        env:
-          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+        if: ${{ env.GOOGLE_SERVICES_JSON != '' }}
         run: echo "$GOOGLE_SERVICES_JSON" | base64 -d > android/app/google-services.json
 
       - name: Sync Capacitor
