@@ -24,7 +24,12 @@ from src.paths import kittyhack_root
 USERS_FILE = os.path.join(kittyhack_root(), "users_auth.json")
 SESSIONS_FILE = os.path.join(kittyhack_root(), "sessions.json")
 SESSION_COOKIE = "kittyhack_session"
-SESSION_TTL_S = 12 * 3600  # 12 hours
+# 06.10, Sid ("j'ai dû remettre user et mdp... c'est chiant"): 12h meant any
+# gap in opening the app (a workday, an evening out) forced a fresh login.
+# This is her own phone/PWA, not a shared machine - a long-lived session is
+# low-risk here, so widened to 90 days instead of re-authenticating her
+# constantly for no real security benefit.
+SESSION_TTL_S = 90 * 24 * 3600  # 90 days
 
 # Same shape as the REST API's own limiter (src/api.py) for consistency.
 _AUTH_FAIL_WINDOW_S = 60.0
@@ -273,6 +278,42 @@ class WebAuthMiddleware:
         # /api/v1/* keeps its own independent Bearer/token auth (src/api.py) —
         # never gate it behind a browser session cookie.
         if path.startswith("/api/"):
+            await self.app(scope, receive, send)
+            return
+
+        # Branding/PWA static assets stay public: the browser tab icon and
+        # bookmark/install icon must show the real logo on the login page
+        # too, and manifest.json needs to be fetchable unauthenticated for
+        # Chrome's install-icon lookup.
+        if path == "/manifest.json" or path.startswith("/favicon") or path == "/apple-touch-icon.png":
+            await self.app(scope, receive, send)
+            return
+
+        # Cat photos referenced from OS-level push notification images: the
+        # browser/OS fetches these outside the normal page context, where the
+        # session cookie isn't reliably attached — keep them public like the
+        # favicons above. Content is just cat pictures, not sensitive.
+        if path.startswith("/cat-photo/"):
+            await self.app(scope, receive, send)
+            return
+
+        # /pwa-service-worker.js must be fetchable unauthenticated: Chrome
+        # (re-)registers/updates it in background contexts (e.g. periodic
+        # SW update checks) that don't carry the session cookie.
+        if path == "/pwa-service-worker.js":
+            await self.app(scope, receive, send)
+            return
+
+        # Same reasoning as the favicons/cat-photos above: the OS fetches the
+        # status-bar badge outside the normal page context.
+        if path == "/notif-badge.png":
+            await self.app(scope, receive, send)
+            return
+
+        # One-time-token-gated event photo for a specific push notification
+        # (see src/webpush.py register_notification_image) - opaque random
+        # token, not a guessable sequential id, so this is safe to leave public.
+        if path.startswith("/notif-image/"):
             await self.app(scope, receive, send)
             return
 
