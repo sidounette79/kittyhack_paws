@@ -8,6 +8,7 @@ js_file = Path(__file__).parent.parent / "www" / "app.js"
 server_ui_js_file = Path(__file__).parent.parent / "www" / "server-ui.js"
 event_modal_js_file = Path(__file__).parent.parent / "www" / "event-modal.js"
 webpush_client_js_file = Path(__file__).parent.parent / "www" / "webpush-client.js"
+fcm_native_client_js_file = Path(__file__).parent.parent / "www" / "fcm-native-client.js"
 watchdog_cams_js_file = Path(__file__).parent.parent / "www" / "watchdog-cams-client.js"
 photos_correction_js_file = Path(__file__).parent.parent / "www" / "photos-correction-client.js"
 journey_client_js_file = Path(__file__).parent.parent / "www" / "journey-client.js"
@@ -43,6 +44,11 @@ try:
     _webpush_client_js_version = str(int(webpush_client_js_file.stat().st_mtime))
 except Exception:
     _webpush_client_js_version = "0"
+
+try:
+    _fcm_native_client_js_version = str(int(fcm_native_client_js_file.stat().st_mtime))
+except Exception:
+    _fcm_native_client_js_version = "0"
 
 try:
     _watchdog_cams_js_version = str(int(watchdog_cams_js_file.stat().st_mtime))
@@ -247,6 +253,7 @@ app_ui = ui.page_fillable(
     ui.tags.script(src=f"server-ui.js?v={_server_ui_js_version}", defer=True),
     ui.tags.script(src=f"event-modal.js?v={_event_modal_js_version}", defer=True),
     ui.tags.script(src=f"webpush-client.js?v={_webpush_client_js_version}", defer=True),
+    ui.tags.script(src=f"fcm-native-client.js?v={_fcm_native_client_js_version}", defer=True),
     ui.tags.script(src=f"watchdog-cams-client.js?v={_watchdog_cams_js_version}", defer=True),
     ui.tags.script(src=f"photos-correction-client.js?v={_photos_correction_js_version}", defer=True),
     ui.tags.script(src=f"journey-client.js?v={_journey_client_js_version}", defer=True),
