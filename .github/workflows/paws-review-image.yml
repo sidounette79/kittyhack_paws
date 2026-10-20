@@ -1,0 +1,41 @@
+name: Build Paws Review Docker image
+
+# 20.10, Sid ("on peut le mettre dans le même truc que kittyhack... un
+# accessoire qui va avec") - même principe que docker-image.yml
+# (kittyhack-remote) : jamais de build sur OLDMEDIA/NASMEDIA (les crashe),
+# et jamais deux builds en parallèle sur FUNMEDIA non plus - un workflow
+# séparé, filtré sur paws-review/ uniquement, pour ne jamais se
+# déclencher en même temps qu'un changement côté kittyhack lui-même.
+# Même pattern de publication (release asset tar.gz, pas de registre).
+
+on:
+  push:
+    paths:
+      - "paws-review/**"
+      - ".github/workflows/paws-review-image.yml"
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # needed for `gh release create` below
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image
+        working-directory: paws-review
+        run: docker build -f Dockerfile -t paws-review:latest .
+
+      - name: Save and compress image
+        run: docker save paws-review:latest | gzip > paws-review-${{ github.run_number }}.tar.gz
+
+      - name: Publish image as a numbered GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "paws-review-build-${{ github.run_number }}" \
+            "paws-review-${{ github.run_number }}.tar.gz" \
+            --title "Paws Review Docker image, build ${{ github.run_number }}" \
+            --notes "Automated build from commit ${{ github.sha }}. Deploy: curl -L -o image.tar.gz <asset_url> && gunzip -c image.tar.gz | docker load"
