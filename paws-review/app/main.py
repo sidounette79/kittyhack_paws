@@ -415,12 +415,14 @@ def model_review_status():
 # modèles les plus récents, auto-sélectionnés.
 @app.post("/app-api/model-compare/recent")
 def model_compare_recent(payload: dict = Body(...)):
+    from app.labels import CLASSES
     from app.model_compare import COMPARISONS_DIR, run_recent_events
     from app.model_review import MODELS_DIR
 
-    offset = int(payload.get("offset") or 0)
-    limit = int(payload.get("limit") or 10)
-    prey_only = bool(payload.get("prey_only"))
+    limit = int(payload.get("limit") or 20)
+    class_filter = payload.get("class_filter") or None
+    if class_filter and class_filter not in CLASSES:
+        raise HTTPException(400, f"class_filter invalide : {class_filter}")
     # session_dir : uniquement une valeur qu'on a nous-mêmes renvoyée sur un
     # appel précédent (voir "out_dir" ci-dessous) - jamais un chemin arbitraire
     # du client, d'où la vérification qu'il reste bien sous COMPARISONS_DIR.
@@ -434,7 +436,7 @@ def model_compare_recent(payload: dict = Body(...)):
         raise HTTPException(409, f"Seulement {len(dirs)} modèle(s) disponible(s), 2 nécessaires")
     new_dir = os.path.join(MODELS_DIR, dirs[0])
     old_dir = os.path.join(MODELS_DIR, dirs[1])
-    result = run_recent_events(old_dir, new_dir, offset, limit, prey_only=prey_only, session_dir=session_dir)
+    result = run_recent_events(old_dir, new_dir, limit, class_filter=class_filter, session_dir=session_dir)
     return result
 
 

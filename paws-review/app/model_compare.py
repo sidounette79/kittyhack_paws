@@ -150,7 +150,9 @@ def _predict_boxes(model, image_path: str) -> list[tuple[str, float, float, floa
     return out
 
 
-def _recent_event_groups(conn: sqlite3.Connection, offset: int, limit: int, prey_only: bool = False) -> tuple[list, int]:
+def _recent_event_groups(
+    conn: sqlite3.Connection, limit: int, old_version: str, new_version: str, class_filter: str | None = None,
+) -> tuple[list, list, int]:
     """20.10, Sid ("un bouton qui sort la comparaison... un clic lance les
     10 derniers événements, puis ceux d'avant") - un événement = un groupe
     de captures qui partagent le même block_id (un vrai passage), pas une
@@ -159,16 +161,20 @@ def _recent_event_groups(conn: sqlite3.Connection, offset: int, limit: int, prey
     événement, choisi avec la même priorité Prey-d'abord que
     model_review._dominant_label - cohérent avec le reste de l'outil.
 
-    prey_only (20.10, Sid "un filtre Prey... je vois direct le primordial")
-    - filtre AVANT pagination sur la vérité terrain ORIGINALE (effective_boxes,
-    pas les prédictions des modèles) : un événement est gardé si une de ses
-    captures contenait réellement une proie confirmée/corrigée. Coût : il
-    faut évaluer effective_boxes sur tous les groupes pour filtrer avant de
-    découper la page, pas seulement sur les 10 retenus - acceptable à cette
-    échelle (quelques centaines d'événements, pas d'inférence ici).
+    class_filter (20.10, Sid "un filtre pour chacun" - plus seulement Prey,
+    n'importe quelle classe, Prey comprise) - filtre AVANT sélection sur la
+    vérité terrain ORIGINALE (effective_boxes, jamais les prédictions) : un
+    événement est gardé si une de ses captures contenait réellement cette
+    classe, confirmée/corrigée.
 
-    Retourne (lignes représentatives, nombre total d'événements PERTINENTS
-    pour ce filtre) pour la pagination par clic."""
+    20.10, Sid ("empêcher de recharger un truc que j'aurai déjà chargé une
+    fois") - exclut aussi, de façon PERSISTANTE (model_compare_scanned,
+    survit aux rechargements de page), tout événement déjà rendu pour CE
+    couple de modèles précis - plus de notion d'offset, "les N derniers"
+    veut dire "les N prochains jamais encore comparés pour ce couple".
+
+    Retourne (lignes représentatives, event_key de chacune dans le même
+    ordre, nombre total d'événements RESTANTS pour ce filtre+couple)."""
     rows = conn.execute(
         """SELECT id, block_id, original_path, detected_objects_json, created_at FROM captures
            WHERE review_status IN ('confirmed', 'corrected') AND original_path IS NOT NULL
@@ -177,24 +183,32 @@ def _recent_event_groups(conn: sqlite3.Connection, offset: int, limit: int, prey
 
     groups: dict = {}
     for row in rows:
-        key = row["block_id"] if row["block_id"] is not None else f"solo-{row['id']}"
+        key = str(row["block_id"]) if row["block_id"] is not None else f"solo-{row['id']}"
         groups.setdefault(key, []).append(row)
 
-    ordered_keys = sorted(groups, key=lambda k: max(r["created_at"] for r in groups[k]), reverse=True)
+    scanned = {
+        r["event_key"] for r in conn.execute(
+            "SELECT event_key FROM model_compare_scanned WHERE old_version = ? AND new_version = ?",
+            (old_version, new_version),
+        ).fetchall()
+    }
 
-    if prey_only:
+    ordered_keys = sorted(groups, key=lambda k: max(r["created_at"] for r in groups[k]), reverse=True)
+    ordered_keys = [k for k in ordered_keys if k not in scanned]
+
+    if class_filter:
         kept_keys = []
         for key in ordered_keys:
             for row in groups[key]:
                 boxes = effective_boxes(conn, row["id"], row["detected_objects_json"])
-                if any(canonicalize(b.get("label")) == "Prey" for b in boxes):
+                if any(canonicalize(b.get("label")) == class_filter for b in boxes):
                     kept_keys.append(key)
                     break
         ordered_keys = kept_keys
 
-    page_keys = ordered_keys[offset: offset + limit]
+    page_keys = ordered_keys[:limit]
 
-    reps = []
+    reps, rep_keys = [], []
     for key in page_keys:
         best_row, best_label, best_prob = None, None, -1.0
         for row in groups[key]:
@@ -207,18 +221,20 @@ def _recent_event_groups(conn: sqlite3.Connection, offset: int, limit: int, prey
                 best_row, best_label, best_prob = row, label, prob
         if best_row is not None:
             reps.append(best_row)
+            rep_keys.append(key)
 
-    return reps, len(ordered_keys)
+    return reps, rep_keys, len(ordered_keys)
 
 
 def run_recent_events(
-    old_dir: str, new_dir: str, offset: int, limit: int,
-    prey_only: bool = False, session_dir: str | None = None,
+    old_dir: str, new_dir: str, limit: int,
+    class_filter: str | None = None, session_dir: str | None = None,
 ) -> dict:
     """Variante chronologique de run() : au lieu d'un échantillon aléatoire
-    équilibré par classe, prend les N événements réels les plus récents
-    (pagination par offset/limit, un clic = une page), vérité terrain
-    (vert) / ancien modèle (orange) / nouveau modèle (bleu) côte à côte.
+    équilibré par classe, prend les N PROCHAINS événements réels jamais
+    encore comparés pour ce couple de modèles (voir _recent_event_groups),
+    vérité terrain (vert) / ancien modèle (orange) / nouveau modèle (bleu)
+    côte à côte.
 
     20.10, Sid ("si je clique 3x avant d'aller sur la galerie, j'en vois
     30 ?") - session_dir (reçu du frontend, c'est le out_dir renvoyé par
@@ -227,10 +243,13 @@ def run_recent_events(
     _entries.json porte la liste complète vue jusqu'ici, fusionnée (sans
     doublon par capture_id) et retriée avant de régénérer index.html en
     entier. Sans session_dir (premier clic, ou "recommencer"), une
-    nouvelle galerie est créée."""
+    nouvelle galerie est créée - les événements déjà comparés avant
+    restent exclus quand même (model_compare_scanned, pas lié à la
+    galerie elle-même)."""
     from ultralytics import YOLO
 
     init_db()
+    old_version, new_version = os.path.basename(old_dir), os.path.basename(new_dir)
     old_model = YOLO(os.path.join(old_dir, "model.pt"))
     new_model = YOLO(os.path.join(new_dir, "model.pt"))
 
@@ -248,9 +267,15 @@ def run_recent_events(
             existing_entries = json.load(f)
 
     with get_conn() as conn:
-        rows, total_events = _recent_event_groups(conn, offset, limit, prey_only)
+        rows, rep_keys, total_events = _recent_event_groups(conn, limit, old_version, new_version, class_filter)
         new_entries = []
-        for row in rows:
+        for row, event_key in zip(rows, rep_keys):
+            # Scannée dans tous les cas, fichier trouvé ou pas - sinon un
+            # fichier manquant reviendrait indéfiniment à chaque clic.
+            conn.execute(
+                "INSERT OR IGNORE INTO model_compare_scanned (event_key, old_version, new_version) VALUES (?, ?, ?)",
+                (event_key, old_version, new_version),
+            )
             if not os.path.isfile(row["original_path"]):
                 continue
             img = Image.open(row["original_path"]).convert("RGB")
@@ -279,6 +304,7 @@ def run_recent_events(
                 "old_classes": sorted({canonicalize(l) for l, *_ in old_pred} - {None}),
                 "new_classes": sorted({canonicalize(l) for l, *_ in new_pred} - {None}),
             })
+        conn.commit()
 
     seen_ids = {e["capture_id"] for e in existing_entries}
     merged = existing_entries + [e for e in new_entries if e["capture_id"] not in seen_ids]
@@ -287,15 +313,15 @@ def run_recent_events(
     with open(manifest_path, "w") as f:
         json.dump(merged, f)
 
-    _write_recent_gallery_html(out_dir, merged, old_dir, new_dir, total_events, prey_only)
+    _write_recent_gallery_html(out_dir, merged, old_dir, new_dir, total_events, class_filter)
     url = "/model-comparisons/" + os.path.basename(out_dir) + "/index.html"
     return {
         "out_dir": out_dir, "url": url, "count": len(new_entries), "total_shown": len(merged),
-        "total_events": total_events, "offset": offset, "limit": limit, "prey_only": prey_only,
+        "total_events": total_events, "limit": limit, "class_filter": class_filter,
     }
 
 
-def _write_recent_gallery_html(out_dir: str, entries: list[dict], old_dir: str, new_dir: str, total_events: int, prey_only: bool):
+def _write_recent_gallery_html(out_dir: str, entries: list[dict], old_dir: str, new_dir: str, total_events: int, class_filter: str | None):
     rows_html = []
     for e in entries:
         tags = []
@@ -313,7 +339,7 @@ def _write_recent_gallery_html(out_dir: str, entries: list[dict], old_dir: str, 
           <img src="{e['filename']}" loading="lazy">
         </div>""")
 
-    filter_note = " - filtré sur les événements avec une proie réelle (vérité terrain)" if prey_only else ""
+    filter_note = f" - filtré sur les événements avec {class_filter} réel (vérité terrain)" if class_filter else ""
     html = f"""<!doctype html><html><head><meta charset="utf-8">
 <title>Comparaison événements récents</title>
 <style>

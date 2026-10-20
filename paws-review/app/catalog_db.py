@@ -107,6 +107,19 @@ CREATE TABLE IF NOT EXISTS model_review_scanned (
     PRIMARY KEY (capture_id, model_version)
 );
 
+-- 20.10, Sid ("empêcher de recharger un truc que j'aurai déjà chargé une
+-- fois") - un événement (event_key = block_id, ou "solo-<capture_id>" pour
+-- les sources jamais groupées) déjà rendu dans la galerie de comparaison
+-- pour CE couple de modèles précis ne doit plus jamais y revenir, même
+-- d'une session à l'autre (pas juste le temps d'une page ouverte) - voir
+-- model_compare.py run_recent_events.
+CREATE TABLE IF NOT EXISTS model_compare_scanned (
+    event_key TEXT NOT NULL,
+    old_version TEXT NOT NULL,
+    new_version TEXT NOT NULL,
+    PRIMARY KEY (event_key, old_version, new_version)
+);
+
 -- 20.10, Sid ("il faut garder les filtres et corrélations RFID... pas que
 -- j'en aie 60 000 à contrôler") - une ligne ici = un VRAI désaccord à
 -- trancher à la main. Un désaccord sur une capture cat_source='rfid' (donc

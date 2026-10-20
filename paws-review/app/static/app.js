@@ -545,54 +545,54 @@ async function resolveMrCurrent(action) {
 }
 
 // 20.10, Sid ("un bouton qui sort aussi la comparaison... un clic lance
-// les 10 derniers événements, puis ceux d'avant") - pas une file de revue,
-// une seule action qui génère une galerie HTML (voir model_compare.py
-// run_recent_events) et un lien vers elle, ouverte dans un nouvel onglet.
-// offset avance de 10 à chaque clic "suivants" ; compareResult garde le
-// dernier lien affiché pour ne pas le perdre en revenant sur l'onglet.
-let compareOffset = 0;
+// les 10 derniers événements, puis ceux d'avant", puis "par coup de 20 ?
+// un filtre pour chacun ? empêcher de recharger un truc déjà chargé ?") -
+// pas une file de revue, une seule action qui génère une galerie HTML
+// (voir model_compare.py run_recent_events) et un lien vers elle. Plus de
+// notion d'offset côté client : le backend exclut lui-même, de façon
+// PERSISTANTE (model_compare_scanned), tout événement déjà rendu pour ce
+// couple de modèles - "suivants" redemande juste le prochain lot de 20
+// jamais vus, même après un rechargement de page ou un autre jour.
+const COMPARE_BATCH = 20;
 let compareResult = null;
 let compareLoading = false;
-// 20.10, Sid ("un filtre Prey... je vois direct le primordial") - sur la
-// vérité terrain originale, pas les prédictions. Changer ce filtre
-// recommence une session neuve (voir toggleComparePreyOnly) : mélanger
-// des événements filtrés et non filtrés dans une même galerie accumulée
-// n'aurait pas de sens.
-let comparePreyOnly = false;
+// Filtre par classe (chat ou proie), sur la vérité terrain originale, pas
+// les prédictions. Changer de filtre recommence une galerie neuve : mélanger
+// des événements filtrés et non filtrés n'aurait pas de sens dans une même
+// galerie accumulée.
+let compareClassFilter = null;
 
 function renderCompareBar() {
   const bar = document.getElementById('compare-bar');
-  const preyCheckbox = `
-    <label class="hint" style="display:inline-flex;align-items:center;gap:4px;margin-right:8px">
-      <input type="checkbox" ${comparePreyOnly ? 'checked' : ''} onchange="toggleComparePreyOnly(this.checked)">
-      Proies uniquement
-    </label>`;
+  const options = ['', 'Prey', ...Object.keys(CAT_COLORS)]
+    .map(c => `<option value="${c}" ${compareClassFilter === (c || null) ? 'selected' : ''}>${c === '' ? 'Tous' : (c === 'Prey' ? 'Proies' : c)}</option>`)
+    .join('');
+  const filterSelect = `
+    <select onchange="setCompareClassFilter(this.value)" style="margin-right:8px">${options}</select>`;
   if (compareLoading) {
-    bar.innerHTML = preyCheckbox + `<span class="export-msg">Comparaison en cours (ancien/nouveau modèle, ça peut prendre quelques secondes)...</span>`;
+    bar.innerHTML = filterSelect + `<span class="export-msg">Comparaison en cours (ancien/nouveau modèle, ça peut prendre quelques secondes)...</span>`;
     return;
   }
   if (!compareResult) {
-    bar.innerHTML = preyCheckbox + `<button onclick="startCompareRecent()">Comparer les 10 derniers événements</button>`;
+    bar.innerHTML = filterSelect + `<button onclick="startCompareRecent()">Comparer les ${COMPARE_BATCH} derniers événements</button>`;
     return;
   }
   const r = compareResult;
-  const hasMore = (compareOffset + 10) < r.total_events;
-  bar.innerHTML = preyCheckbox + `
-    <span class="export-msg">✓ ${r.total_shown} événement(s) accumulé(s) dans la galerie (${r.total_events} au total${r.prey_only ? ' avec proie' : ''})</span>
+  const hasMore = r.total_events > 0;
+  bar.innerHTML = filterSelect + `
+    <span class="export-msg">✓ ${r.total_shown} événement(s) accumulé(s) dans la galerie${r.class_filter ? ` (filtre : ${r.class_filter})` : ''}${hasMore ? `, ${r.total_events} restant(s)` : ', plus aucun restant'}</span>
     <a href="${r.url}" target="_blank"><button>Ouvrir la galerie</button></a>
-    ${hasMore ? `<button onclick="compareRecentMore()">10 événements précédents</button>` : ''}
-    <button onclick="startCompareRecent()">Recommencer depuis les plus récents</button>`;
+    ${hasMore ? `<button onclick="compareRecentMore()">${COMPARE_BATCH} événements précédents</button>` : ''}
+    <button onclick="startCompareRecent()">Recommencer (nouvelle galerie)</button>`;
 }
 
-function toggleComparePreyOnly(checked) {
-  comparePreyOnly = checked;
+function setCompareClassFilter(value) {
+  compareClassFilter = value || null;
   compareResult = null; // nouveau filtre = nouvelle galerie, pas de mélange
-  compareOffset = 0;
   renderCompareBar();
 }
 
 async function startCompareRecent() {
-  compareOffset = 0;
   compareResult = null;
   compareLoading = true;
   renderCompareBar();
@@ -600,7 +600,7 @@ async function startCompareRecent() {
     compareResult = await api('/app-api/model-compare/recent', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ offset: compareOffset, limit: 10, prey_only: comparePreyOnly }),
+      body: JSON.stringify({ limit: COMPARE_BATCH, class_filter: compareClassFilter }),
     });
   } catch (e) {
     compareResult = null;
@@ -610,7 +610,6 @@ async function startCompareRecent() {
 }
 
 async function compareRecentMore() {
-  compareOffset += 10;
   compareLoading = true;
   renderCompareBar();
   try {
@@ -618,13 +617,11 @@ async function compareRecentMore() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        offset: compareOffset, limit: 10, prey_only: comparePreyOnly,
+        limit: COMPARE_BATCH, class_filter: compareClassFilter,
         session_dir: compareResult ? compareResult.out_dir.split('/').pop() : null,
       }),
     });
-  } catch (e) {
-    compareOffset -= 10; // échec - on ne perd pas la position déjà atteinte
-  }
+  } catch (e) { /* échec - on garde le résultat précédent affiché */ }
   compareLoading = false;
   renderCompareBar();
 }
