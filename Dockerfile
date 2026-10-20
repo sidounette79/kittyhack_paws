@@ -54,6 +54,7 @@ RUN wget -q -P /tmp/intel-gpu \
     https://github.com/intel/intel-graphics-compiler/releases/download/igc-1.0.13230.7/intel-igc-opencl_1.0.13230.7_amd64.deb \
     https://github.com/intel/compute-runtime/releases/download/23.05.25593.11/intel-level-zero-gpu_1.3.25593.11_amd64.deb \
     https://github.com/intel/compute-runtime/releases/download/23.05.25593.11/intel-opencl-icd_23.05.25593.11_amd64.deb \
+    https://github.com/intel/compute-runtime/releases/download/23.05.25593.11/libigdgmm12_22.3.18_amd64.deb \
     && dpkg -i /tmp/intel-gpu/*.deb \
     && rm -rf /tmp/intel-gpu
 
