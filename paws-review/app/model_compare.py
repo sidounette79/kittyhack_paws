@@ -27,9 +27,11 @@ plus récents sous /models (le nouveau et celui qu'il remplace).
 
 import argparse
 import json
+import logging
 import os
 import random
 import sqlite3
+import threading
 import time
 
 from PIL import Image, ImageDraw, ImageFont
@@ -40,9 +42,59 @@ from app.config import STORAGE_ROOT
 from app.model_review import _dominant_label
 from app.labels import CLASSES, canonicalize
 
+log = logging.getLogger("model_compare")
+
 COMPARISONS_DIR = os.path.join(STORAGE_ROOT, "model_comparisons")
 DEFAULT_MODELS_DIR = os.environ.get("KITTYHACK_MODELS_DIR_RO", "/models")
 SAMPLE_SIZE = 30
+
+# 20.10, Sid ("50 en asynchrone, ça me semble pas mal") - même mécanique
+# que model_review.py (state JSON + verrou + thread daemon) : ~0,45s/image
+# mesuré en vrai (25s pour 50), trop long pour un simple POST synchrone
+# sans retour de progression pendant tout ce temps.
+COMPARE_STATE_PATH = os.path.join(STORAGE_ROOT, "model_compare_recent_state.json")
+_compare_run_lock = threading.Lock()
+
+
+def _write_compare_state(state: dict):
+    tmp = COMPARE_STATE_PATH + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(state, f)
+    os.replace(tmp, COMPARE_STATE_PATH)
+
+
+def read_compare_state() -> dict:
+    if not os.path.isfile(COMPARE_STATE_PATH):
+        return {"status": "idle"}
+    try:
+        with open(COMPARE_STATE_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {"status": "idle"}
+
+
+def start_compare_recent_async(
+    old_dir: str, new_dir: str, limit: int, class_filter: str | None, session_dir: str | None,
+) -> bool:
+    if not _compare_run_lock.acquire(blocking=False):
+        return False
+    thread = threading.Thread(
+        target=_run_compare_recent_locked,
+        args=(old_dir, new_dir, limit, class_filter, session_dir),
+        daemon=True,
+    )
+    thread.start()
+    return True
+
+
+def _run_compare_recent_locked(old_dir, new_dir, limit, class_filter, session_dir):
+    try:
+        run_recent_events(old_dir, new_dir, limit, class_filter=class_filter, session_dir=session_dir)
+    except Exception as e:
+        log.exception("Comparaison récente échouée")
+        _write_compare_state({"status": "error", "message": str(e)})
+    finally:
+        _compare_run_lock.release()
 
 COLOR_GT = (46, 204, 113)      # vert - vérité terrain (Sid)
 COLOR_OLD = (230, 126, 34)     # orange - ancien modèle
@@ -120,18 +172,25 @@ def _draw_boxes(img: Image.Image, boxes: list[tuple[str, float, float, float, fl
     out = img.copy()
     draw = ImageDraw.Draw(out)
     W, H = out.size
+    # 20.10, Sid ("même le nez collé à l'écran je vois rien") - taille fixe
+    # (14px) illisible une fois l'image affichée à sa vraie résolution (les
+    # caméras Reolink/Kittyflap sont en 1440p+) - mise à l'échelle sur la
+    # hauteur réelle de l'image plutôt qu'une constante.
+    font_size = max(20, H // 24)
+    line_width = max(3, H // 300)
     try:
-        font = ImageFont.truetype("DejaVuSans-Bold.ttf", 14)
+        font = ImageFont.truetype("DejaVuSans-Bold.ttf", font_size)
     except Exception:
         font = ImageFont.load_default()
+    label_h = font_size + 6
     for label, x, y, w, h, prob in boxes:
         x1, y1 = x / 100.0 * W, y / 100.0 * H
         x2, y2 = (x + w) / 100.0 * W, (y + h) / 100.0 * H
-        draw.rectangle([x1, y1, x2, y2], outline=color, width=3)
+        draw.rectangle([x1, y1, x2, y2], outline=color, width=line_width)
         text = f"{label} {prob:.0f}%" if prob is not None else label
         tw = draw.textlength(text, font=font)
-        draw.rectangle([x1, max(0, y1 - 18), x1 + tw + 6, y1], fill=color)
-        draw.text((x1 + 3, max(0, y1 - 18)), text, fill=(255, 255, 255), font=font)
+        draw.rectangle([x1, max(0, y1 - label_h), x1 + tw + 10, y1], fill=color)
+        draw.text((x1 + 5, max(0, y1 - label_h) + 2), text, fill=(255, 255, 255), font=font)
     return out
 
 
@@ -248,8 +307,10 @@ def run_recent_events(
     galerie elle-même)."""
     from ultralytics import YOLO
 
+    t0 = time.time()
     init_db()
     old_version, new_version = os.path.basename(old_dir), os.path.basename(new_dir)
+    _write_compare_state({"status": "running", "step": "loading_model", "elapsed_s": time.time() - t0})
     old_model = YOLO(os.path.join(old_dir, "model.pt"))
     new_model = YOLO(os.path.join(new_dir, "model.pt"))
 
@@ -269,7 +330,11 @@ def run_recent_events(
     with get_conn() as conn:
         rows, rep_keys, total_events = _recent_event_groups(conn, limit, old_version, new_version, class_filter)
         new_entries = []
-        for row, event_key in zip(rows, rep_keys):
+        for i, (row, event_key) in enumerate(zip(rows, rep_keys)):
+            _write_compare_state({
+                "status": "running", "step": "comparing", "scanned": i, "total": len(rows),
+                "elapsed_s": time.time() - t0,
+            })
             # Scannée dans tous les cas, fichier trouvé ou pas - sinon un
             # fichier manquant reviendrait indéfiniment à chaque clic.
             conn.execute(
@@ -315,10 +380,12 @@ def run_recent_events(
 
     _write_recent_gallery_html(out_dir, merged, old_dir, new_dir, total_events, class_filter)
     url = "/model-comparisons/" + os.path.basename(out_dir) + "/index.html"
-    return {
+    result = {
         "out_dir": out_dir, "url": url, "count": len(new_entries), "total_shown": len(merged),
         "total_events": total_events, "limit": limit, "class_filter": class_filter,
     }
+    _write_compare_state({"status": "success", "finished_at": time.time(), **result})
+    return result
 
 
 def _write_recent_gallery_html(out_dir: str, entries: list[dict], old_dir: str, new_dir: str, total_events: int, class_filter: str | None):

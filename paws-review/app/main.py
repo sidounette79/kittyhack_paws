@@ -405,18 +405,21 @@ def model_review_status():
 
 
 # 20.10, Sid ("un bouton qui sort aussi la comparaison... un clic lance
-# les 10 derniers événements, puis ceux d'avant") - model_compare.py
-# tournait jusqu'ici à la demande dans un conteneur jetable (ultralytics/
-# torch volontairement hors de l'image) ; depuis l'ajout du scan GPU de
-# model_review.py, ces mêmes dépendances sont déjà dans l'image, donc ce
-# bouton peut tourner directement ici. Même dossier de modèles que la
-# revérification (MODELS_DIR, pas le /models en lecture seule que
-# model_compare.py suppose en usage CLI) - ancien/nouveau = les deux
-# modèles les plus récents, auto-sélectionnés.
+# les 10 derniers événements, puis ceux d'avant", puis "50 en asynchrone,
+# ça me semble pas mal") - model_compare.py tournait jusqu'ici à la demande
+# dans un conteneur jetable (ultralytics/torch volontairement hors de
+# l'image) ; depuis l'ajout du scan GPU de model_review.py, ces mêmes
+# dépendances sont déjà dans l'image, donc ce bouton peut tourner
+# directement ici. Même dossier de modèles que la revérification
+# (MODELS_DIR, pas le /models en lecture seule que model_compare.py
+# suppose en usage CLI) - ancien/nouveau = les deux modèles les plus
+# récents, auto-sélectionnés. Asynchrone (même mécanique state+thread que
+# /model-review/start) : ~0,45s/image mesuré en vrai, 50 images = ~25s,
+# trop long pour un simple POST sans retour de progression.
 @app.post("/app-api/model-compare/recent")
 def model_compare_recent(payload: dict = Body(...)):
     from app.labels import CLASSES
-    from app.model_compare import COMPARISONS_DIR, run_recent_events
+    from app.model_compare import COMPARISONS_DIR, start_compare_recent_async
     from app.model_review import MODELS_DIR
 
     limit = int(payload.get("limit") or 20)
@@ -436,8 +439,16 @@ def model_compare_recent(payload: dict = Body(...)):
         raise HTTPException(409, f"Seulement {len(dirs)} modèle(s) disponible(s), 2 nécessaires")
     new_dir = os.path.join(MODELS_DIR, dirs[0])
     old_dir = os.path.join(MODELS_DIR, dirs[1])
-    result = run_recent_events(old_dir, new_dir, limit, class_filter=class_filter, session_dir=session_dir)
-    return result
+    started = start_compare_recent_async(old_dir, new_dir, limit, class_filter, session_dir)
+    if not started:
+        raise HTTPException(409, "Une comparaison est déjà en cours")
+    return {"ok": True}
+
+
+@app.get("/app-api/model-compare/status")
+def model_compare_status():
+    from app.model_compare import read_compare_state
+    return read_compare_state()
 
 
 @app.get("/app-api/model-review/queue")

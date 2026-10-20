@@ -253,7 +253,7 @@ function selectTab(name) {
     checkModelReviewStatus();
     loadModelReviewQueue();
   } else if (currentTab === COMPARE_TAB) {
-    renderCompareBar();
+    checkCompareStatus();
   } else {
     loadQueue();
   }
@@ -546,31 +546,42 @@ async function resolveMrCurrent(action) {
 
 // 20.10, Sid ("un bouton qui sort aussi la comparaison... un clic lance
 // les 10 derniers événements, puis ceux d'avant", puis "par coup de 20 ?
-// un filtre pour chacun ? empêcher de recharger un truc déjà chargé ?") -
-// pas une file de revue, une seule action qui génère une galerie HTML
-// (voir model_compare.py run_recent_events) et un lien vers elle. Plus de
-// notion d'offset côté client : le backend exclut lui-même, de façon
-// PERSISTANTE (model_compare_scanned), tout événement déjà rendu pour ce
-// couple de modèles - "suivants" redemande juste le prochain lot de 20
-// jamais vus, même après un rechargement de page ou un autre jour.
-const COMPARE_BATCH = 20;
+// un filtre pour chacun ? empêcher de recharger un truc déjà chargé ?",
+// puis "50 en asynchrone, ça me semble pas mal") - pas une file de revue,
+// une seule action qui génère une galerie HTML (voir model_compare.py
+// run_recent_events) et un lien vers elle. Plus de notion d'offset côté
+// client : le backend exclut lui-même, de façon PERSISTANTE
+// (model_compare_scanned), tout événement déjà rendu pour ce couple de
+// modèles - "suivants" redemande juste le prochain lot de 50 jamais vus,
+// même après un rechargement de page ou un autre jour. Asynchrone (même
+// mécanique state+polling que la revérification) : ~0,45s/image mesuré en
+// vrai, 50 images = ~25s, trop long pour un simple POST sans progression.
+const COMPARE_BATCH = 50;
 let compareResult = null;
-let compareLoading = false;
+let comparePollTimer = null;
 // Filtre par classe (chat ou proie), sur la vérité terrain originale, pas
 // les prédictions. Changer de filtre recommence une galerie neuve : mélanger
 // des événements filtrés et non filtrés n'aurait pas de sens dans une même
 // galerie accumulée.
 let compareClassFilter = null;
 
-function renderCompareBar() {
+function renderCompareBar(state) {
   const bar = document.getElementById('compare-bar');
   const options = ['', 'Prey', ...Object.keys(CAT_COLORS)]
     .map(c => `<option value="${c}" ${compareClassFilter === (c || null) ? 'selected' : ''}>${c === '' ? 'Tous' : (c === 'Prey' ? 'Proies' : c)}</option>`)
     .join('');
   const filterSelect = `
     <select onchange="setCompareClassFilter(this.value)" style="margin-right:8px">${options}</select>`;
-  if (compareLoading) {
-    bar.innerHTML = filterSelect + `<span class="export-msg">Comparaison en cours (ancien/nouveau modèle, ça peut prendre quelques secondes)...</span>`;
+  if (state && state.status === 'running') {
+    const label = state.step === 'loading_model' ? 'Chargement des modèles' : 'Comparaison';
+    const progress = state.total ? ` (${state.scanned ?? 0}/${state.total})` : '';
+    bar.innerHTML = filterSelect + `<span class="export-msg">${label}${progress}...</span>`;
+    return;
+  }
+  if (state && state.status === 'error') {
+    bar.innerHTML = filterSelect + `
+      <span class="export-msg export-error">Échec : ${state.message || 'erreur inconnue'}</span>
+      <button onclick="startCompareRecent()">Réessayer</button>`;
     return;
   }
   if (!compareResult) {
@@ -592,38 +603,38 @@ function setCompareClassFilter(value) {
   renderCompareBar();
 }
 
+async function checkCompareStatus() {
+  const state = await api('/app-api/model-compare/status');
+  renderCompareBar(state);
+  if (state.status === 'running') {
+    if (!comparePollTimer) comparePollTimer = setInterval(checkCompareStatus, 2000);
+  } else {
+    if (comparePollTimer) { clearInterval(comparePollTimer); comparePollTimer = null; }
+    if (state.status === 'success') compareResult = state;
+  }
+}
+
 async function startCompareRecent() {
-  compareResult = null;
-  compareLoading = true;
-  renderCompareBar();
   try {
-    compareResult = await api('/app-api/model-compare/recent', {
+    await api('/app-api/model-compare/recent', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ limit: COMPARE_BATCH, class_filter: compareClassFilter }),
     });
-  } catch (e) {
-    compareResult = null;
-  }
-  compareLoading = false;
-  renderCompareBar();
+  } catch (e) { /* 409 = déjà en cours - pas une vraie erreur */ }
+  await checkCompareStatus();
 }
 
 async function compareRecentMore() {
-  compareLoading = true;
-  renderCompareBar();
+  const sessionDir = compareResult ? compareResult.out_dir.split('/').pop() : null;
   try {
-    compareResult = await api('/app-api/model-compare/recent', {
+    await api('/app-api/model-compare/recent', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        limit: COMPARE_BATCH, class_filter: compareClassFilter,
-        session_dir: compareResult ? compareResult.out_dir.split('/').pop() : null,
-      }),
+      body: JSON.stringify({ limit: COMPARE_BATCH, class_filter: compareClassFilter, session_dir: sessionDir }),
     });
-  } catch (e) { /* échec - on garde le résultat précédent affiché */ }
-  compareLoading = false;
-  renderCompareBar();
+  } catch (e) { /* 409 = déjà en cours - pas une vraie erreur */ }
+  await checkCompareStatus();
 }
 
 async function openDetail(index) {
