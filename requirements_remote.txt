@@ -17,6 +17,7 @@ cryptography==50.0.1
 cycler==0.12.1
 DateTime==5.5
 faicons==0.2.2
+fastapi==0.115.6
 filelock==3.18.0
 fonttools==4.57.0
 frozenlist==1.8.0
@@ -40,6 +41,16 @@ ncnn==1.0.20241226
 networkx==3.4.2
 numpy==1.26.4
 opencv-python-headless==4.11.0.86
+# 19.10, Sid ("on fait la bascule en privilégié") - version pinned
+# volontairement en dessous du minimum qu'Ultralytics réclame
+# normalement (>=2024.0.0) : testé en vrai sur OLDMEDIA, 2023.3.0 est la
+# SEULE version qui voit l'iGPU (intel:gpu) - 2024+ retombe en CPU sur ce
+# matériel précis (Gemini Lake, J4125). Déjà présente ici AVANT le premier
+# appel à YOLO(...).export(format="openvino") = l'auto-update
+# d'Ultralytics (qui viserait >=2024.0.0) ne se déclenche jamais, elle ne
+# s'active que si le paquet est absent. Ne JAMAIS laisser pip la mettre à
+# jour sans retester le GPU derrière.
+openvino==2023.3.0
 orjson==3.10.11
 packaging==24.2
 paho-mqtt==2.1.0
@@ -48,6 +59,7 @@ pillow==11.1.0
 portalocker==3.1.1
 prompt-toolkit==3.0.36
 propcache==0.5.2
+pydantic==2.10.3
 psutil==7.0.0
 py-cpuinfo==9.0.0
 py-vapid==1.9.4
