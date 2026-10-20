@@ -1,0 +1,45 @@
+name: Build kittyhack-remote Docker image
+
+# 20.10, Sid ("kittyhack tu peux builder sur GitHub. Ça coûte rien et
+# soulage le nas") - same lesson as android-app.yml: a real image build
+# (apt + pip, now also the Intel GPU driver .deb downloads) must never run
+# on OLDMEDIA/NASMEDIA (crashes it), and per Sid tonight not even on
+# FUNMEDIA either (never two builds at once there, and this one in
+# particular should live on GitHub instead). Saved as a plain tar.gz
+# release asset (same publish pattern as android-app.yml's APK) rather
+# than pushed to a registry - no new secret/login needed on OLDMEDIA's
+# side, just an unauthenticated curl + `docker load`.
+
+on:
+  push:
+    paths:
+      - "Dockerfile"
+      - "requirements.txt"
+      - "requirements_remote.txt"
+      - "**.py"
+      - ".github/workflows/docker-image.yml"
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # needed for `gh release create` below
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image
+        run: docker build -f Dockerfile -t kittyhack-remote:latest .
+
+      - name: Save and compress image
+        run: docker save kittyhack-remote:latest | gzip > kittyhack-remote-${{ github.run_number }}.tar.gz
+
+      - name: Publish image as a numbered GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "docker-build-${{ github.run_number }}" \
+            "kittyhack-remote-${{ github.run_number }}.tar.gz" \
+            --title "kittyhack-remote Docker image, build ${{ github.run_number }}" \
+            --notes "Automated build from commit ${{ github.sha }}. Deploy: curl -L -o image.tar.gz <asset_url> && gunzip -c image.tar.gz | docker load"
