@@ -29,11 +29,12 @@ import time
 
 import cv2
 import numpy as np
+import requests
 
 from app.boxes import effective_boxes
 from app.catalog_db import get_conn
 from app.cat_labels import recompute_cat_labels
-from app.config import STORAGE_ROOT
+from app.config import KITTYHACK_API_TOKEN, KITTYHACK_API_URL, STORAGE_ROOT
 from app.labels import CLASSES, canonicalize
 
 log = logging.getLogger("model_review")
@@ -41,6 +42,42 @@ log = logging.getLogger("model_review")
 STATE_PATH = os.path.join(STORAGE_ROOT, "model_review_state.json")
 MODELS_DIR = os.environ.get("KITTYHACK_MODELS_DIR", "/kittyhack_models")
 _run_lock = threading.Lock()
+
+# 20.10, Sid ("l'analyse chat/proie/ouverture de porte doit toujours être
+# prioritaire sur tout le reste") - même garde-fou que
+# src/model/retroactive_review.py._wait_for_live_loop_idle() côté Kittyhack,
+# mais Paws Review tourne dans un conteneur séparé (ne peut pas importer
+# l'état mémoire du handler live) donc poll de GET /api/v1/detection/status
+# (voir src/api.py côté kittyhack-remote) à la place d'un import direct.
+# Vérifié entre chaque image du scan, même cadence que le module d'origine.
+_DETECTION_POLL_INTERVAL_S = 0.5
+
+
+def _wait_for_detection_idle(cancel_check=None) -> bool:
+    """Bloque pendant que la boucle de détection live (chat/proie/porte) est
+    active, pour toujours lui céder le GPU partagé. Retourne False si annulé
+    pendant l'attente, True dès que c'est sûr de continuer (y compris quand
+    KITTYHACK_API_URL n'est pas configuré, ou que l'appel échoue - ne jamais
+    bloquer indéfiniment le scan sur un statut manquant/cassé)."""
+    if not KITTYHACK_API_URL:
+        return True
+    while True:
+        try:
+            r = requests.get(
+                f"{KITTYHACK_API_URL}/api/v1/detection/status",
+                headers={"Authorization": f"Bearer {KITTYHACK_API_TOKEN}"},
+                timeout=3,
+            )
+            r.raise_for_status()
+            busy = bool(r.json().get("busy"))
+        except Exception as e:
+            log.debug("detection/status indisponible, on ne bloque pas : %s", e)
+            return True
+        if not busy:
+            return True
+        if cancel_check is not None and cancel_check():
+            return False
+        time.sleep(_DETECTION_POLL_INTERVAL_S)
 
 
 def _write_state(state: dict):
@@ -239,6 +276,10 @@ def run_model_review(model_version: str, num_captures: int = 200, cancel_event=N
                 )
             scanned += 1
             continue
+
+        cancel_check = (lambda: cancel_event.is_set()) if cancel_event is not None else None
+        if not _wait_for_detection_idle(cancel_check):
+            break
 
         try:
             new_boxes = _predict_boxes(model, row["original_path"])

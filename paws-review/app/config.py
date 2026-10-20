@@ -47,3 +47,12 @@ MIN_OWN_CAT_PROBABILITY = float(os.environ.get("MIN_OWN_CAT_PROBABILITY", "30.0"
 # observés, ~60 Ko/photo, 1 an ≈ 25 Go - un plafond Go n'a donc pas besoin d'être
 # strict, la purge se fait par âge).
 RETENTION_DAYS = int(os.environ.get("RETENTION_DAYS", "365"))
+
+# 20.10, Sid ("l'analyse chat/proie/ouverture de porte doit toujours être
+# prioritaire sur tout le reste") - endpoint GET /api/v1/detection/status
+# côté kittyhack-remote (même host, même GPU Intel physique partagé) :
+# voir model_review.py's _wait_for_detection_idle. Token dédié
+# ("paws-review-detection-status"), lecture seule, jamais utilisé pour
+# autre chose que ce poll.
+KITTYHACK_API_URL = os.environ.get("KITTYHACK_API_URL", "")
+KITTYHACK_API_TOKEN = os.environ.get("KITTYHACK_API_TOKEN", "")

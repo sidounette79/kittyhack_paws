@@ -520,6 +520,31 @@ async def cat_update(request: Request):
         return _err(f"database error: {e}", status_code=500)
 
 
+async def detection_status(request: Request):
+    """GET /api/v1/detection/status — read-only: is the live camera-to-door
+    detection loop actively busy with a real passage right now?
+
+    20.10, Sid ("l'analyse chat/proie/ouverture de porte doit toujours être
+    prioritaire sur tout le reste") - same signal src/model/retroactive_review.py
+    already reads in-process (_wait_for_live_loop_idle, threshold 2.0fps: idle
+    trickle is ~0.3-0.5fps, a real passage runs at ~8fps), exposed over HTTP so
+    a cross-container caller that can't import the live handler directly (e.g.
+    Paws Review's own revérification scan, competing for the same physical GPU)
+    can poll it and yield the same way. Keep this threshold in sync with
+    retroactive_review.py's _LIVE_BUSY_FPS_THRESHOLD if either ever changes.
+    """
+    _, err = await _auth_or_fail(request)
+    if err:
+        return err
+    try:
+        from src.backend import model_runtime
+        effective_fps, last_update = model_runtime.model_handler.get_effective_fps_snapshot()
+    except Exception as e:
+        return _err(f"status unavailable: {e}", status_code=500)
+    busy = bool(effective_fps and effective_fps >= 2.0)
+    return _ok({"effective_fps": effective_fps, "last_update": last_update, "busy": busy})
+
+
 async def events_list(request: Request):
     """GET /api/v1/events?limit=N — recent motion-block events."""
     _, err = await _auth_or_fail(request)
@@ -578,6 +603,10 @@ def build_router() -> Router:
 
         # Events
         Route("/api/v1/events", events_list, methods=["GET"]),
+
+        # Detection loop status - read-only, cross-container GPU-contention
+        # guard for anything else sharing this host's GPU (see Paws Review)
+        Route("/api/v1/detection/status", detection_status, methods=["GET"]),
     ]
     return Router(routes=routes)
 
