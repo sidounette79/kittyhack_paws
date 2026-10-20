@@ -11,9 +11,16 @@ from typing import Any
 
 import websockets
 
-from src.baseconfig import CONFIG
+from src.baseconfig import CONFIG, set_language
 from src.clock import monotonic_time
 from src.helper import sigterm_monitor
+
+_ = set_language(CONFIG["LANGUAGE"])
+
+# 09.10, Sid ("notification quand le pi est down depuis plus de 2 minutes"):
+# how long the link must stay down (wall-clock, not retries) before firing
+# the one-shot prolonged-outage notification below.
+PI_DISCONNECT_NOTIFICATION_THRESHOLD_S = 120.0
 
 
 @dataclass
@@ -60,6 +67,14 @@ class RemoteControlClient:
         self._pending_magnet_commands: dict[str, float] = {}
         self._manual_disconnect = threading.Event()
         self._last_logged_state: str | None = None
+        # 09.10, Sid ("est ce que kittyhack peut m'envoyer une notification
+        # quand le pi est down depuis plus de 2 minutes?" - same evening the
+        # Pi crashed 3 times): wall-clock time the CURRENT disconnection
+        # started (0.0 while connected), and whether the prolonged-outage
+        # notification has already fired for it - reset on every successful
+        # reconnect so a later disconnection gets its own fresh notification.
+        self._disconnect_since: float = 0.0
+        self._disconnect_notification_sent: bool = False
 
         self._sync_tmp_path: str | None = None
         self._sync_started_at: float = 0.0
@@ -436,8 +451,12 @@ class RemoteControlClient:
         # handler + finally both call this; the manual-disconnect loop calls
         # it every 0.5s while already disconnected) don't spam one log row
         # per call, only one row per real transition.
+        is_manual = (reason == "manual_disconnect")
         if self._last_logged_state != "disconnected":
             self._last_logged_state = "disconnected"
+            if not is_manual:
+                self._disconnect_since = time.time()
+                self._disconnect_notification_sent = False
             try:
                 from src.database import RemoteConnectionLogRepo
                 RemoteConnectionLogRepo.log_event(
@@ -446,6 +465,43 @@ class RemoteControlClient:
                 )
             except Exception:
                 pass
+
+        # 09.10, Sid ("notification quand le pi est down depuis plus de 2
+        # minutes"): checked on every call (this method is called
+        # repeatedly while disconnected, not just on the transition - see
+        # the comment above), fires exactly once per outage.
+        if (
+            not is_manual
+            and not self._disconnect_notification_sent
+            and self._disconnect_since > 0.0
+            and (time.time() - self._disconnect_since) >= PI_DISCONNECT_NOTIFICATION_THRESHOLD_S
+        ):
+            self._disconnect_notification_sent = True
+            try:
+                from src.webpush import send_notification_to_all
+                from src.fcm_push import send_fcm_notification_to_all
+                body = _("The Kittyflap has been unreachable for over 2 minutes.")
+                send_notification_to_all(
+                    _("Paws Flap"), body, url="/", tag=f"kittyhack-pi-disconnected-{int(self._disconnect_since)}",
+                )
+                # 11.10, Sid: confirmed via real logs - this fired but silently
+                # failed every time. send_fcm_notification_to_all_sync() calls
+                # asyncio.run(), which its own docstring explicitly assumes is
+                # safe only because loop.py's call sites run in a fresh,
+                # non-async thread. _set_disconnected_state is called from
+                # inside _main()'s own async coroutine (this thread's dedicated
+                # event loop is already running) every time this branch is
+                # reachable, so asyncio.run() always raised "cannot be called
+                # from a running event loop" and the notification never left
+                # this except block. Scheduling the async coroutine directly on
+                # the loop that's already running fixes it at the actual
+                # call site instead of patching the (correctly-designed, for
+                # its OTHER callers) sync wrapper.
+                asyncio.ensure_future(
+                    send_fcm_notification_to_all(_("Paws Flap"), body, url="/")
+                )
+            except Exception as e:
+                logging.warning(f"[REMOTE_CTRL] Failed to send prolonged-disconnect push notification: {e}")
 
     async def _main(self) -> None:
         timeout_s = float(CONFIG.get("REMOTE_CONTROL_TIMEOUT") or 10.0)
@@ -498,6 +554,33 @@ class RemoteControlClient:
                     self._ever_connected.set()
                     self._last_rx = time.time()
                     logging.info("[REMOTE_CTRL] Control acquired.")
+                    # 11.10, Sid ("une notif quand le pi revient en ligne ?
+                    # dans les cas où une notif de panne a été déclenchée"):
+                    # only announce the recovery when she was actually
+                    # alerted about the outage - a blip that reconnects
+                    # before the 2-minute threshold never bothered her in
+                    # the first place, so it shouldn't get a "back online"
+                    # notification either. Check BEFORE resetting the flag
+                    # below, same send pattern (asyncio.ensure_future, see
+                    # the disconnect-notification comment above) since this
+                    # also runs inside _main()'s own already-running loop.
+                    if self._disconnect_notification_sent:
+                        try:
+                            from src.webpush import send_notification_to_all
+                            from src.fcm_push import send_fcm_notification_to_all
+                            body = _("The Kittyflap is back online.")
+                            send_notification_to_all(
+                                _("Kittyhack"), body, url="/", tag=f"kittyhack-pi-reconnected-{int(time.time())}",
+                            )
+                            asyncio.ensure_future(
+                                send_fcm_notification_to_all(_("Kittyhack"), body, url="/")
+                            )
+                        except Exception as e:
+                            logging.warning(f"[REMOTE_CTRL] Failed to send reconnected push notification: {e}")
+                    # Reset the outage clock so the NEXT disconnection gets
+                    # its own fresh 2-minute notification window.
+                    self._disconnect_since = 0.0
+                    self._disconnect_notification_sent = False
                     if self._last_logged_state != "connected":
                         self._last_logged_state = "connected"
                         try:

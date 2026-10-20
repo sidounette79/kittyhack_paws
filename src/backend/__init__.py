@@ -17,12 +17,14 @@ __all__ = [
     "restart_mqtt",
     "motion_state",
     "motion_state_lock",
+    "door_unlock_source",
+    "door_unlock_source_lock",
 ]
 
 
 def __getattr__(name: str):
     """Lazy-resolve public backend symbols."""
-    if name in ("backend_main", "motion_state", "motion_state_lock"):
+    if name in ("backend_main", "motion_state", "motion_state_lock", "door_unlock_source", "door_unlock_source_lock"):
         from src.backend import loop as _loop
 
         return getattr(_loop, name)

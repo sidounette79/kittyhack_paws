@@ -2,6 +2,7 @@ import os
 import gettext
 import configparser
 import logging
+from logging.handlers import TimedRotatingFileHandler
 import sys
 import tempfile
 import threading
@@ -143,6 +144,16 @@ SETTINGS_SCHEMA: list[Setting] = [
     _S("MOUSE_THRESHOLD", 70.0, "float"),
     _S("NO_MOUSE_THRESHOLD", 70.0, "float"),
     _S("MIN_THRESHOLD", 30.0, "float"),
+    # 19.10, Sid ("plutôt qu'un seuil sur UNE frame, se baser sur plusieurs
+    # frames consécutives qui disent Prey d'affilée") - voir
+    # compute_mouse_check() dans backend/decisions.py pour la logique
+    # complète. MOUSE_CONSENSUS_MIN_FRAMES=0 (défaut) désactive ce chemin
+    # entièrement - comportement inchangé tant que ce n'est pas réglé à la
+    # main. MOUSE_CONSENSUS_THRESHOLD doit normalement rester bien sous
+    # MOUSE_THRESHOLD (ex. 30 vs 70) pour que le nombre de frames
+    # consécutives, pas la confiance d'une seule, porte la décision.
+    _S("MOUSE_CONSENSUS_THRESHOLD", 30.0, "float"),
+    _S("MOUSE_CONSENSUS_MIN_FRAMES", 0, "int"),
     _S("ELEMENTS_PER_PAGE", 20, "int"),
     _S("LOGLEVEL", "INFO"),
     _S("PERIODIC_JOBS_INTERVAL", 900, "int"),
@@ -267,6 +278,15 @@ SETTINGS_SCHEMA: list[Setting] = [
     # Update repository: standard | beta | custom (custom uses UPDATE_REPOSITORY)
     _S("UPDATE_REPOSITORY_MODE", "standard"),
     _S("UPDATE_REPOSITORY", ""),
+    # 07.10, Sid ("choisir parmi des wallpaper... comme pour meelo"): filename
+    # (inside wallpapers_dir()) of the active custom background, or "" for
+    # the plain default look.
+    _S("WALLPAPER_ACTIVE", ""),
+    # 07.10, Sid ("encore de flou... je sais pas à combien tu es - rajoute un
+    # réglage dans apparence et je modifie moi"): blur radius (px) for the
+    # cat-photo hero banner on the Presence detail page - after two rounds of
+    # guessing the right amount for her, a real slider beats another guess.
+    _S("PRESENCE_PHOTO_BLUR_PX", 10, "int"),
 ]
 
 _SETTINGS_BY_KEY: dict[str, Setting] = {s.key: s for s in SETTINGS_SCHEMA}
@@ -901,6 +921,36 @@ def configure_logging(level_name: str = "INFO"):
     logger = logging.getLogger()
     logger.setLevel(level)
     logger.addHandler(handler)
+
+    # 11.10, Sid ("on peut garder en stock les logs... pendant 7 jours ?
+    # C'est super chiant"): `docker logs` is tied to the current container
+    # id, not the service name - any --force-recreate starts a brand new,
+    # empty log, discarding everything from before. This bit for real the
+    # same day (lost the exact magnet-timing logs for a real cat exit,
+    # mid-investigation, right after a redeploy). Mirrors logging onto a
+    # real file on the persistent /data bind mount instead (survives
+    # recreates - same volume the YOLO models and training samples already
+    # live on), with daily rotation keeping the last 7 days.
+    try:
+        log_dir = "/data/logs"
+        os.makedirs(log_dir, exist_ok=True)
+        file_handler = TimedRotatingFileHandler(
+            os.path.join(log_dir, "kittyhack-remote.log"),
+            when="midnight", backupCount=7, encoding="utf-8",
+        )
+        # 11.10 (round 2), Sid ("sur l'event de 17h37 j'ai plus du tout
+        # reolink"): real gap found trying to investigate this - the file
+        # handler was reusing the plain stdout formatter (no timestamp,
+        # docker/journal already stamps those externally), making this
+        # persistent log useless for exactly the after-the-fact time-window
+        # search it exists for. Own formatter with a real timestamp here.
+        file_formatter = logging.Formatter('%(asctime)s [%(levelname)s] %(message)s')
+        file_handler.setFormatter(file_formatter)
+        logger.addHandler(file_handler)
+    except Exception as e:
+        # Never let a logging setup failure block startup.
+        logging.warning(f"[LOGGING] Failed to set up persistent file log: {e}")
+
     logging.info(f"Logger loglevel set to {level_name.upper()} (journal/stdout)")
 
 def get_loggable_config_value(key, value):

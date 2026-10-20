@@ -65,15 +65,37 @@ def compute_mouse_check(
     ids_with_mouse_count: int,
     analysis_elapsed_s: float,
     min_seconds_to_analyze: float,
+    consensus_frame_count: int = 0,
+    consensus_min_frames: int = 0,
 ) -> tuple[bool, dict]:
     """Whether prey gating is satisfied for an inside unlock.
 
     ``mouse_check`` True means "OK to unlock from a prey perspective"
     (disabled, or no mouse after enough analysis time).
-    """
+
+    19.10, Sid ("plutôt qu'un seuil sur UNE frame, se baser sur plusieurs
+    frames consécutives qui disent Prey d'affilée") - validé concrètement
+    sur un vrai cas (9 frames d'affilée, vérité terrain LabelStudio tâches
+    2577-2585, toutes "Prey" alors qu'aucune frame individuelle n'aurait
+    franchi MOUSE_THRESHOLD) : un signal répété à faible confiance sur
+    plusieurs frames est traité comme une détection, en plus du seuil haut
+    sur une seule frame existant - les deux chemins se complètent (OR), ni
+    l'un ni l'autre n'est retiré. ``consensus_frame_count`` compte les
+    frames du bloc courant franchissant un second seuil, plus bas
+    (CONFIG['MOUSE_CONSENSUS_THRESHOLD']) ; ``consensus_min_frames`` est
+    le nombre minimum requis (CONFIG['MOUSE_CONSENSUS_MIN_FRAMES']).
+    Valeurs par défaut (0) : chemin consensus toujours inactif, aucun
+    changement de comportement tant que ce n'est pas explicitement
+    configuré - voir aussi test_compute_mouse_check_consensus_path."""
+    single_frame_mouse = int(ids_with_mouse_count) > 0
+    consensus_mouse = (
+        int(consensus_min_frames) > 0
+        and int(consensus_frame_count) >= int(consensus_min_frames)
+    )
     conditions = {
         "mouse_check_disabled": prey_detection_enabled is False,
-        "no_mouse_detected": int(ids_with_mouse_count) == 0,
+        "no_mouse_detected": not (single_frame_mouse or consensus_mouse),
+        "mouse_consensus_detected": consensus_mouse,
         "sufficient_analysis_time": float(analysis_elapsed_s)
         >= float(min_seconds_to_analyze or 0.0),
     }

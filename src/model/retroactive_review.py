@@ -12,20 +12,62 @@ already used for the Photos tab's manual corrections.
 Loads its OWN, separate YOLO model instance rather than touching the live
 ``model_runtime.model_handler`` - that one is driven continuously by the
 real-time camera loop and is not safe to share with a one-off batch job
-running from a different thread. This means a review run adds its own,
-temporary CPU load on top of live detection for its duration.
+running from a different thread. As of 09.10 (real incident the day
+before: a scan starved the live loop enough that cats got stuck outside),
+this standalone instance also runs pinned to its own CPU core(s) via a
+worker process - see _REVIEW_NUM_THREADS - genuinely isolated from the
+live loop's cores, not just "its own model copy" sharing the same ones.
+That CPU pinning only takes effect when this module's own inference runs
+on CPU, though: with the 19.10 GPU switch (INFERENCE_DEVICE=intel:gpu),
+this module's handler targets the GPU too, same as the live loop, and
+model_handler.py's "GPU devices always use the direct inference path"
+bypasses the worker-process/CPU-pinning path entirely for any non-cpu
+device - see _wait_for_live_loop_idle() below for how this module now
+yields the shared GPU to the live loop instead.
 """
 import logging
-import multiprocessing
 import time
 
 import numpy as np
 import cv2
 
 from src.baseconfig import CONFIG
+from src.backend import model_runtime
 from src.model.model_handler import ModelHandler
 from src.model.yolo_model import YoloModel
 from src.database import DatabaseCore, EventsRepo, ReturnDataPhotosDB, ModelReviewRepo, DetectionFeedbackRepo
+
+# 19.10, Sid ("prioriser toujours la détection plutôt que l'analyse"): since
+# the GPU switch, review's own ModelHandler also targets intel:gpu (see
+# model_handler.py - "GPU devices always use the direct inference path",
+# which bypasses the 09.10 CPU-core pinning entirely for any non-cpu
+# device). Rather than force review back onto CPU and lose the GPU speed,
+# review instead watches the LIVE handler's own effective_fps
+# (model_runtime.model_handler.get_effective_fps_snapshot()) and pauses
+# itself whenever that crosses _LIVE_BUSY_FPS_THRESHOLD - idle trickle is
+# ~0.3-0.5fps, a real passage runs the live loop at ~8fps, so this cleanly
+# tells a genuine passage apart from idle background inference. Checked
+# between every photo in the review loop, same cadence as cancel_event.
+_LIVE_BUSY_FPS_THRESHOLD = 2.0
+_LIVE_BUSY_POLL_INTERVAL_S = 0.2
+
+
+def _wait_for_live_loop_idle(cancel_event) -> bool:
+    """Block while the live detection loop is actively busy (a real passage
+    in progress), so the review scan always yields the shared GPU to it.
+    Returns False if cancelled while waiting, True once safe to proceed
+    (including when the live FPS can't be read at all - never block the
+    scan indefinitely over a missing/broken status read)."""
+    while True:
+        try:
+            eff_fps, __ = model_runtime.model_handler.get_effective_fps_snapshot()
+        except Exception:
+            return True
+        if not eff_fps or eff_fps < _LIVE_BUSY_FPS_THRESHOLD:
+            return True
+        if cancel_event is not None and cancel_event.is_set():
+            return False
+        time.sleep(_LIVE_BUSY_POLL_INTERVAL_S)
 
 
 def _decode_image(image_bytes: bytes):
@@ -37,6 +79,24 @@ def _decode_image(image_bytes: bytes):
 
 
 _PREY_LABELS = ("prey", "beute")
+
+# 09.10, Sid (real incident the day before: "le scan a complètement étouffé
+# le NAS... mes chats sont restés coincés dehors"): ModelHandler only uses
+# its CPU-pinned worker-process mode (see model_handler.py's load_model) -
+# the one that can actually be kept off the live detection loop's cores via
+# cpu_affinity - when num_threads is below the container's total core
+# count. The 08.10 fix reverted to num_threads=cpu_count() instead (forcing
+# the fast synchronous "direct_inference" path) specifically because this
+# module called handler._yolo() expecting that path's plain 3-tuple return,
+# and the worker-process path returns a bare job_id instead - crashed on
+# every single photo back then. Fixed properly this time: _run_inference()
+# below speaks both calling conventions, so a real low num_threads (genuine
+# OS-level core isolation, not just a sleep between calls) finally works
+# without breaking anything. 1 of this container's 4 cores, leaving 3 for
+# live detection + the web server - conservative on purpose, can be raised
+# later once proven safe in practice.
+_REVIEW_NUM_THREADS = 1
+_REVIEW_WORKER_RESULT_TIMEOUT_S = 30.0
 
 
 def _normalize_name(name: str) -> str:
@@ -114,6 +174,24 @@ def _dominant_cat_from_new(detected_objects: list, cat_names: list[str]):
     return best
 
 
+def _run_inference(handler: ModelHandler, frame):
+    """Run one inference through whichever protocol this handler actually
+    uses - ModelHandler._yolo means two different things depending on
+    num_threads (see module-level comment above): a plain synchronous call
+    returning a 3-tuple directly ("direct_inference" path), or a bare
+    job_id that must be separately polled via _get_result() (worker-process
+    path, the one that actually honors CPU-core isolation). Returns the
+    same (mouse_probability, own_cat_probability, detected_objects) 3-tuple
+    either way, or raises on failure/timeout."""
+    if handler._model_worker is not None:
+        job_id = handler._send_to_worker(frame, handler.input_size)
+        result = handler._get_result(job_id, timeout=_REVIEW_WORKER_RESULT_TIMEOUT_S)
+        if result is None:
+            raise TimeoutError(f"worker result timed out after {_REVIEW_WORKER_RESULT_TIMEOUT_S}s")
+        return result
+    return handler._yolo(frame, handler.input_size)
+
+
 def _next_unscanned_block_ids(database: str, model_version: str, num_events: int) -> list[int]:
     """05.10, Sid ("une fois que j'ai fait les 50, ça lance les 50
     précédents?"): most recent events first, but skipping any block already
@@ -139,9 +217,19 @@ def _next_unscanned_block_ids(database: str, model_version: str, num_events: int
     return out
 
 
-def run_retroactive_review_batch(num_events: int = 50) -> dict:
+def run_retroactive_review_batch(num_events: int = 50, cancel_event=None) -> dict:
     """Blocking - call via asyncio.to_thread from the UI, same pattern as
-    the corrections export. Returns a summary dict."""
+    the corrections export. Returns a summary dict.
+
+    08.10, Sid ("stoppe le scan de révision, les chats ne peuvent pas
+    rentrer"): this batch job loads its own model copy (see module docstring)
+    and runs CPU-bound inference synchronously, one photo at a time, fast
+    enough to starve the live detection loop's own inference for its whole
+    duration when a large ``num_events`` is requested - there was previously
+    no way to stop it short of restarting the whole container. ``cancel_event``
+    (a threading.Event, optional) is checked between blocks AND between
+    individual photos within a block, so a cancel request lands within a
+    photo or two rather than waiting out the current block."""
     database = CONFIG["KITTYHACK_DATABASE_PATH"]
 
     model_version = CONFIG.get("YOLO_MODEL")
@@ -152,13 +240,19 @@ def run_retroactive_review_batch(num_events: int = 50) -> dict:
     if not model_path:
         return {"error": "model_not_found"}
 
-    logging.info(f"[MODEL_REVIEW] Loading a standalone copy of the active model ({model_version}) for review...")
+    # See _REVIEW_NUM_THREADS's comment above: a real, CPU-pinned worker
+    # process, isolated from the live detection loop's cores - not the
+    # cpu_count()-wide "direct" path this used to be forced into.
+    logging.info(
+        f"[MODEL_REVIEW] Loading a standalone copy of the active model ({model_version}) for review "
+        f"({_REVIEW_NUM_THREADS} thread(s), leaving the rest for the live detection loop)..."
+    )
     handler = ModelHandler(
         model="yolo",
         modeldir=model_path,
         labelfile="labels.txt",
         model_image_size=model_image_size,
-        num_threads=multiprocessing.cpu_count(),
+        num_threads=_REVIEW_NUM_THREADS,
     )
     try:
         handler.load_model()
@@ -170,85 +264,128 @@ def run_retroactive_review_batch(num_events: int = 50) -> dict:
 
     block_ids = _next_unscanned_block_ids(database, model_version, num_events)
     if not block_ids:
+        # 09.10: ModelHandler.__del__ would eventually stop the worker
+        # process anyway (whenever the garbage collector gets to it), but
+        # not reliably "now" - explicit shutdown here too so an empty scan
+        # doesn't leave a CPU-pinned process hanging around regardless.
+        if handler._model_worker is not None:
+            handler._input_queue.put(None)
+            handler._model_worker.join(timeout=2)
         return {"scanned": 0, "flagged": 0, "events": 0, "model_version": model_version, "all_scanned": True}
 
     scanned = 0
     flagged = 0
+    cancelled = False
     t0 = time.monotonic()
 
-    for block_id in block_ids:
-        df = EventsRepo.db_get_photos_by_block_id(
-            database, block_id, ReturnDataPhotosDB.all_original_image
-        )
-        if df.empty:
-            ModelReviewRepo.mark_blocks_scanned(database, [block_id], model_version)
-            continue
-        for __, row in df.iterrows():
-            event_text = row.get("event_text")
-            if not event_text:
-                continue
-            frame = _decode_image(row.get("original_image"))
-            if frame is None:
-                continue
-
-            old_objects = EventsRepo.read_event_from_json(event_text)
-            old_idx, old_name, old_prob = _effective_dominant_cat(
-                int(row["id"]), old_objects, cat_names, database
+    try:
+        for block_id in block_ids:
+            if cancel_event is not None and cancel_event.is_set():
+                cancelled = True
+                break
+            df = EventsRepo.db_get_photos_by_block_id(
+                database, block_id, ReturnDataPhotosDB.all_original_image
             )
-
-            try:
-                __, __, new_detected = handler._yolo(frame, handler.input_size)
-            except Exception as e:
-                logging.warning(f"[MODEL_REVIEW] Inference failed for photo {row['id']}: {e}")
+            if df.empty:
+                ModelReviewRepo.mark_blocks_scanned(database, [block_id], model_version)
                 continue
-            new_name, new_prob, new_obj = _dominant_cat_from_new(new_detected, cat_names)
+            block_cancelled = False
+            for __, row in df.iterrows():
+                if cancel_event is not None and cancel_event.is_set():
+                    block_cancelled = True
+                    break
+                event_text = row.get("event_text")
+                if not event_text:
+                    continue
+                frame = _decode_image(row.get("original_image"))
+                if frame is None:
+                    continue
 
-            scanned += 1
+                old_objects = EventsRepo.read_event_from_json(event_text)
+                old_idx, old_name, old_prob = _effective_dominant_cat(
+                    int(row["id"]), old_objects, cat_names, database
+                )
 
-            if old_name == new_name:
-                continue  # agreement (including both None) - nothing to review
+                if not _wait_for_live_loop_idle(cancel_event):
+                    block_cancelled = True
+                    break
 
-            flagged += 1
-            if new_obj is not None:
-                nx, ny, nw, nh = new_obj["x"], new_obj["y"], new_obj["w"], new_obj["h"]
-            else:
-                # Model now finds no cat at all where one was stored before -
-                # keep the OLD box so the review card still has something to
-                # point at (there's no new box to show). old_idx can point
-                # at a confirmed correction beyond the original list (added
-                # via "Confirm new"/"Other"), which has its own stored box.
-                if old_idx is not None and old_idx < len(old_objects):
-                    old_obj = old_objects[old_idx]
-                    nx, ny, nw, nh = old_obj.x, old_obj.y, old_obj.width, old_obj.height
-                elif old_idx is not None:
-                    fb_row = DetectionFeedbackRepo.get_for_photo(database, int(row["id"])).get(old_idx)
-                    nx, ny, nw, nh = (
-                        (fb_row["x"], fb_row["y"], fb_row["width"], fb_row["height"]) if fb_row else (0, 0, 0, 0)
-                    )
+                try:
+                    __, __, new_detected = _run_inference(handler, frame)
+                except Exception as e:
+                    logging.warning(f"[MODEL_REVIEW] Inference failed for photo {row['id']}: {e}")
+                    continue
+                finally:
+                    # 08.10, Sid ("les chats ne peuvent pas rentrer"): a short
+                    # yield after every inference call gives the live detection
+                    # loop's own thread real scheduling opportunities between
+                    # bursts, rather than this one running flat-out for the
+                    # scan's whole duration with zero gaps. Kept even with real
+                    # CPU-core isolation now (09.10) - cheap insurance, and the
+                    # worker process itself still shares the host's I/O/memory
+                    # bus with the live loop even when pinned to its own core(s).
+                    time.sleep(0.3)
+                new_name, new_prob, new_obj = _dominant_cat_from_new(new_detected, cat_names)
+
+                scanned += 1
+
+                if old_name == new_name:
+                    continue  # agreement (including both None) - nothing to review
+
+                flagged += 1
+                if new_obj is not None:
+                    nx, ny, nw, nh = new_obj["x"], new_obj["y"], new_obj["w"], new_obj["h"]
                 else:
-                    nx, ny, nw, nh = (0, 0, 0, 0)
+                    # Model now finds no cat at all where one was stored before -
+                    # keep the OLD box so the review card still has something to
+                    # point at (there's no new box to show). old_idx can point
+                    # at a confirmed correction beyond the original list (added
+                    # via "Confirm new"/"Other"), which has its own stored box.
+                    if old_idx is not None and old_idx < len(old_objects):
+                        old_obj = old_objects[old_idx]
+                        nx, ny, nw, nh = old_obj.x, old_obj.y, old_obj.width, old_obj.height
+                    elif old_idx is not None:
+                        fb_row = DetectionFeedbackRepo.get_for_photo(database, int(row["id"])).get(old_idx)
+                        nx, ny, nw, nh = (
+                            (fb_row["x"], fb_row["y"], fb_row["width"], fb_row["height"]) if fb_row else (0, 0, 0, 0)
+                        )
+                    else:
+                        nx, ny, nw, nh = (0, 0, 0, 0)
 
-            ModelReviewRepo.upsert_disagreement(
-                database,
-                photo_id=int(row["id"]),
-                old_object_index=old_idx,
-                old_name=old_name,
-                old_probability=old_prob,
-                new_name=new_name or "",
-                new_probability=new_prob,
-                x=nx, y=ny, width=nw, height=nh,
-                model_version=model_version,
-            )
+                ModelReviewRepo.upsert_disagreement(
+                    database,
+                    photo_id=int(row["id"]),
+                    old_object_index=old_idx,
+                    old_name=old_name,
+                    old_probability=old_prob,
+                    new_name=new_name or "",
+                    new_probability=new_prob,
+                    x=nx, y=ny, width=nw, height=nh,
+                    model_version=model_version,
+                )
 
-        # Mark the whole block scanned once its photos are done, regardless
-        # of whether any disagreement was found - that's what makes the
-        # NEXT pilot run skip it and move to older events.
-        ModelReviewRepo.mark_blocks_scanned(database, [block_id], model_version)
+            if block_cancelled:
+                # Leave this block unmarked - a partially-scanned block must be
+                # retried in full next time, not skipped as "already done".
+                cancelled = True
+                break
+
+            # Mark the whole block scanned once its photos are done, regardless
+            # of whether any disagreement was found - that's what makes the
+            # NEXT pilot run skip it and move to older events.
+            ModelReviewRepo.mark_blocks_scanned(database, [block_id], model_version)
+    finally:
+        # 09.10: don't wait on Python's garbage collector to free up this
+        # scan's pinned core(s) - stop the worker process the moment the
+        # scan itself is done (or cancelled, or crashes), not "eventually".
+        if handler._model_worker is not None:
+            handler._input_queue.put(None)
+            handler._model_worker.join(timeout=2)
 
     elapsed = time.monotonic() - t0
     logging.info(
-        f"[MODEL_REVIEW] Pilot done: {scanned} photos scanned across {len(block_ids)} events, "
-        f"{flagged} disagreement(s) flagged, {elapsed:.1f}s."
+        f"[MODEL_REVIEW] Pilot {'cancelled' if cancelled else 'done'}: {scanned} photos scanned across "
+        f"{len(block_ids)} events, {flagged} disagreement(s) flagged, {elapsed:.1f}s."
     )
     return {
         "scanned": scanned,
@@ -256,4 +393,5 @@ def run_retroactive_review_batch(num_events: int = 50) -> dict:
         "events": len(block_ids),
         "model_version": model_version,
         "elapsed_s": elapsed,
+        "cancelled": cancelled,
     }

@@ -42,6 +42,9 @@ msgstr "Un chat est rentré."
 msgid "Kittyhack"
 msgstr "Kittyhack"
 
+msgid "Paws Flap"
+msgstr "Paws Flap"
+
 #, python-brace-format
 msgid "{cat} went outside!"
 msgstr "{cat} est sorti(e) !"
@@ -4214,23 +4217,20 @@ msgstr "Explication des types de notifications push"
 msgid "The first four match an actual event (a cat really came in/went out/looked without passing/a prey was blocked) and are on by default.\n\n**Motion detected outside/inside (raw)** fire on the underlying PIR/camera trigger itself, before it's known whether anything will come of it - far more frequent (tens to 50+ times a day), so they're off by default and, when enabled, limited to one notification per 10 minutes."
 msgstr "Les quatre premières correspondent à un vrai événement (un chat est réellement entré/sorti/a regardé sans entrer/une proie a été bloquée) et sont activées par défaut.\n\n**Mouvement détecté dehors/dedans (brut)** se déclenchent sur le signal PIR/caméra lui-même, avant même de savoir si quelque chose en découlera - bien plus fréquent (dizaines à plus de 50 fois par jour), donc désactivées par défaut et, si activées, limitées à une notification toutes les 10 minutes."
 
-msgid "A cat looked outside but didn't go out."
-msgstr "Un chat a regardé dehors mais n'est pas sorti."
+msgid "A cat is on the prowl."
+msgstr "Un chat en balade."
 
-msgid "{cat} looked outside but didn't go out."
-msgstr "{cat} a regardé dehors mais n'est pas sorti."
-
-msgid "A cat walked by outside."
-msgstr "Un chat est passé."
-
-msgid "{cat} walked by outside."
-msgstr "{cat} est passé."
+msgid "{cat} on the prowl."
+msgstr "{cat} en balade."
 
 msgid "Motion detected outside."
 msgstr "Mouvement détecté dehors."
 
 msgid "Motion detected inside."
 msgstr "Mouvement détecté dedans."
+
+msgid "The Kittyflap has been unreachable for over 2 minutes."
+msgstr "La chatière est injoignable depuis plus de 2 minutes."
 
 msgid "Exits"
 msgstr "Sorties"

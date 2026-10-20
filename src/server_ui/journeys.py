@@ -49,7 +49,12 @@ _CAM_LABELS = {
     # and, inside the 150px-wide journey capture card, pushed the "· HH:MM:SS"
     # timestamp clean off the label ("ça bouffe tout l'espace et on voit pas
     # la date/heure"). This one is short by design.
-    "chatiere": lambda: _("Flap cam"),
+    # 09.10, Sid ("chatière int et chatière ext"): the original flap
+    # camera, physically moved indoors facing the flap (see watchdog.py's
+    # CAMERAS comment) - "chatiere" relabeled to disambiguate now that
+    # there are two.
+    "chatiere": lambda: _("Chatière ext"),
+    "chatiere_int": lambda: _("Chatière int"),
     "terrasse": lambda: _("Terrace"),
     "jardin_japonais": lambda: _("Japanese garden"),
     "entree": lambda: _("Entrance"),
@@ -103,10 +108,23 @@ def _local_day_utc_range(local_date) -> tuple[str, str]:
     return date_start_utc, date_end_utc
 
 
-def _list_flap_events_for_date(date_start_utc: str, date_end_utc: str) -> list[dict]:
+def _list_flap_events_for_date(
+    date_start_utc: str,
+    date_end_utc: str,
+    cats_only: bool = False,
+    mouse_only: bool = False,
+    mouse_probability: float = 0.0,
+    rfid_filter: str = "",
+) -> list[dict]:
     """One row per motion block for the day, with a representative photo id
     (for its thumbnail) - db_get_motion_blocks() doesn't carry an id, so this
-    is a small purpose-built query rather than reusing it."""
+    is a small purpose-built query rather than reusing it.
+
+    08.10, Sid ("mode groupé" in Photos): the optional filters mirror
+    db_get_motion_blocks()'s exact same ones (same WHERE clauses) - the
+    Shiny original's grouped-events view shares EventsRepo.db_get_motion_blocks
+    with the Live tab, but that function has no row id to build a thumbnail
+    from, so the Photos React port needed its own query combining both."""
     database = CONFIG["KITTYHACK_DATABASE_PATH"]
     try:
         columns_info = DatabaseCore.read_column_info_from_database(database, "events")
@@ -114,11 +132,25 @@ def _list_flap_events_for_date(date_start_utc: str, date_end_utc: str) -> list[d
     except Exception:
         column_names = set()
     deleted_filter = " AND deleted != 1" if "deleted" in column_names else ""
+    # 08.10, Sid: distinguish a real chip read from the video model's guess
+    # (see loop.py/camera.py's tag_id_is_real) - MAX() is safe here since
+    # every element of a block shares the same tag_id/is_real pair.
+    has_rfid_is_real = "rfid_is_real" in column_names
+    rfid_is_real_select = ", MAX(rfid_is_real) AS rfid_is_real" if has_rfid_is_real else ""
+
+    extra_filters = ""
+    if rfid_filter:
+        extra_filters += f" AND rfid = '{rfid_filter.replace(chr(39), chr(39) + chr(39))}'"
+    elif cats_only:
+        extra_filters += " AND rfid != ''"
+    if mouse_only:
+        extra_filters += f" AND mouse_probability >= {mouse_probability}"
 
     stmt = f"""
-        SELECT block_id, MIN(id) AS first_id, MAX(created_at) AS created_at, event_type, rfid
+        SELECT block_id, MIN(id) AS first_id, MAX(created_at) AS created_at, event_type, rfid,
+               MAX(mouse_probability) AS mouse_probability{rfid_is_real_select}
         FROM events
-        WHERE created_at BETWEEN '{date_start_utc}' AND '{date_end_utc}'{deleted_filter}
+        WHERE created_at BETWEEN '{date_start_utc}' AND '{date_end_utc}'{deleted_filter}{extra_filters}
         GROUP BY block_id
         ORDER BY block_id DESC
     """
@@ -135,6 +167,8 @@ def _list_flap_events_for_date(date_start_utc: str, date_end_utc: str) -> list[d
             dt = pd.to_datetime(local_str).to_pydatetime().replace(tzinfo=None)
         except Exception:
             continue
+        rfid_is_real_val = row["rfid_is_real"] if has_rfid_is_real else None
+        mouse_prob_val = row["mouse_probability"]
         events.append(
             {
                 "block_id": int(row["block_id"]),
@@ -142,6 +176,81 @@ def _list_flap_events_for_date(date_start_utc: str, date_end_utc: str) -> list[d
                 "dt": dt,
                 "event_type": row["event_type"],
                 "rfid": row["rfid"],
+                # None = unknown provenance (pre-migration row), True = real
+                # chip read, False = video-only guess.
+                "rfid_is_real": (
+                    None if rfid_is_real_val is None or pd.isna(rfid_is_real_val)
+                    else bool(rfid_is_real_val)
+                ),
+                # 09.10, Sid ("l'icône souris pour chronologie et parcours"):
+                # highest mouse_probability of any photo in this block - a
+                # NULL/NaN column (no detection ran, or the row predates it)
+                # reads back as 0.0 here, same guard as _serialize_picture's.
+                "mouse_probability": (
+                    0.0 if mouse_prob_val is None or pd.isna(mouse_prob_val)
+                    else float(mouse_prob_val)
+                ),
+            }
+        )
+    return events
+
+
+def _list_recent_flap_events(limit: int = 50) -> list[dict]:
+    """09.10, Sid ("finalement ca me fait une page en trop... page chats, en
+    dessous des 4 chips des chats, les 50 derniers événements... et on ne
+    garde pas la page chronologie"): the N most recent motion blocks across
+    ALL days, not scoped to one calendar day - same row shape as
+    _list_flap_events_for_date so _serialize_events() in webui_api.py works
+    unchanged on either."""
+    database = CONFIG["KITTYHACK_DATABASE_PATH"]
+    try:
+        columns_info = DatabaseCore.read_column_info_from_database(database, "events")
+        column_names = set(info[1] for info in (columns_info or []))
+    except Exception:
+        column_names = set()
+    deleted_filter = " AND deleted != 1" if "deleted" in column_names else ""
+    has_rfid_is_real = "rfid_is_real" in column_names
+    rfid_is_real_select = ", MAX(rfid_is_real) AS rfid_is_real" if has_rfid_is_real else ""
+
+    stmt = f"""
+        SELECT block_id, MIN(id) AS first_id, MAX(created_at) AS created_at, event_type, rfid,
+               MAX(mouse_probability) AS mouse_probability{rfid_is_real_select}
+        FROM events
+        WHERE block_id IS NOT NULL{deleted_filter}
+        GROUP BY block_id
+        ORDER BY block_id DESC
+        LIMIT {int(limit)}
+    """
+    try:
+        df = DatabaseCore.read_df_from_database(database, stmt)
+    except Exception as e:
+        logging.error(f"[JOURNEY] Failed to query recent flap events: {e}")
+        return []
+
+    events = []
+    for __, row in df.iterrows():
+        try:
+            local_str = DateTimeUtil.get_local_date_from_utc_date(row["created_at"])
+            dt = pd.to_datetime(local_str).to_pydatetime().replace(tzinfo=None)
+        except Exception:
+            continue
+        rfid_is_real_val = row["rfid_is_real"] if has_rfid_is_real else None
+        mouse_prob_val = row["mouse_probability"]
+        events.append(
+            {
+                "block_id": int(row["block_id"]),
+                "first_id": int(row["first_id"]),
+                "dt": dt,
+                "event_type": row["event_type"],
+                "rfid": row["rfid"],
+                "rfid_is_real": (
+                    None if rfid_is_real_val is None or pd.isna(rfid_is_real_val)
+                    else bool(rfid_is_real_val)
+                ),
+                "mouse_probability": (
+                    0.0 if mouse_prob_val is None or pd.isna(mouse_prob_val)
+                    else float(mouse_prob_val)
+                ),
             }
         )
     return events
@@ -285,14 +394,37 @@ def _last_known_status_before(rfid: str, before_dt_local) -> str | None:
         return None
 
 
+def _rfid_uncertainty_marker(rfid_is_real: bool | None) -> str:
+    """08.10, Sid ("il n'y a qu'une vraie lecture de puce, le reste c'est de
+    la video, ca devrait pas influencer l'ouverture" - then, seeing "Nala"
+    shown for what was actually Patoune/Pookie: "c'est quoi qui dit Nala?"):
+    ``rfid_is_real is False`` means this identity came from the video
+    model's guess, not a genuine chip read - flag it visibly rather than
+    presenting a guess with the same confidence as a confirmed scan. None
+    (pre-migration rows, provenance unknown) and True (real read) both stay
+    unmarked - only a KNOWN guess gets flagged."""
+    if rfid_is_real is False:
+        return ' <span class="kh-rfid-unconfirmed">(non confirmé)</span>'
+    return ""
+
+
 def _presence_direction_text(
-    event_type, cat_name: str | None, rfid: str | None = None, event_dt=None
+    event_type, cat_name: str | None, rfid: str | None = None, event_dt=None,
+    rfid_is_real: bool | None = None,
 ) -> str | None:
     """"<Name> est entre(e)/sorti(e)" for a real in/out event, or None for
     any other event type (left to the plain icon+name display)."""
     is_known = cat_name is not None
     feminine = is_known and cat_name.strip().lower() in _FEMALE_CAT_NAMES
     subject = html_module.escape(str(cat_name)) if is_known else "Un animal"
+    # 10.10, Sid ("au lieu d'avoir le texte complet... on peut juste avoir
+    # un petit rond de couleur? Comme le rond de connexion dans la
+    # bannière, avec le texte qui s'affiche si on clique"): no longer
+    # appended to the text itself - the React side (EventCard.tsx) renders
+    # this as a small tappable dot from the separate rfid_confirmed field
+    # _serialize_events already exposes, same pattern as TopBanner's own
+    # connection dot. _rfid_uncertainty_marker/its HTML-inline marker stays
+    # for the still-Shiny pages that haven't migrated to this pattern yet.
     real_type = _event_type_first(event_type)
 
     # 04.10, Sid: meme convention couleur que les badges maison/arbre de
@@ -313,15 +445,14 @@ def _presence_direction_text(
     # this event, not guessed from what happens after - direct rather than
     # inferred.
     if real_type == EventType.MOTION_OUTSIDE_ONLY:
-        last_status = _last_known_status_before(rfid, event_dt) if (rfid and event_dt) else None
-        if last_status == "out":
-            text = _("{cat} walked by outside.").format(cat=subject) if is_known else _(
-                "A cat walked by outside."
-            )
-        else:
-            text = _("{cat} looked outside but didn't go out.").format(cat=subject) if is_known else _(
-                "A cat looked outside but didn't go out."
-            )
+        # 09.10, Sid ("au lieu de dire: boubou a regardé mais sans rentrer:
+        # on peut juste mettre (dedans comme dehors) un chat est passé" then
+        # "ou plus joli: chat en balade"): the previous wording needed
+        # last_status (out vs unknown/in) to pick between two different
+        # sentences - replaced with one that reads fine either way, so that
+        # branch is gone. _direction_code() in webui_api.py still computes
+        # glance_in/glance_out separately for the icon/color, untouched.
+        text = _("{cat} on the prowl.").format(cat=subject) if is_known else _("A cat is on the prowl.")
         return f'<span class="kh-dir-glance">{text}</span>'
     return None
 
@@ -341,12 +472,16 @@ def _event_card_html(
         _("Unknown RFID: {}").format(ev["rfid"]) if ev["rfid"] else _("No RFID found")
     )
     direction_text = _presence_direction_text(
-        ev.get("event_type"), resolved_name, rfid=ev.get("rfid"), event_dt=ev.get("dt")
+        ev.get("event_type"), resolved_name, rfid=ev.get("rfid"), event_dt=ev.get("dt"),
+        rfid_is_real=ev.get("rfid_is_real"),
     )
     cat_line = (
         direction_text
         if direction_text is not None
-        else f'{icon_svg("cat", margin_left="0")} {html_module.escape(str(cat_name_display))}'
+        else (
+            f'{icon_svg("cat", margin_left="0")} {html_module.escape(str(cat_name_display))}'
+            + (_rfid_uncertainty_marker(ev.get("rfid_is_real")) if resolved_name else "")
+        )
     )
 
     time_str = ev["dt"].strftime("%H:%M:%S")

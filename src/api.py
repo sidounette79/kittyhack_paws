@@ -212,15 +212,42 @@ def _err(detail: str, status_code: int = 400) -> JSONResponse:
 
 
 def _door_state() -> dict[str, Any]:
-    """Read current door state. Magnets.instance is initialised by backend startup."""
+    """Read current door state. Magnets.instance is initialised by backend startup.
+
+    08.10, Sid ("c'est quoi ton truc indisponible?"): always reported
+    available=False on this remote-mode deployment - hardcoded to the LOCAL
+    Magnets class (src.magnets_rfid) regardless of mode, same bug class
+    already fixed elsewhere (yolo_modules.py, photos.py, etc. all branch on
+    is_remote_mode() for this exact import) - backend startup here actually
+    initializes src.remote.hardware.Magnets.instance instead, so this always
+    found None. Real-world impact was limited (Presence.tsx's door cards
+    still worked, apparently tolerating available=False gracefully), but
+    this endpoint was never returning the real connected state it promises.
+    """
     try:
-        from src.magnets_rfid import Magnets  # lazy import – avoids startup ordering
+        from src.mode import is_remote_mode
+        if is_remote_mode():
+            from src.remote.hardware import Magnets  # type: ignore
+        else:
+            from src.magnets_rfid import Magnets  # lazy import – avoids startup ordering
         inst = Magnets.instance
         if inst is None:
             return {"inside_unlocked": None, "outside_unlocked": None, "available": False}
+        # 09.10, Sid ("verrouillé au clic si l'aimant a été activé par un
+        # mouvement de chat ou un RFID"): lets the Presence page refuse a
+        # manual LOCK while a real automatic passage is in progress - see
+        # src.backend.loop's door_unlock_source for the full reasoning.
+        try:
+            from src import backend
+            with backend.door_unlock_source_lock:
+                unlock_source = dict(backend.door_unlock_source)
+        except Exception:
+            unlock_source = {"inside": None, "outside": None}
         return {
             "inside_unlocked": bool(inst.get_inside_state()),
             "outside_unlocked": bool(inst.get_outside_state()),
+            "inside_unlock_source": unlock_source.get("inside"),
+            "outside_unlock_source": unlock_source.get("outside"),
             "available": True,
         }
     except Exception as e:
@@ -326,6 +353,47 @@ async def door_unlock_outside(request: Request):
 async def door_lock_outside(request: Request):
     """Queue outside lock."""
     return await _door_action(request, "lock_outside", "outside door lock queued")
+
+
+async def camera_wake(request: Request):
+    """POST /api/v1/camera/wake — hold the internal flap camera's model
+    awake for a bit, same as a real PIR edge would (see loop.py's
+    PAUSE_CAMERA_WHEN_IDLE block).
+
+    08.10, Sid ("la détection Reolink active potentiellement la caméra KF
+    pour les cas où PIR a un angle mort"): called by watchdog.py (a
+    separate process) whenever one of the Reolink cameras' own onboard AI
+    sees an animal, as a backup trigger for exactly the case where PIR
+    itself misses the cat's approach. Accepts an optional JSON/query
+    ``duration_s`` (default matches watchdog.py's own
+    CHATIERE_REOLINK_TRIGGER_DURATION_S); a shorter request never cuts a
+    longer window already in progress - same "push forward, never
+    backward" rule as watchdog.py's own _extend_chatiere_trigger()."""
+    _, err = await _auth_or_fail(request)
+    if err:
+        return err
+    duration_s = 180.0
+    try:
+        body = await request.json()
+        if isinstance(body, dict) and "duration_s" in body:
+            duration_s = float(body["duration_s"])
+    except Exception:
+        pass
+    qp = request.query_params.get("duration_s")
+    if qp is not None:
+        try:
+            duration_s = float(qp)
+        except ValueError:
+            pass
+
+    from src.backend.loop import backend_main
+    from src.clock import monotonic_time
+
+    candidate = monotonic_time() + duration_s
+    current = getattr(backend_main, "camera_external_wake_until_mono", 0.0)
+    if candidate > current:
+        backend_main.camera_external_wake_until_mono = candidate
+    return _ok({"action": "camera_wake", "duration_s": duration_s})
 
 
 async def mode_get(request: Request):
@@ -494,6 +562,9 @@ def build_router() -> Router:
         Route("/api/v1/door/lock_inside", door_close, methods=["GET", "POST"]),
         Route("/api/v1/door/unlock_outside", door_unlock_outside, methods=["GET", "POST"]),
         Route("/api/v1/door/lock_outside", door_lock_outside, methods=["GET", "POST"]),
+
+        # Camera - wake the internal flap camera's model (PIR-blind-spot backup)
+        Route("/api/v1/camera/wake", camera_wake, methods=["POST"]),
 
         # Mode / settings — independent entry and exit direction
         Route("/api/v1/mode", mode_get, methods=["GET"]),

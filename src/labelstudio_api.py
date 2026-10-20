@@ -7,7 +7,7 @@ import shutil
 import tempfile
 import time
 import zipfile
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 from urllib.parse import urlparse
 
 import requests
@@ -268,30 +268,76 @@ class LabelStudioAPI:
             logging.error(f"[LABELSTUDIO] Error getting projects: {e}")
             return None
     
-    def export_project_as_yolo(self, project_id: int, output_path: str) -> bool:
-        """Export project as YOLO ZIP (labels + images) to ``output_path``."""
+    def export_project_as_yolo(
+        self,
+        project_id: int,
+        output_path: str,
+        on_progress: Optional[Callable[[int, int], None]] = None,
+    ) -> bool:
+        """Export project as YOLO ZIP (labels + images) to ``output_path``.
+
+        10.10, Sid ("on devrait tenir compte des labels corriges, si on
+        lance maintenant, il va pas en tenir compte?"): CONFIRMED live via
+        a manual export test right after the label-casing fix (1081
+        annotations corrected) - "6369 labels, 2904 images downloaded,
+        3614 skipped". Root cause: every task upload_batch_with_corrections
+        creates (all 4223 from tonight's RFID ground-truth batch - most of
+        the project by volume) stores its image as an inline base64 data
+        URI, with no file_upload/storage_filename at all. Label Studio's
+        own YOLO export generates some internal filename for these
+        (verified: "66dcdfa1-correction_66700_0.txt", matching NOTHING
+        queryable on the task itself) - there was no reliable way to name
+        the downloaded image to match it, so they'd stay orphaned in the
+        ZIP (present but unpaired, still excluded from training) even
+        after decoding the image correctly.
+        Fixed by not depending on LS's own YOLO label export/naming at
+        all: builds every label file directly from each task's own
+        annotation JSON (already fetched, already trustworthy - same
+        x/y/width/height-percent -> center/width/height-normalized math
+        verified byte-for-byte against a real LS-exported label file
+        before relying on it), naming each image/label pair by task id,
+        chosen here rather than left to LS. classes.txt still comes from
+        LS's own export (_download_yolo_labels) so class indices stay
+        identical to what's already live - only the per-task label
+        generation and the image/label pairing are now fully self-
+        contained.
+        """
         if not self.is_authenticated():
             logging.error("[LABELSTUDIO] Not authenticated")
             return False
 
         logging.info(f"[LABELSTUDIO] Starting YOLO export for project {project_id} …")
 
-        # 1) Get YOLO labels
+        # 1) classes.txt only, from LS's own export - keeps class indices
+        # consistent with the already-trained model. The per-task .txt
+        # label files in this same ZIP are NOT used (see docstring).
         labels_zip_bytes = self._download_yolo_labels(project_id)
         if labels_zip_bytes is None:
             logging.error("[LABELSTUDIO] Could not download YOLO labels")
             return False
+        try:
+            classes_zip = zipfile.ZipFile(io.BytesIO(labels_zip_bytes))
+            classes_txt = classes_zip.read("classes.txt").decode("utf-8")
+        except Exception as e:
+            logging.error(f"[LABELSTUDIO] Could not read classes.txt from LS export: {e}")
+            return False
+        class_names = [ln.strip() for ln in classes_txt.splitlines() if ln.strip()]
+        class_index = {name: i for i, name in enumerate(class_names)}
 
-        # 2) Get all tasks with their image references
-        tasks = self._get_all_tasks(project_id)
+        # 2) Get all tasks WITH full annotation detail (fields=all - the
+        # plain task list used elsewhere never includes this).
+        tasks = self._get_all_tasks_with_annotations(project_id)
         if not tasks:
             logging.error("[LABELSTUDIO] No tasks found for project")
             return False
 
-        # 3) Build a new ZIP with labels + downloaded images
+        # 3) Build the ZIP ourselves: one image + one label file per task,
+        # same base name for both, chosen by us (task id).
         tmp_dir = tempfile.mkdtemp(prefix="ls_yolo_")
         try:
-            ok = self._assemble_yolo_zip(labels_zip_bytes, tasks, output_path, tmp_dir)
+            ok = self._build_yolo_zip_from_tasks(
+                tasks, class_index, classes_txt, output_path, tmp_dir, on_progress=on_progress
+            )
         except Exception as e:
             logging.error(f"[LABELSTUDIO] YOLO export failed: {e}")
             ok = False
@@ -305,6 +351,146 @@ class LabelStudioAPI:
             )
         return ok
 
+    def _get_all_tasks_with_annotations(self, project_id: int) -> List[Dict[str, Any]]:
+        """Same pagination as _get_all_tasks, but with fields=all so each
+        task's full annotations[].result[] (real bounding boxes, not just
+        counts) comes back too."""
+        tasks: List[Dict[str, Any]] = []
+        page = 1
+        page_size = 100
+        total = None
+        while True:
+            resp = self.session.get(
+                f"{self.base_url}/api/tasks",
+                headers=self._auth_headers(),
+                params={"project": project_id, "page": page, "page_size": page_size, "fields": "all"},
+                timeout=self.timeout,
+            )
+            if resp.status_code != 200:
+                logging.warning(f"[LABELSTUDIO] Tasks API returned HTTP {resp.status_code}")
+                break
+            body = resp.json() if resp.text else {}
+            chunk = body if isinstance(body, list) else body.get("tasks", body.get("results", []))
+            if not chunk:
+                break
+            tasks.extend(chunk)
+            if isinstance(body, dict):
+                if total is None:
+                    total = body.get("total")
+                if total is not None and len(tasks) >= total:
+                    break
+                page += 1
+            else:
+                break
+        return tasks
+
+    def _build_yolo_zip_from_tasks(
+        self,
+        tasks: List[Dict[str, Any]],
+        class_index: Dict[str, int],
+        classes_txt: str,
+        output_path: str,
+        tmp_dir: str,
+        on_progress: Optional[Callable[[int, int], None]] = None,
+    ) -> bool:
+        """Self-contained YOLO export: for every task with at least one
+        real (non-cancelled, non-ground-truth) annotation, decode/download
+        its image and write its label file - same base name for both,
+        chosen here (task id) rather than relying on Label Studio's own
+        internal naming.
+
+        13.10, Sid (real 502 confirmed live in the logs - "Starting YOLO
+        export..." then nothing, request cut by the reverse proxy before
+        this function could finish downloading 6584 images one by one):
+        this one-by-one download is genuinely slow at this project's
+        current size, there's no way around that from here - but it no
+        longer needs to happen inside a single blocking HTTP request. See
+        labelstudio_export_worker.py, which runs this in a background
+        process and reports progress via on_progress instead."""
+        images_dir = os.path.join(tmp_dir, "images")
+        labels_dir = os.path.join(tmp_dir, "labels")
+        os.makedirs(images_dir, exist_ok=True)
+        os.makedirs(labels_dir, exist_ok=True)
+
+        written = 0
+        skipped_no_image = 0
+        skipped_no_boxes = 0
+        total_tasks = len(tasks)
+        for i, task in enumerate(tasks):
+            if on_progress is not None:
+                try:
+                    on_progress(i, total_tasks)
+                except Exception:
+                    pass
+            lines = []
+            for ann in task.get("annotations") or []:
+                # 10.10, Sid ("on devrait tenir compte des labels
+                # corriges"): confirmed live - every one of tonight's RFID
+                # ground-truth batch uploads came back with ground_truth:
+                # true, a default Label Studio applies on its bulk /import
+                # endpoint, not something chosen here or by her. Excluding
+                # on that flag (copied from LS's OWN annotate_num_tasks_
+                # with_annotations, where it means "reference annotation
+                # for inter-annotator agreement", not relevant here) was
+                # silently dropping every single one of those 4223 real
+                # corrections from the export. was_cancelled is still a
+                # real reason to skip (an explicitly undone annotation).
+                if ann.get("was_cancelled"):
+                    continue
+                for r in ann.get("result") or []:
+                    val = r.get("value") or {}
+                    labs = val.get("rectanglelabels") or []
+                    if not labs:
+                        continue
+                    cls = class_index.get(labs[0])
+                    if cls is None:
+                        continue
+                    x, y, w, h = val.get("x"), val.get("y"), val.get("width"), val.get("height")
+                    if x is None or y is None or w is None or h is None:
+                        continue
+                    x_center = (x + w / 2.0) / 100.0
+                    y_center = (y + h / 2.0) / 100.0
+                    lines.append(f"{cls} {x_center:.6f} {y_center:.6f} {w / 100.0:.6f} {h / 100.0:.6f}")
+
+            if not lines:
+                skipped_no_boxes += 1
+                continue
+
+            img_url = self._resolve_image_url(task)
+            img_data = self._download_image(img_url) if img_url else None
+            if not img_data:
+                skipped_no_image += 1
+                continue
+
+            ext = ".jpg"
+            if img_url.startswith("data:image/png"):
+                ext = ".png"
+            base_name = f"task_{task['id']}"
+            with open(os.path.join(images_dir, base_name + ext), "wb") as f:
+                f.write(img_data)
+            with open(os.path.join(labels_dir, base_name + ".txt"), "w") as f:
+                f.write("\n".join(lines) + "\n")
+            written += 1
+
+        logging.info(
+            f"[LABELSTUDIO] Self-contained YOLO export: {written} image/label pairs written, "
+            f"{skipped_no_boxes} skipped (no usable annotation), {skipped_no_image} skipped (image unavailable)"
+        )
+        if written == 0:
+            logging.warning("[LABELSTUDIO] No image/label pairs could be built")
+            return False
+
+        with open(os.path.join(tmp_dir, "classes.txt"), "w") as f:
+            f.write(classes_txt)
+
+        with zipfile.ZipFile(output_path, "w", zipfile.ZIP_DEFLATED) as zf:
+            for root, _dirs, files in os.walk(tmp_dir):
+                for fname in files:
+                    abs_path = os.path.join(root, fname)
+                    arc_name = os.path.relpath(abs_path, tmp_dir)
+                    zf.write(abs_path, arc_name)
+        return True
+
     def _download_yolo_labels(self, project_id: int) -> Optional[bytes]:
         """Download YOLO-format labels only (without images).
 
@@ -312,16 +498,29 @@ class LabelStudioAPI:
         async snapshot → convert → download flow.
         """
         # Try deprecated sync endpoint first (simpler)
+        # 10.10, Sid ("entrainement soumis a l'instant" - actually a silent
+        # 502, confirmed in the logs: "Read timed out. (read timeout=60)"):
+        # this project grew to 6518 tasks tonight (RFID ground-truth batch +
+        # label-casing fixes) - 60s was fine for the old, smaller project but
+        # not anymore. Also: a real timeout here is a requests exception,
+        # not an HTTP status code, so it was never actually falling through
+        # to the async fallback below despite the comment's intent - it just
+        # propagated straight up and crashed the whole export. Both fixed:
+        # longer timeout, and the exception now genuinely triggers the
+        # fallback flow instead of killing the request.
         export_url = f"{self.base_url}/api/projects/{project_id}/export"
-        resp = self.session.get(
-            export_url,
-            headers=self._auth_headers(),
-            params={"exportType": "YOLO"},
-            timeout=max(self.timeout, 60),
-        )
-        if resp.status_code == 200 and resp.content:
-            logging.info("[LABELSTUDIO] Downloaded YOLO labels via sync endpoint")
-            return resp.content
+        try:
+            resp = self.session.get(
+                export_url,
+                headers=self._auth_headers(),
+                params={"exportType": "YOLO"},
+                timeout=max(self.timeout, 300),
+            )
+            if resp.status_code == 200 and resp.content:
+                logging.info("[LABELSTUDIO] Downloaded YOLO labels via sync endpoint")
+                return resp.content
+        except Exception as e:
+            logging.warning(f"[LABELSTUDIO] Sync export endpoint failed ({e}), falling back to async export")
 
         # Fallback: async snapshot → convert → download
         exports_url = f"{self.base_url}/api/projects/{project_id}/exports/"
@@ -329,7 +528,7 @@ class LabelStudioAPI:
             exports_url,
             headers={**self._auth_headers(), "Content-Type": "application/json"},
             json={},
-            timeout=self.timeout,
+            timeout=max(self.timeout, 60),
         )
         if create_resp.status_code not in (200, 201):
             logging.warning("[LABELSTUDIO] Could not create snapshot for labels export")
@@ -348,7 +547,7 @@ class LabelStudioAPI:
             convert_url,
             headers={**self._auth_headers(), "Content-Type": "application/json"},
             json={"export_type": "YOLO"},
-            timeout=self.timeout,
+            timeout=max(self.timeout, 60),
         )
         self._poll_conversion_status(status_url)
 
@@ -436,10 +635,31 @@ class LabelStudioAPI:
             return f"{self.base_url}{val}"
         if val.startswith("http://") or val.startswith("https://"):
             return val
+        # 10.10, Sid ("entrainement soumis a l'instant" - confirmed via a
+        # manual export test: "6369 labels, 2904 images downloaded, 3614
+        # skipped"): every task upload_batch_with_corrections() creates
+        # (all 4223 from tonight's RFID ground-truth batch export) stores
+        # its image as an inline base64 data URI, not an uploaded-file URL
+        # - this returned None for every one of them, silently dropping
+        # over half the project from every YOLO export. Passed straight
+        # through here; _download_image() below decodes it directly
+        # instead of trying to HTTP-fetch it.
+        if val.startswith("data:"):
+            return val
         return None
 
     def _download_image(self, url: str) -> Optional[bytes]:
-        """Download an image via the Label Studio proxy (authenticated)."""
+        """Download an image via the Label Studio proxy (authenticated),
+        or decode it directly if it's an inline base64 data URI (see
+        _resolve_image_url's own comment)."""
+        if url.startswith("data:"):
+            try:
+                import base64
+                b64_part = url.split(",", 1)[1]
+                return base64.b64decode(b64_part)
+            except Exception as e:
+                logging.debug(f"[LABELSTUDIO] Failed to decode inline data URI: {e}")
+                return None
         try:
             resp = self.session.get(
                 url,
@@ -531,10 +751,19 @@ class LabelStudioAPI:
     # ------------------------------------------------------------------
 
     def _poll_export_status(self, status_url: str, label: str = "export") -> bool:
-        """Poll an export snapshot until completed or failed (max 120 s)."""
+        """Poll an export snapshot until completed or failed (max 120 s).
+
+        13.10, Sid (real "Read timed out. (read timeout=10)" confirmed
+        live in logs - the outer 120s deadline was never reached, a single
+        GET inside the loop blew its own 10s socket timeout instead): at
+        ~4800 tasks, Label Studio's own single-worker server can be busy
+        enough generating the export internally that even a plain status
+        poll takes longer than self.timeout (10s) to answer - the per-
+        request timeout needs its own floor, independent of the (already
+        generous) overall polling deadline."""
         deadline = time.time() + 120
         while time.time() < deadline:
-            resp = self.session.get(status_url, headers=self._auth_headers(), timeout=self.timeout)
+            resp = self.session.get(status_url, headers=self._auth_headers(), timeout=max(self.timeout, 60))
             if resp.status_code != 200:
                 return False
             status = str((resp.json() or {}).get("status", "")).strip().lower()
@@ -554,7 +783,7 @@ class LabelStudioAPI:
         deadline = time.time() + 300
         cf_status: Optional[str] = None
         while time.time() < deadline:
-            resp = self.session.get(status_url, headers=self._auth_headers(), timeout=self.timeout)
+            resp = self.session.get(status_url, headers=self._auth_headers(), timeout=max(self.timeout, 60))
             if resp.status_code != 200:
                 return False
             export_data = resp.json() if resp.text else {}
@@ -756,6 +985,91 @@ class LabelStudioAPI:
             logging.error(f"[LABELSTUDIO] Error uploading corrected image: {e}")
             return False
 
+    def upload_batch_with_corrections(self, project_id: int, items: list[dict]) -> tuple[int, int]:
+        """09.10, Sid ("ca prend quand meme 5 secondes environ par photo"):
+        upload_image_with_correction's upload-then-search-for-the-task
+        dance (up to 5 polling round-trips per photo, see its own comment)
+        exists only because posting an image via multipart /import doesn't
+        return the task id directly. This sidesteps that entirely: Label
+        Studio's /import also accepts a plain JSON array of tasks, each
+        with its image inlined as a base64 data URI AND its annotation
+        already attached in the same object - the response hands back every
+        created task id immediately, so there's nothing left to search for.
+        One HTTP round-trip for the whole batch instead of ~10+ for a single
+        photo under the old path.
+
+        ``items``: list of {"image_bytes": bytes, "label": str|None,
+        "x"/"y"/"width"/"height": float}. An item with label=None (a
+        confirmed false-positive - "no box here") is skipped here exactly
+        like upload_image_with_correction skips it - nothing meaningful to
+        annotate, and the caller already records that correction in
+        Kittyhack's own detection_feedback table regardless.
+        Returns (succeeded_count, failed_count) over just the items that
+        actually had a label (an empty batch is not a failure).
+        """
+        import base64
+
+        labeled_items = [it for it in items if it.get("label") is not None]
+        if not labeled_items:
+            return (0, 0)
+
+        if not self.is_authenticated():
+            logging.error("[LABELSTUDIO] Not authenticated")
+            return (0, len(labeled_items))
+
+        tasks_payload = []
+        for it in labeled_items:
+            b64 = base64.b64encode(it["image_bytes"]).decode("ascii")
+            tasks_payload.append({
+                "data": {"image": f"data:image/jpeg;base64,{b64}"},
+                "annotations": [{
+                    # 10.10, Sid ("on devrait tenir compte des labels
+                    # corriges"): without this, Label Studio's own
+                    # /import endpoint defaults every uploaded annotation
+                    # to ground_truth=true (confirmed live on every one
+                    # of this batch's uploads) - a flag meaning "reference
+                    # annotation", not what a confirmed correction is.
+                    # Export code elsewhere no longer excludes on this
+                    # flag either, but setting it correctly at the source
+                    # keeps the data itself honest regardless.
+                    "ground_truth": False,
+                    "result": [{
+                        "from_name": "label",
+                        "to_name": "image",
+                        "type": "rectanglelabels",
+                        "value": {
+                            "x": float(it["x"]), "y": float(it["y"]),
+                            "width": float(it["width"]), "height": float(it["height"]),
+                            "rotation": 0,
+                            "rectanglelabels": [it["label"]],
+                        },
+                    }],
+                }],
+            })
+
+        try:
+            import_url = f"{self.base_url}/api/projects/{int(project_id)}/import"
+            response = self.session.post(
+                import_url,
+                headers=self._auth_headers(),
+                json=tasks_payload,
+                timeout=max(self.timeout, 60),
+            )
+            if response.status_code not in (200, 201):
+                logging.warning(
+                    f"[LABELSTUDIO] Batch upload failed: HTTP {response.status_code} — {response.text[:200]}"
+                )
+                return (0, len(labeled_items))
+            created = response.json().get("task_count", len(labeled_items))
+            if created < len(labeled_items):
+                logging.warning(
+                    f"[LABELSTUDIO] Batch upload: requested {len(labeled_items)}, server reports {created} created."
+                )
+            return (created, len(labeled_items) - created)
+        except Exception as e:
+            logging.error(f"[LABELSTUDIO] Error uploading batch: {e}")
+            return (0, len(labeled_items))
+
     def upload_image(self, project_id: int, image_bytes: bytes, filename: str) -> bool:
         """Upload one image as a new task in the project."""
         if not self.is_authenticated():
@@ -831,25 +1145,159 @@ def export_labelstudio_project_as_zip(
     host: str = LabelStudioAPI.DEFAULT_HOST,
     port: int = LabelStudioAPI.DEFAULT_PORT,
     token: Optional[str] = None,
+    on_progress: Optional[Callable[[int, int], None]] = None,
 ) -> bool:
     """Authenticate and export a project as a YOLO ZIP to ``output_path``."""
     try:
         if not LabelStudioAPI.is_labelstudio_available(host, port):
             logging.warning("[LABELSTUDIO] Label Studio is not available")
             return False
-        
+
         api = LabelStudioAPI(host=host, port=port)
         if not api.authenticate(token=token):
             logging.error("[LABELSTUDIO] Failed to authenticate with Label Studio")
             return False
         
-        success = api.export_project_as_yolo(project_id, output_path)
+        success = api.export_project_as_yolo(project_id, output_path, on_progress=on_progress)
         api.close()
         return success
-        
+
     except Exception as e:
         logging.error(f"[LABELSTUDIO] Error exporting project: {e}")
         return False
+
+
+_LS_EXPORT_STATE_PATH = "/tmp/kittyhack_labelstudio_export_state.json"
+
+
+def _default_labelstudio_export_state() -> Dict[str, Any]:
+    return {
+        "status": "idle",  # idle|exporting|submitting|done|error
+        "written": 0,
+        "total": 0,
+        "started_at": 0.0,
+        "finished_at": 0.0,
+        "error": "",
+        "job_id": "",
+        "pid": 0,
+    }
+
+
+def get_labelstudio_export_state() -> Dict[str, Any]:
+    """Read export-worker state from disk; mark stale workers as error.
+
+    13.10, Sid: same disk-polled state pattern as RemoteModelTrainer's
+    model-download worker (src/model/remote_trainer.py,
+    get_model_download_state) - see labelstudio_export_worker.py for why
+    this now runs as a background process instead of inside the request
+    that triggered it."""
+    from src.model.json_util import _pid_alive, _read_json
+
+    state = _default_labelstudio_export_state()
+    state.update(_read_json(_LS_EXPORT_STATE_PATH) or {})
+    if state.get("status") in ("exporting", "submitting"):
+        pid = int(state.get("pid") or 0)
+        if pid and not _pid_alive(pid):
+            state["status"] = "error"
+            state["error"] = state.get("error") or "worker_died"
+            state["finished_at"] = float(state.get("finished_at") or 0.0) or time.time()
+            state["pid"] = 0
+    return state
+
+
+def start_labelstudio_export_async(
+    project_id: int,
+    model_name: str = "",
+    user_name: str = "",
+    email: str = "",
+    yolo_model_variant: str = "n",
+    image_size: int = 320,
+    host: str = LabelStudioAPI.DEFAULT_HOST,
+    port: int = LabelStudioAPI.DEFAULT_PORT,
+) -> bool:
+    """Start a background worker that exports the Label Studio project as a
+    YOLO ZIP and submits it for training; True if started.
+
+    13.10, Sid (real 502 confirmed live - synchronous export of 6584 tasks
+    outran the reverse proxy's timeout, see labelstudio_export_worker.py's
+    own docstring). Same subprocess + disk-state pattern as
+    RemoteModelTrainer.start_download_model_async."""
+    import subprocess
+    import sys
+    from src.model.json_util import _atomic_write_json, _pid_alive
+    from src.paths import kittyhack_root
+
+    state = get_labelstudio_export_state()
+    if state.get("status") in ("exporting", "submitting") and _pid_alive(int(state.get("pid") or 0)):
+        return False
+
+    init_state = _default_labelstudio_export_state()
+    init_state.update({"status": "exporting", "started_at": time.time()})
+    try:
+        _atomic_write_json(_LS_EXPORT_STATE_PATH, init_state)
+    except Exception:
+        pass
+
+    root_dir = kittyhack_root()
+    args = [
+        sys.executable,
+        "-m",
+        "src.labelstudio_export_worker",
+        "--project-id",
+        str(project_id),
+        "--host",
+        host,
+        "--port",
+        str(port),
+        "--state-path",
+        _LS_EXPORT_STATE_PATH,
+        "--model-name",
+        model_name or "",
+        "--user-name",
+        user_name or "",
+        "--email",
+        email or "",
+        "--yolo-model-variant",
+        yolo_model_variant or "n",
+        "--image-size",
+        str(image_size),
+    ]
+
+    worker_log_path = "/tmp/kittyhack_labelstudio_export_worker.log"
+    try:
+        log_fh = open(worker_log_path, "a", encoding="utf-8")
+    except Exception:
+        log_fh = None
+
+    try:
+        proc = subprocess.Popen(
+            args,
+            cwd=root_dir,
+            stdout=(log_fh if log_fh is not None else subprocess.DEVNULL),
+            stderr=(log_fh if log_fh is not None else subprocess.DEVNULL),
+        )
+    except Exception as e:
+        init_state["status"] = "error"
+        init_state["error"] = f"failed_to_start_worker: {e}"
+        init_state["finished_at"] = time.time()
+        try:
+            _atomic_write_json(_LS_EXPORT_STATE_PATH, init_state)
+        except Exception:
+            pass
+        return False
+    finally:
+        try:
+            if log_fh is not None:
+                log_fh.close()
+        except Exception:
+            pass
+
+    init_state["pid"] = int(proc.pid)
+    try:
+        _atomic_write_json(_LS_EXPORT_STATE_PATH, init_state)
+    except Exception:
+        pass
+    return True
 
 
 def get_labelstudio_project_task_summary(
@@ -858,20 +1306,34 @@ def get_labelstudio_project_task_summary(
     port: int = LabelStudioAPI.DEFAULT_PORT,
     token: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
-    """Return task counts (total/annotated/unannotated/ready) for a project."""
+    """Return task counts (total/annotated/unannotated/ready) for a project.
+
+    09.10, Sid ("Ça a pas pris les étiquettes?" after a real "3615/6518
+    sans étiquette" false block on submitting training): confirmed live
+    this was wrong - every one of the 4223 tasks the night's RFID-ground-
+    truth batch export just created had a real annotation attached
+    (is_labeled=True), yet the project's own `num_tasks_with_annotations`
+    (from GET /api/projects/{id}) stayed stuck at 2903 even after
+    restarting the whole Label Studio container AND running its own
+    `calculate_stats` management command - that field comes from a
+    correlated subquery (projects/functions/annotate_num_tasks_with_
+    annotations in LS's own source) that apparently doesn't get applied/
+    recomputed reliably on this project's single-object detail endpoint at
+    this task volume. Counting is_labeled directly per task (same field
+    confirmed correct above) is slower - a real paginated fetch of every
+    task - but actually correct, instead of trusting a field LS itself
+    couldn't keep in sync."""
     try:
         if not LabelStudioAPI.is_labelstudio_available(host, port):
             return None
         api = LabelStudioAPI(host=host, port=port)
         if not api.authenticate(token=token):
             return None
-        details = api.get_project_details(project_id)
+        tasks = api._get_all_tasks(project_id)
         api.close()
-        if details is None:
-            return None
 
-        total = int(details.get("task_number", 0))
-        annotated = int(details.get("num_tasks_with_annotations", 0))
+        total = len(tasks)
+        annotated = sum(1 for t in tasks if t.get("is_labeled"))
         return {
             "total_tasks": total,
             "annotated_tasks": annotated,

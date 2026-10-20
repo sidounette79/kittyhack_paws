@@ -1,0 +1,55 @@
+@import "tailwindcss";
+
+/* 07.10: Sid never wants light mode on any project (physically bothers her
+   eyes) - same dark palette as www/styles.css's html[data-bs-theme="dark"]
+   rule, just hardcoded here instead of toggleable. */
+:root {
+  color-scheme: dark;
+}
+
+/* 07.10, Sid ("le fond d'écran n'apparaît que sur apparence... on le voit
+   apparaître en changeant de page mais il est ensuite masqué"): classic CSS
+   trap - a `position: fixed` element with a negative z-index paints above
+   the canvas background, but if BOTH html and body declare their own
+   background-color, body repaints its own opaque box on top of it anyway.
+   Background lives on html only now, body stays transparent so
+   WallpaperBackground's fixed, -z-10 layer is never covered. */
+html {
+  background-color: #121212;
+}
+
+html,
+body {
+  color: #f8f9fa;
+  margin: 0;
+  /* 07.10, Sid ("ajouter la police comfortaa"): loaded via index.html's
+     Google Fonts link. Comfortaa is a display face (rounded, no real
+     italic/condensed weights) - kept as the primary family with the old
+     system stack as fallback rather than risking it looking broken on any
+     text it renders badly (very long numbers, etc). */
+  font-family:
+    "Comfortaa",
+    system-ui,
+    -apple-system,
+    "Segoe UI",
+    Roboto,
+    sans-serif;
+  /* 07.10, Sid ("swipe gauche ... écran noir"): applied page-wide, not just
+     on the Chronology lightbox - a horizontal swipe anywhere on any
+     migrated page can otherwise be read as a WebView edge-swipe-back
+     gesture outside Capacitor's own backButton event entirely. pan-y keeps
+     normal vertical scrolling working everywhere. */
+  touch-action: pan-y;
+  /* 09.10, Sid ("la barre c'est trop large... sur Parcours sur natel" -
+     works fine on desktop/tablet, only breaks on her phone's narrow
+     viewport): a horizontally-scrollable row (Journey's photo clusters,
+     overflow-x-auto) is the one thing on this page a mobile WebView can
+     mis-measure into widening the document itself instead of staying
+     contained - position:fixed elements like BottomNav are then measured
+     against that wrong, too-wide layout viewport instead of the real
+     screen. This is a blanket guard against the document ever growing
+     wider than the viewport for any reason, not just this one - inner
+     overflow-x-auto scrollers (the photo rows) keep scrolling normally,
+     they get their own independent scroll context either way. */
+  overflow-x: hidden;
+}

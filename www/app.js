@@ -850,6 +850,45 @@ document.addEventListener("DOMContentLoaded", function() {
             PATH_TO_TAB[p] = tab;
             PATH_TO_TAB[p.replace(/\/$/, '')] = tab;
         }
+        // 08.10, Sid: stopgap extra path (not a real tab value of its own,
+        // see app.py's SHINY_TAB_PATHS comment) pointing at the same
+        // "configuration" nav_panel, so the self-update flow + remote-mode
+        // doc stay reachable even though /configuration/ itself now goes
+        // to React.
+        PATH_TO_TAB['/configuration-legacy/'] = 'configuration';
+        PATH_TO_TAB['/configuration-legacy'] = 'configuration';
+
+        // 07.10, Sid's Shiny -> FastAPI/React migration (twinkly-percolating-
+        // wombat.md): tabs listed here are no longer served by this Shiny
+        // process' nav_panel at all - they're a real separate page now. Every
+        // way of "switching" to this tab (a direct top-navbar click, the
+        // bottom nav bar's button, and the swipe gesture further below) all
+        // converge on clicking the SAME .nav-link[data-value] element, so one
+        // capturing-phase interceptor here covers all three: a real browser
+        // navigation instead of Shiny's client-side bootstrap tab-show, which
+        // would otherwise just keep displaying this tab's now-orphaned Shiny
+        // panel. Must match FASTAPI_TAB_PATHS in app.py's TabRoutingMiddleware.
+        // 07.10, Sid ("parcours ca part aussi d'abord en shiny quand je
+        // clique dessus"): this JS-side mirror has to be updated by hand
+        // every time a slug gets added to the Python-side FASTAPI_TAB_PATHS -
+        // "presence" and "journey" were both added there but forgotten here,
+        // so clicking their Shiny nav-link still fell through to Shiny's own
+        // client-side tab-show instead of a real navigation.
+        var FASTAPI_TAB_PATHS = {
+            'chronology': true, 'presence': true, 'journey': true,
+            'live-view': true, 'pictures': true, 'configuration': true,
+            'ai-training': true
+        };
+
+        document.addEventListener('click', function(e) {
+            var link = e.target.closest && e.target.closest('.nav-link[data-value]');
+            if (!link) return;
+            var value = link.getAttribute('data-value');
+            if (!value || !FASTAPI_TAB_PATHS[value] || !TAB_ROUTES[value]) return;
+            e.preventDefault();
+            e.stopPropagation();
+            window.location.href = TAB_ROUTES[value];
+        }, true);
 
         function getActiveTabValue() {
             try {
@@ -1324,7 +1363,7 @@ document.addEventListener("DOMContentLoaded", function() {
             // Ignore swipes starting inside the photo/event modal - their own
             // gesture handling (if any) takes priority there.
             touchStartIgnored = !!e.target.closest(
-                '#event_modal_overlay, #event_modal_root, .kh-photo-modal-backdrop'
+                '#event_modal_overlay, #event_modal_root, .kh-photo-modal-backdrop, .kh-photo-lightbox-backdrop'
             );
             if (touchStartIgnored) return;
             touchStartX = e.touches[0].clientX;

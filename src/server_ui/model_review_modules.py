@@ -35,7 +35,7 @@ def btn_model_review_confirm_new():
 
 
 @module.ui
-def picker_model_review_other(cat_names: list[str]):
+def picker_model_review_other(cat_names: list[str], default_name: str | None = None):
     """05.10, Sid ("c'est aucun des deux, c'est patoune"): both the stored
     tag and the model's new guess can be wrong at once - a 3rd way out,
     picking the real cat directly, same known-cats list the Photos tab's
@@ -54,8 +54,13 @@ def picker_model_review_other(cat_names: list[str]):
     choices = {name: name for name in cat_names}
     choices["Prey"] = _("Prey (not a cat)")
     choices["none"] = _("Nothing (false detection)")
+    # 08.10, Sid ("est ce que ca pourrait directement mettre le nom du chat
+    # qui est reconnu par RFID?"): pre-select the RFID-recognized cat instead
+    # of always defaulting to the first entry - still just a default, she
+    # can still pick a different one before confirming.
+    selected = default_name if default_name in choices else None
     return ui.div(
-        ui.input_select("sel_other_name", None, choices=choices, width="170px"),
+        ui.input_select("sel_other_name", None, choices=choices, selected=selected, width="170px"),
         ui.input_action_button(
             "btn_confirm_other", _("Other"),
             icon=icon_svg("pen", margin_left="0", margin_right="5px"),

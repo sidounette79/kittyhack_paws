@@ -1165,8 +1165,10 @@ def register_ai_training(input, output, session, ctx: SessionContext):
             )
 
             rfid = review.get("event_rfid")
+            rfid_cat_name = None
             if rfid:
-                rfid_label = cat_name_dict.get(rfid, _("Unknown RFID: {}").format(rfid))
+                rfid_cat_name = cat_name_dict.get(rfid)
+                rfid_label = rfid_cat_name or _("Unknown RFID: {}").format(rfid)
             else:
                 rfid_label = _("No RFID found")
 
@@ -1216,7 +1218,7 @@ def register_ai_training(input, output, session, ctx: SessionContext):
                             class_="d-flex gap-2 mt-1 flex-wrap",
                         ),
                         ui.div(
-                            picker_model_review_other(f"model_review_row_{unique_btn_id}", cat_names),
+                            picker_model_review_other(f"model_review_row_{unique_btn_id}", cat_names, rfid_cat_name),
                             class_="mt-1",
                         ),
                         class_="flex-grow-1",

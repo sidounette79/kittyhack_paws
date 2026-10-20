@@ -39,3 +39,8 @@ config.remote.ini
 htmlcov/
 .pytest_cache/
 *.pt
+
+# web/ - Vite/React frontend for the Shiny->FastAPI migration (built on
+# FUNMEDIA, deployed as static files, never committed).
+web/node_modules/
+web/dist/

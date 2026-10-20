@@ -39,6 +39,23 @@
       }
     }
 
+    // 3. No sub-view open, but we're not on the home tab (presence) either -
+    //    e.g. Sid on Chronology/Journey/Pictures/etc. pressing back. A
+    //    single-Activity app with no real URL history has nothing else to
+    //    pop, so without this the OS default kicks in and just exits the
+    //    whole app from any root tab - reported 07.10 ("je ne peux pas
+    //    revenir en arrière ... je dois refermer complètement l'app").
+    //    Go to the home tab first, exactly like a normal Android app's
+    //    back stack would; only exit once already there.
+    var activeLink = document.querySelector('#main_nav .nav-link.active[data-value]');
+    if (activeLink && activeLink.getAttribute('data-value') !== 'presence') {
+      var homeLink = document.querySelector('#main_nav .nav-link[data-value="presence"]');
+      if (homeLink) {
+        homeLink.click();
+        return true;
+      }
+    }
+
     return false;
   }
 

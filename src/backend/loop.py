@@ -36,6 +36,8 @@ from src.backend.constants import (
     MAX_MOTION_BLOCK_SECONDS,
     CAMERA_IDLE_RESUME_HOLD_S,
     GLANCE_NOTIFICATION_COOLDOWN_S,
+    RFID_BACKFILL_WINDOW_S,
+    WAIT_FOR_OUTSIDE_RISING_TIMEOUT_S,
 )
 import src.backend.model_runtime as model_runtime
 import src.backend.mqtt_bridge as mqtt_bridge
@@ -68,6 +70,15 @@ _ = set_language(CONFIG['LANGUAGE'])
 # Global variable for motion states
 motion_state = {"outside": 0, "inside": 0}
 motion_state_lock = Lock()
+
+# 09.10, Sid ("verrouillé au clic si l'aimant a été activé par un mouvement
+# de chat ou un RFID"): exposes WHY each magnet is currently unlocked
+# ("manual" override vs the automatic entry/exit flow) so the Presence page
+# can refuse a manual LOCK while a real passage is in progress - closing on
+# a cat mid-passage is a real physical risk, not just a UX nuisance. None
+# means the magnet is currently locked.
+door_unlock_source = {"inside": None, "outside": None}
+door_unlock_source_lock = Lock()
 
 
 class BackendLoopContext:
@@ -163,7 +174,18 @@ def backend_main(
     first_motion_inside_mono = 0.0
     first_motion_inside_raw_mono = 0.0
     motion_block_id = 0
+    # 11.10, Sid ("le mélange entrée/sortie peut-il bloquer un chat à tort ?"):
+    # the real tag first confirmed for the CURRENTLY open motion block - lets
+    # a second, genuinely different, already-known cat's RFID be told apart
+    # from ordinary PIR noise/re-triggers from the same cat. Deliberately
+    # keyed on a real chip read, never on the vision classifier (which
+    # flickered between two cats' names at 30-80% confidence on the same
+    # physical cat the night this was found) and never on prey detection
+    # (prey has no RFID chip, so this can structurally never fire on a
+    # cat+prey double-detection - only on two distinct, known cats).
+    current_block_rfid = None
     ids_with_mouse = []
+    ids_with_mouse_consensus = []
     ids_of_current_motion_block = []
     known_rfid_tags = []
     cat_rfid_name_dict = CatsRepo.get_cat_name_rfid_dict(CONFIG['KITTYHACK_DATABASE_PATH'])
@@ -176,8 +198,22 @@ def backend_main(
     pending_exit_rfid_check = False
     inside_manually_unlocked = False
     inside_manually_locked_tm = 0.0
+    # 07.10, Sid ("quand je clique sur ouvrir vers l'extérieur, ça se
+    # reverrouille direct. Pas 60 secondes, pas 10, direct"): the inside
+    # door already had this exact guard (inside_manually_unlocked) so a
+    # manual unlock survives until MAX_UNLOCK_TIME or a real close - outside
+    # never had the equivalent, so the "close outside once inside motion has
+    # been quiet for OPEN_OUTSIDE_TIMEOUT" logic below (meant to close the
+    # door once a cat has finished walking through an automatic exit) also
+    # fired for a manual-only unlock with no cat anywhere near the flap -
+    # last_motion_inside_mono was already stale, so that condition was true
+    # on the very next loop tick.
+    outside_manually_unlocked = False
     backend_main.prey_detection_tm = 0.0
     backend_main.prey_detection_mono = 0.0
+    # 08.10, Sid: external wake request for PAUSE_CAMERA_WHEN_IDLE, set by
+    # POST /camera/wake (src/api.py) - see that block below for the read.
+    backend_main.camera_external_wake_until_mono = 0.0
     additional_verdict_infos = []
     motion_timeline_entries = []
     timeline_inside_reported = None
@@ -205,6 +241,13 @@ def backend_main(
     # before allowing any new entry decision. This prevents reusing the same continuous
     # outside motion (and stale RFID) as a phantom re-entry in the same block.
     wait_for_outside_rising_after_exit = False
+    # Monotonic time wait_for_outside_rising_after_exit was last set True.
+    # 09.10, Sid ("un de chaque coté de la chatière... ils font ca assez
+    # souvent"): the expected rising edge can be starved indefinitely by
+    # continuous outside motion (two cats facing off at the flap) - this
+    # timestamp lets a safety timeout force-clear the flag below instead of
+    # blocking a legitimate entry decision forever.
+    wait_for_outside_rising_after_exit_mono = 0.0
     last_outside_crossing = 0
     last_inside_crossing = 0
     last_inside_raw_crossing = 0
@@ -351,6 +394,7 @@ def backend_main(
         nonlocal timeline_rfid_cat_logged
         nonlocal timeline_outside_reported
         nonlocal motion_block_active
+        nonlocal current_block_rfid
 
         # Start a fresh verdict-info and timeline collection for this motion block.
         additional_verdict_infos = []
@@ -361,6 +405,7 @@ def backend_main(
         timeline_video_cat_logged = None
         timeline_rfid_cat_logged = None
         timeline_outside_reported = "open" if magnets.get_outside_state() else "closed"
+        current_block_rfid = None
         timeline_append(
             motion_timeline_entries,
             TimelineAction.MOTION_INSIDE if start_with_inside else TimelineAction.MOTION_OUTSIDE,
@@ -375,6 +420,7 @@ def backend_main(
         nonlocal suppress_entry_decision_after_fast_exit
         nonlocal unlock_inside_tm
         nonlocal timeline_outside_reported
+        nonlocal outside_manually_unlocked
 
         timeline_append(motion_timeline_entries, TimelineAction.FAST_IN_OUT_CROSSING)
         suppress_entry_decision_after_fast_exit = True
@@ -382,11 +428,16 @@ def backend_main(
             magnets.queue_command("lock_inside")
             unlock_inside_tm = 0.0
             _timeline_log_inside_close(TimelineAction.INSIDE_CLOSED_FAST_IN_OUT)
+            with door_unlock_source_lock:
+                door_unlock_source["inside"] = None
         if magnets.get_outside_state() and magnets.check_queued("lock_outside") == False:
             if timeline_outside_reported != "closed":
                 timeline_outside_reported = "closed"
                 timeline_append(motion_timeline_entries, TimelineAction.OUTSIDE_CLOSED_FAST_IN_OUT)
             magnets.queue_command("lock_outside")
+            outside_manually_unlocked = False
+            with door_unlock_source_lock:
+                door_unlock_source["outside"] = None
         suppress_outside_motion_block = True
         suppress_inside_motion_block = True
 
@@ -410,6 +461,7 @@ def backend_main(
         nonlocal suppress_inside_motion_block
         nonlocal suppress_entry_decision_after_fast_exit
         nonlocal wait_for_outside_rising_after_exit
+        nonlocal wait_for_outside_rising_after_exit_mono
         nonlocal unlock_inside_tm
         nonlocal timeline_outside_reported
         nonlocal pending_fast_exit_finalize_mono
@@ -418,6 +470,7 @@ def backend_main(
         nonlocal event_cooldown_until_mono
         nonlocal pending_exit_rfid_check
         nonlocal deferred_entry_due_to_exit
+        nonlocal current_block_rfid
 
         if not motion_block_active:
             return
@@ -432,6 +485,8 @@ def backend_main(
         exit_in_progress = False
         deferred_entry_due_to_exit = False
         wait_for_outside_rising_after_exit = False
+        wait_for_outside_rising_after_exit_mono = 0.0
+        current_block_rfid = None
         unlock_inside_decision_made = False
         tag_id_valid = False
 
@@ -444,6 +499,8 @@ def backend_main(
         ):
             magnets.queue_command("lock_inside")
             _timeline_log_inside_close(TimelineAction.INSIDE_CLOSED_MOTION_END)
+            with door_unlock_source_lock:
+                door_unlock_source["inside"] = None
 
         if first_motion_inside_raw_mono == 0.0 or (first_motion_outside_mono - first_motion_inside_raw_mono) > 60.0:
             if unlock_inside_tm > first_motion_outside_mono and tag_id is not None:
@@ -557,13 +614,48 @@ def backend_main(
             (event_type in [EventType.CAT_WENT_OUTSIDE]) or
             (tag_id is not None) or
             (tag_id_from_video is not None)):
+            # 11.10 (round 2), Sid ("reporter ton correctif dans les
+            # videos/photos - c'est avec ca que je peux entrainer le
+            # modele"): the per-tick majority-vote fix above only ever
+            # affected tag_id_from_video (door decisions + the one
+            # CAT_DETECTED_VIDEO timeline label) - each individual stored
+            # photo's own detected_objects kept its raw, noisy per-frame
+            # name untouched, so the Photos review/training workflow still
+            # showed every flicker one frame at a time. Propagate the
+            # block's final, most-authoritative identity (a real RFID read
+            # always wins; otherwise the vote winner) onto every cat-
+            # identity detection (never Prey - a different kind of
+            # detection, not an identity mislabel) before writing to the
+            # database, so what she reviews/corrects already reflects the
+            # smarter block-level answer instead of the per-frame noise.
+            winning_tag = tag_id if tag_id is not None else tag_id_from_video
+            winning_name = cat_rfid_name_dict.get(winning_tag, "").lower() if winning_tag else ""
             for element in img_ids_for_motion_block:
                 image_buffer.update_block_id(element, motion_block_id)
                 if tag_id is not None:
-                    image_buffer.update_tag_id(element, tag_id)
+                    image_buffer.update_tag_id(element, tag_id, is_real=True)
                 elif tag_id_from_video is not None:
-                    image_buffer.update_tag_id(element, tag_id_from_video)
+                    image_buffer.update_tag_id(element, tag_id_from_video, is_real=False)
+                if winning_name:
+                    img = image_buffer.get_by_id(element)
+                    if img is not None:
+                        for obj in getattr(img, 'detected_objects', None) or []:
+                            obj_name = (obj.object_name or "").lower()
+                            if not obj_name or obj_name in ("prey", "beute"):
+                                continue
+                            if obj_name != winning_name:
+                                obj.object_name = winning_name
             logging.info(f"[BACKEND] Minimal threshold exceeded or tag ID detected. Images will be written to the database. Updated block ID for {len(img_ids_for_motion_block)} elements to '{motion_block_id}' and tag ID to '{tag_id if tag_id is not None else ''}'")
+            # 08.10, Sid ("forcer le systeme a ecrire... en forcant
+            # l'utilisation du vrai RFID"): this block just got written
+            # without a real chip read (tag_id is None - empty or
+            # video-only). For an actual passage the cat is physically at
+            # the reader, so a real read arriving shortly after is worth
+            # backfilling - see the tag_id-arrival check below.
+            if tag_id is None:
+                if not hasattr(backend_main, "pending_rfid_backfill"):
+                    backend_main.pending_rfid_backfill = {}
+                backend_main.pending_rfid_backfill[motion_block_id] = _mono() + RFID_BACKFILL_WINDOW_S
             timeline_snapshot = list(motion_timeline_entries)
             db_thread = threading.Thread(
                 target=EventsRepo.write_motion_block_to_db,
@@ -679,6 +771,13 @@ def backend_main(
             if not photo_url and rfid:
                 photo_url = f"/cat-photo/{rfid}.jpg"
 
+            # 07.10, Sid ("icone à droite... la photo du chat... qui devait
+            # s'afficher"): the small notification icon should be the cat's
+            # own registered profile photo whenever it's known, regardless
+            # of whether a fresh event thumbnail was found for `image`
+            # above (image=the photo from THIS passage, icon=who it is).
+            icon_url = f"/cat-photo/{rfid}.jpg" if rfid else None
+
             try:
                 if is_inside:
                     if not CONFIG['NOTIFY_CAT_ENTERED']:
@@ -688,9 +787,9 @@ def backend_main(
                         if known_cat else _("A cat came inside.")
                     )
                     send_notification_to_all(
-                        _("Kittyhack"), body, url="/", tag=f"kittyhack-inside-{_mono():.3f}", image=photo_url
+                        _("Paws Flap"), body, url="/", tag=f"kittyhack-inside-{_mono():.3f}", image=photo_url, icon=icon_url
                     )
-                    send_fcm_notification_to_all_sync(_("Kittyhack"), body, url="/", image=photo_url)
+                    send_fcm_notification_to_all_sync(_("Paws Flap"), body, url="/", image=photo_url)
                 elif is_outside:
                     if not CONFIG['NOTIFY_CAT_EXITED']:
                         return
@@ -699,20 +798,24 @@ def backend_main(
                         if known_cat else _("A cat went outside.")
                     )
                     send_notification_to_all(
-                        _("Kittyhack"), body, url="/", tag=f"kittyhack-outside-{_mono():.3f}", image=photo_url
+                        _("Paws Flap"), body, url="/", tag=f"kittyhack-outside-{_mono():.3f}", image=photo_url, icon=icon_url
                     )
-                    send_fcm_notification_to_all_sync(_("Kittyhack"), body, url="/", image=photo_url)
+                    send_fcm_notification_to_all_sync(_("Paws Flap"), body, url="/", image=photo_url)
                 else:
                     if not CONFIG['NOTIFY_GLANCE_OUTSIDE']:
                         return
+                    # 08.10, Sid: same wording fix as journeys.py's
+                    # _presence_direction_text - only the OUTSIDE sensor
+                    # fired, so the cat is outside peering in, not inside
+                    # peering out.
                     body = (
-                        _("{cat} looked outside but didn't go out.").format(cat=known_cat)
-                        if known_cat else _("A cat looked outside but didn't go out.")
+                        _("{cat} looked inside but didn't come in.").format(cat=known_cat)
+                        if known_cat else _("A cat looked inside but didn't come in.")
                     )
                     send_notification_to_all(
-                        _("Kittyhack"), body, url="/", tag=f"kittyhack-glance-{_mono():.3f}", image=photo_url
+                        _("Paws Flap"), body, url="/", tag=f"kittyhack-glance-{_mono():.3f}", image=photo_url, icon=icon_url
                     )
-                    send_fcm_notification_to_all_sync(_("Kittyhack"), body, url="/", image=photo_url)
+                    send_fcm_notification_to_all_sync(_("Paws Flap"), body, url="/", image=photo_url)
             except Exception as e:
                 logging.warning(f"[BACKEND] Failed to send push notification: {e}")
 
@@ -754,17 +857,19 @@ def backend_main(
 
     def process_tick():
         nonlocal cat_rfid_name_dict, cat_settings_map, deferred_entry_due_to_exit, entry_unlocked_in_block, entry_unlocked_mono, exit_in_progress, first_motion_inside_mono, first_motion_inside_raw_mono
-        nonlocal first_motion_inside_raw_tm, first_motion_inside_tm, first_motion_outside_mono, first_motion_outside_tm, ids_of_current_motion_block, ids_with_mouse, inside_manually_locked_tm, inside_manually_unlocked
+        nonlocal first_motion_inside_raw_tm, first_motion_inside_tm, first_motion_outside_mono, first_motion_outside_tm, ids_of_current_motion_block, ids_with_mouse, ids_with_mouse_consensus, inside_manually_locked_tm, inside_manually_unlocked
+        nonlocal outside_manually_unlocked
         nonlocal known_rfid_tags, last_auto_model_recover_mono, last_fps_metadata_write_mono, last_inside_crossing, last_inside_raw_crossing, last_low_fps_check_mono, last_motion_inside_mono, last_motion_inside_raw_mono
         nonlocal last_motion_outside_mono, last_motion_outside_tm, last_outside_crossing, last_written_effective_fps, low_fps_window_count, motion_block_id, motion_inside, motion_inside_mono
         nonlocal motion_inside_raw, motion_inside_raw_mono, motion_outside, motion_outside_mono, motion_outside_raw, pending_exit_rfid_check, pending_fast_exit_finalize_mono, previous_use_camera_for_motion
         nonlocal camera_idle_resume_until_mono
         nonlocal rfid_thread, suppress_entry_decision_after_fast_exit, suppress_inside_motion_block, suppress_outside_motion_block, tag_id, tag_id_from_video, tag_id_valid, tag_seen_mono
         nonlocal tag_timestamp, timeline_no_prey_logged, timeline_prey_logged, timeline_rfid_cat_logged, timeline_video_cat_logged, unlock_inside, unlock_inside_decision_made, unlock_inside_tm
-        nonlocal unlock_outside_tm, wait_for_outside_rising_after_exit
+        nonlocal unlock_outside_tm, wait_for_outside_rising_after_exit, wait_for_outside_rising_after_exit_mono
         nonlocal mouse_check_conditions, motion_source, use_camera_for_motion
         nonlocal motion_block_active, event_cooldown_until_mono, additional_verdict_infos, motion_timeline_entries
         nonlocal timeline_inside_reported, timeline_outside_reported, motion_inside_tm, motion_inside_raw_tm, motion_outside_tm
+        nonlocal current_block_rfid
 
         # Persist effective FPS into info.json for the active YOLO model while running.
         try:
@@ -909,6 +1014,19 @@ def backend_main(
                 pir_outside_now, __, pir_outside_raw_now, __ = pir.get_states()
                 if pir_outside_now or pir_outside_raw_now:
                     camera_idle_resume_until_mono = _mono() + CAMERA_IDLE_RESUME_HOLD_S
+                # 08.10, Sid ("la detection Reolink active potentiellement la
+                # camera KF pour les cas ou PIR a un angle mort"): a Reolink
+                # camera's own onboard AI (watchdog.py, a separate process)
+                # has no way to flip this PIR-only gate directly - it calls
+                # a small authenticated API endpoint instead (src/api.py's
+                # POST /camera/wake), which just sets this same attribute
+                # backend_main carries for other cross-call state (e.g.
+                # exit_block_until_mono_by_rfid above). Read here exactly
+                # like the PIR branch above - a Reolink detection holds the
+                # camera awake the same way a real PIR edge would.
+                external_wake_until = getattr(backend_main, "camera_external_wake_until_mono", 0.0)
+                if external_wake_until > camera_idle_resume_until_mono:
+                    camera_idle_resume_until_mono = external_wake_until
                 if _mono() < camera_idle_resume_until_mono:
                     if model_runtime.model_handler.paused:
                         model_runtime.model_handler.resume()
@@ -961,6 +1079,64 @@ def backend_main(
             if tag_seen_mono == 0.0 or tag_id != previous_tag_id:
                 tag_seen_mono = _mono()
 
+                # 11.10, Sid ("le mélange entrée/sortie peut-il bloquer un chat
+                # à tort ?"): confirmed real bug the same night - a second
+                # cat's motion arriving while the first cat's block was still
+                # open got silently merged into it (loop.py's own
+                # motion_block_active check below has no cat-identity notion
+                # at all). Here is the one place real identity evidence
+                # exists: a real chip read just arrived. If it's a KNOWN cat
+                # and it doesn't match whichever known cat this block was
+                # already confirmed for, finalize that block NOW instead of
+                # letting the new cat's motion keep polluting it - the next
+                # motion-rise handling then starts a genuinely fresh block.
+                # Deliberately keyed on a real RFID read only, never on the
+                # vision classifier (flickered between two cats' names at
+                # 30-80% confidence on the same physical cat that night) and
+                # never on prey detection (prey carries no RFID chip, so this
+                # can never fire on a cat+prey double-detection - only two
+                # distinct, already-known cats trigger it). Safe to finalize
+                # mid-motion: the "only one magnet at a time" rule elsewhere
+                # already guarantees the inside magnet can't be open while an
+                # outside-motion block like this one is active, so
+                # _finalize_motion_block's own inside-relock branch is a
+                # no-op here - nothing mid-transit can be force-closed by this.
+                if (
+                    motion_block_active
+                    and current_block_rfid is not None
+                    and tag_id != current_block_rfid
+                    and tag_id in known_rfid_tags
+                ):
+                    logging.warning(
+                        f"[BACKEND] Different known cat detected (tag '{tag_id}') while motion "
+                        f"block '{motion_block_id}' was still open for tag '{current_block_rfid}'. "
+                        "Finalizing that block now instead of merging this cat's motion into it."
+                    )
+                    _finalize_motion_block("different_cat_detected")
+                elif motion_block_active and current_block_rfid is None:
+                    current_block_rfid = tag_id
+
+                # 08.10, Sid: a real chip read just arrived - if a recent
+                # block was written without one (pending_rfid_backfill,
+                # see the write site above), correct it now. Only the most
+                # recent still-valid pending block, on the assumption the
+                # cat that was just scanned is the one from that passage.
+                pending = getattr(backend_main, "pending_rfid_backfill", None)
+                if pending:
+                    now_mono = _mono()
+                    for stale_id in [bid for bid, deadline in pending.items() if now_mono > deadline]:
+                        del pending[stale_id]
+                    if pending:
+                        target_block_id = max(pending.keys())
+                        del pending[target_block_id]
+                        threading.Thread(
+                            target=lambda bid=target_block_id, tag=tag_id: logging.info(
+                                f"[BACKEND] RFID backfill: block '{bid}' corrected to real tag '{tag}' "
+                                f"({EventsRepo.backfill_block_rfid(CONFIG['KITTYHACK_DATABASE_PATH'], bid, tag)} row(s))."
+                            ),
+                            daemon=True,
+                        ).start()
+
         # Check if the RFID reader is still running. Otherwise restart it.
         if rfid.get_run_state() == RfidRunState.stopped:
             logging.warning("[BACKEND] RFID reader stopped unexpectedly. Restarting RFID reader.")
@@ -994,6 +1170,34 @@ def backend_main(
                     "Finalizing to prevent endless block growth."
                 )
                 _finalize_motion_block("outside_motion_timeout")
+                # 11.10, Sid (vrai incident: Boubou RFID-confirmé, "allowed to enter",
+                # jamais réouvert pendant 4 minutes - Block ID resté identique tout du
+                # long dans les logs réels, preuve que motion_outside n'est jamais
+                # retombé à 0): ce garde-fou existe précisément pour le cas où le
+                # mouvement extérieur ne retombe JAMAIS proprement à 0 ("continuous
+                # movement near flap" - voir commentaire ci-dessus). Mais
+                # _finalize_motion_block() remet first_motion_outside_mono à 0.0 et
+                # motion_block_active à False, et plus bas (last_outside==0 and
+                # motion_outside==1) est le SEUL autre endroit qui les réinitialise -
+                # un "front montant" qui ne peut plus jamais se produire tant que le
+                # mouvement ne s'arrête pas vraiment. Résultat: sufficient_analysis_time
+                # reste bloqué à False indéfiniment (analysis_elapsed_s gelé à 0.0) et
+                # la porte ne se rouvre plus, pour un chat déjà identifié et autorisé.
+                # Redémarrer un nouveau bloc immédiatement ici si le mouvement est
+                # toujours actif, sans attendre ce front montant hypothétique.
+                if motion_outside == 1:
+                    motion_block_id += 1
+                    _timeline_start_motion_block(start_with_inside=False)
+                    if use_camera_for_motion:
+                        first_motion_outside_tm = _wall() - 0.5
+                        first_motion_outside_mono = _mono() - 0.5
+                    else:
+                        first_motion_outside_tm = _wall()
+                        first_motion_outside_mono = _mono()
+                    logging.info(
+                        f"[BACKEND] Motion still active outside after forced finalize; "
+                        f"immediately starting a new block (Block ID: {motion_block_id})."
+                    )
 
         if last_outside == 1 and motion_outside == 0:
             if not use_camera_for_motion and pending_fast_exit_finalize_mono <= 0.0:
@@ -1038,6 +1242,7 @@ def backend_main(
         if last_outside == 0 and motion_outside == 1 and not suppress_outside_motion_block and not _motion_processing_suspended():
             if wait_for_outside_rising_after_exit:
                 wait_for_outside_rising_after_exit = False
+                wait_for_outside_rising_after_exit_mono = 0.0
                 # This is the first outside-motion rise after an exit just completed. With
                 # immediate-lock-after-passage this is typically the (camera-delayed) reappearance
                 # of the cat that just left: the outside camera only classifies the cat once it has
@@ -1058,14 +1263,25 @@ def backend_main(
                 _timeline_start_motion_block(start_with_inside=False)
             else:
                 timeline_append(motion_timeline_entries, TimelineAction.MOTION_OUTSIDE)
-            # If we use the camera for motion detection, set the first motion timestamp a bit earlier to avoid missing the first motion
+            # If we use the camera for motion detection, set the first motion timestamp a bit earlier to avoid missing the first motion.
+            # 11.10, Sid (vrai incident: Boubou RFID-confirmé, "allowed to enter", jamais
+            # réouvert): ce timestamp alimente analysis_elapsed_s -> compute_mouse_check's
+            # sufficient_analysis_time. Le remettre à zéro à CHAQUE front montant, même
+            # quand un bloc est déjà actif, relance le chrono anti-proie à chaque fois -
+            # si le mouvement extérieur clignote plus vite que MIN_SECONDS_TO_ANALYZE,
+            # sufficient_analysis_time ne redevient jamais vrai et la porte reste bloquée
+            # indéfiniment. Ne l'initialiser qu'une fois par bloc (même garde que le
+            # chemin fast-crossing plus bas: first_motion_outside_mono <= 0.0).
+            if first_motion_outside_mono <= 0.0:
+                if use_camera_for_motion:
+                    first_motion_outside_tm = _wall() - 0.5
+                    first_motion_outside_mono = _mono() - 0.5
+                else:
+                    first_motion_outside_tm = _wall()
+                    first_motion_outside_mono = _mono()
             if use_camera_for_motion:
-                first_motion_outside_tm = _wall() - 0.5
-                first_motion_outside_mono = _mono() - 0.5
                 additional_log_info = f"| configured cat motion threshold: {CONFIG['CAT_MOTION_THRESHOLD']} "
             else:
-                first_motion_outside_tm = _wall()
-                first_motion_outside_mono = _mono()
                 model_runtime.model_handler.resume()
                 additional_log_info = ""
             logging.info(f"[BACKEND] {motion_source}-based motion detection: Motion detected OUTSIDE {additional_log_info}(Block ID: {motion_block_id})")
@@ -1087,11 +1303,11 @@ def backend_main(
                     backend_main.last_motion_outside_notification_mono = _mono()
                     try:
                         send_notification_to_all(
-                            _("Kittyhack"), _("Motion detected outside."),
+                            _("Paws Flap"), _("Motion detected outside."),
                             url="/", tag=f"kittyhack-motion-outside-{_mono():.3f}",
                         )
                         send_fcm_notification_to_all_sync(
-                            _("Kittyhack"), _("Motion detected outside."), url="/"
+                            _("Paws Flap"), _("Motion detected outside."), url="/"
                         )
                     except Exception as e:
                         logging.warning(f"[BACKEND] Failed to send motion-outside push notification: {e}")
@@ -1227,6 +1443,8 @@ def backend_main(
                             magnets.queue_command("unlock_outside")
                             unlock_outside_tm = _mono()
                             _timeline_log_outside_open()
+                            with door_unlock_source_lock:
+                                door_unlock_source["outside"] = "auto"
                             # Mark this motion block as exit
                             exit_in_progress = True
                 elif exit_blocked_after_prey:
@@ -1244,11 +1462,11 @@ def backend_main(
                     backend_main.last_motion_inside_notification_mono = _mono()
                     try:
                         send_notification_to_all(
-                            _("Kittyhack"), _("Motion detected inside."),
+                            _("Paws Flap"), _("Motion detected inside."),
                             url="/", tag=f"kittyhack-motion-inside-{_mono():.3f}",
                         )
                         send_fcm_notification_to_all_sync(
-                            _("Kittyhack"), _("Motion detected inside."), url="/"
+                            _("Paws Flap"), _("Motion detected inside."), url="/"
                         )
                     except Exception as e:
                         logging.warning(f"[BACKEND] Failed to send motion-inside push notification: {e}")
@@ -1265,13 +1483,17 @@ def backend_main(
         if ( (motion_inside == 0) and
             (magnets.get_outside_state() == True) and
             ((_mono() - last_motion_inside_mono) > OPEN_OUTSIDE_TIMEOUT) and
-            (magnets.check_queued("lock_outside") == False) ):
+            (magnets.check_queued("lock_outside") == False) and
+            (outside_manually_unlocked == False) ):
                 magnets.queue_command("lock_outside")
+                with door_unlock_source_lock:
+                    door_unlock_source["outside"] = None
                 # Exit passage has ended from the control perspective. Keep the current
                 # motion block alive but allow a fresh entry decision if outside motion
                 # persists and turns into a valid entry attempt.
                 exit_in_progress = False
                 wait_for_outside_rising_after_exit = True
+                wait_for_outside_rising_after_exit_mono = _mono()
                 _timeline_log_outside_close()
 
         # Check also for a cat via the camera, if the option is enabled.
@@ -1289,35 +1511,171 @@ def backend_main(
         # can correct an earlier weak match. Only log/update the timeline
         # when the best candidate actually changes, to avoid spamming one
         # log line per camera frame.
-        if CONFIG['USE_CAMERA_FOR_CAT_DETECTION'] and motion_outside == 1:
+        #
+        # 11.10, Sid ("j'aimerais éliminer au mieux les faux positifs...
+        # c'est obligatoirement le bon chat vu qu'il rentre dans le tunnel,
+        # ça lit RFID"): once a real chip read has confirmed identity for
+        # this block, re-scanning video on every tick is pure redundant
+        # noise - it's what produced the flickering "Nala 42% / Patoune 79%"
+        # labels on the same physical cat seen in the crash investigation
+        # (and is exactly the same symptom class as the 05.10 comment
+        # above). Entry decisions elsewhere still get video as a fallback
+        # when RFID hasn't been read yet, and prey detection (a separate
+        # signal on the same frames) is completely unaffected by this
+        # toggle.
+        #
+        # FIRST ATTEMPT (same day) gated on `exit_in_progress`, which was
+        # wrong - confirmed via a real exit's own logs: `exit_in_progress`
+        # gets reset to False by the OPEN_OUTSIDE_TIMEOUT auto-relock (see
+        # that block below, ~20 lines down) well before the block itself
+        # finalizes, the instant `motion_inside` first reads 0 - the cat can
+        # still be lingering in view outside well after that, still
+        # generating video detections my first check no longer caught.
+        # `current_block_rfid` (11.10's other fix, same session) is the
+        # right persistent signal instead: set once for the whole block's
+        # lifetime the first time a real known tag is confirmed, only
+        # cleared when the block itself actually finalizes - not by this
+        # unrelated, earlier magnet-timeout reset.
+        if (
+            CONFIG['USE_CAMERA_FOR_CAT_DETECTION']
+            and motion_outside == 1
+            and current_block_rfid is None
+        ):
             imgs_with_cats = image_buffer.get_filtered_ids(first_motion_outside_tm, min_own_cat_probability=CONFIG['CAT_THRESHOLD'])
             if len(imgs_with_cats) > 0:
-                # Find the element with the highest probability
-                max_prob = 0.0
-                detected_cat = ""
+                # 11.10 (round 2), Sid ("sur les 20 premières images c'est
+                # Nala, pas de logique que la 21e soit Pookie, la 23e
+                # Patoune puis de nouveau Nala"): switched from "single
+                # highest-confidence detection ever seen in the block" to a
+                # per-image vote count - one vote per buffered image where
+                # that cat had the best (above-threshold) detection in THAT
+                # image. Real data (11.10) confirmed this flickering is
+                # frequent (41.5% of blocks with video detection) and
+                # concentrated among visually similar cats (Nala/Patoune/
+                # Pookie all have a lot of white fur). A single noisy frame
+                # now casts exactly one vote, so it can't override an
+                # established majority built from many consistent frames -
+                # while still allowing a genuinely different cat to overtake
+                # the lead if it keeps accumulating more votes over time
+                # (keeps the 05.10 fix's ability to correct an early wrong
+                # guess, see the comment block above).
+                votes: dict[str, int] = {}
+                best_probs: dict[str, float] = {}
+                ordered_best_names: list[str] = []
                 for element in imgs_with_cats:
                     img = image_buffer.get_by_id(element)
+                    per_image_best_name = ""
+                    per_image_best_prob = 0.0
                     for obj in getattr(img, 'detected_objects', []):
                         obj_name = getattr(obj, 'object_name', '').lower()
                         obj_probability = getattr(obj, 'probability', 0.0)
-                        if obj_name not in ["prey", "beute"] and obj_probability > max_prob:
-                            max_prob = obj_probability
-                            detected_cat = obj_name
-                if detected_cat != "":
+                        if obj_name not in ["prey", "beute"] and obj_probability > per_image_best_prob:
+                            per_image_best_prob = obj_probability
+                            per_image_best_name = obj_name
+                    if per_image_best_name:
+                        votes[per_image_best_name] = votes.get(per_image_best_name, 0) + 1
+                        if per_image_best_prob > best_probs.get(per_image_best_name, 0.0):
+                            best_probs[per_image_best_name] = per_image_best_prob
+                        ordered_best_names.append(per_image_best_name)
+
+                if votes:
+                    detected_cat = max(votes, key=lambda name: (votes[name], best_probs[name]))
                     # Look for the cat name in the values of the dictionary
                     matching_tag = next((rfid for rfid, name in cat_rfid_name_dict.items() if name.lower() == detected_cat), None)
                     if matching_tag and matching_tag != tag_id_from_video:
-                        tag_id_from_video = matching_tag
-                        logging.info(f"[BACKEND] Detected cat '{detected_cat}' by video stream with probability {max_prob:.2f} in image ID {element}")
-                        logging.info(f"[BACKEND] Detected cat '{detected_cat}' matches RFID tag '{tag_id_from_video}'")
-                        if timeline_video_cat_logged != matching_tag:
-                            timeline_video_cat_logged = matching_tag
-                            timeline_append(
-                                motion_timeline_entries,
-                                TimelineAction.CAT_DETECTED_VIDEO,
-                                cat_name=get_cat_name(matching_tag),
+                        current_name = cat_rfid_name_dict.get(tag_id_from_video, "").lower() if tag_id_from_video else ""
+                        current_votes = votes.get(current_name, 0)
+                        # Only switch if the new candidate strictly beats the current
+                        # leader's own vote count - a single late outlier (1 vote)
+                        # can't overtake an established majority.
+                        if votes[detected_cat] > current_votes:
+                            tag_id_from_video = matching_tag
+                            logging.info(
+                                f"[BACKEND] Detected cat '{detected_cat}' by video stream: "
+                                f"{votes[detected_cat]} votes (best {best_probs[detected_cat]:.2f}%), "
+                                f"overtaking '{current_name or 'none'}' ({current_votes} votes)"
                             )
-            
+                            logging.info(f"[BACKEND] Detected cat '{detected_cat}' matches RFID tag '{tag_id_from_video}'")
+                            if timeline_video_cat_logged != matching_tag:
+                                timeline_video_cat_logged = matching_tag
+                                timeline_append(
+                                    motion_timeline_entries,
+                                    TimelineAction.CAT_DETECTED_VIDEO,
+                                    cat_name=get_cat_name(matching_tag),
+                                )
+
+                # 11.10 (round 2 continued), Sid ("on traite aussi si ya
+                # moyen" - two different cats passing through the SAME
+                # motion block before either has had an RFID read): the
+                # majority-vote fix above deliberately resists single-frame
+                # noise, which also means it won't react to a genuinely
+                # different cat arriving unless that cat's frames outvote
+                # the first cat's entire accumulated history - slow, and
+                # the two cats' identities stay merged in the same block/
+                # timeline until then. Mirrors the existing RFID-based
+                # split above (current_block_rfid mismatch), but video
+                # evidence is noisier, so this requires a STRONG recent
+                # majority (not a single frame) before splitting: most of
+                # the last few qualifying frames must agree on a cat
+                # different from the current video identity.
+                #
+                # REAL FALSE POSITIVE caught by Sid the same day ("ya eu
+                # qu'un chat, Nala est venue devant la chatiere, a recule
+                # et est revenue"): confirmed via logs - the split fired
+                # when the incumbent identity had only 2 votes (just
+                # assigned a moment earlier), so the "last 8 frames" window
+                # was nearly the block's ENTIRE history, not a late arrival
+                # after an established presence. A short noisy streak right
+                # at the start of a block could split a single hesitant cat
+                # into two. Now also requires the incumbent to already have
+                # a real track record (>= RECENT_WINDOW votes of its own)
+                # before a recent-window majority is trusted to split it -
+                # a freshly-assigned identity can still be corrected by the
+                # ordinary majority-vote path above instead.
+                RECENT_WINDOW = 8
+                RECENT_MAJORITY_REQUIRED = 6
+                MIN_INCUMBENT_VOTES_FOR_SPLIT = 15
+                if tag_id_from_video is not None and len(ordered_best_names) >= RECENT_WINDOW:
+                    current_name = cat_rfid_name_dict.get(tag_id_from_video, "").lower()
+                    current_votes = votes.get(current_name, 0)
+                    recent = ordered_best_names[-RECENT_WINDOW:]
+                    recent_counts: dict[str, int] = {}
+                    for name in recent:
+                        recent_counts[name] = recent_counts.get(name, 0) + 1
+                    stranger_name = max(recent_counts, key=lambda n: recent_counts[n])
+                    stranger_count = recent_counts[stranger_name]
+                    if (
+                        stranger_name != current_name
+                        and stranger_count >= RECENT_MAJORITY_REQUIRED
+                        and current_votes >= MIN_INCUMBENT_VOTES_FOR_SPLIT
+                    ):
+                        stranger_tag = next((rfid for rfid, name in cat_rfid_name_dict.items() if name.lower() == stranger_name), None)
+                        if stranger_tag and stranger_tag in known_rfid_tags:
+                            logging.warning(
+                                f"[BACKEND] Different known cat detected by video only (likely "
+                                f"'{stranger_name}', {stranger_count}/{RECENT_WINDOW} of the most "
+                                f"recent frames) while motion block '{motion_block_id}' was still "
+                                f"open for '{current_name}'. Finalizing that block now instead of "
+                                "merging this cat's motion into it."
+                            )
+                            _finalize_motion_block("different_cat_detected_video")
+                            # Same safety net as the MAX_MOTION_BLOCK_SECONDS fix above: if
+                            # outside motion is still active, immediately start a new block
+                            # instead of waiting for a rising edge that may never come.
+                            if motion_outside == 1:
+                                motion_block_id += 1
+                                _timeline_start_motion_block(start_with_inside=False)
+                                if use_camera_for_motion:
+                                    first_motion_outside_tm = _wall() - 0.5
+                                    first_motion_outside_mono = _mono() - 0.5
+                                else:
+                                    first_motion_outside_tm = _wall()
+                                    first_motion_outside_mono = _mono()
+                                logging.info(
+                                    "[BACKEND] Motion still active outside after video-based "
+                                    f"split; immediately starting a new block (Block ID: {motion_block_id})."
+                                )
+
         # Check for a valid RFID tag
         if ( tag_id and
             tag_id != previous_tag_id and 
@@ -1334,10 +1692,21 @@ def backend_main(
                 rfid.set_field(False)
                 logging.info(f"[BACKEND] Detected RFID tag {tag_id} matches a known tag. Disabled RFID field.")
 
-        # RFID overrides a prior video identification when both tags disagree.
-        # In per-cat and known-cat modes, any newly read RFID must be authoritative,
-        # even if the tag is unknown, to avoid keeping a stale video-based allow decision.
-        if (
+        # 08.10, Sid ("il faut désactiver ce truc, si puce RFID détectée,
+        # quel que soit le nombre de chat à quel moment = ça ouvre"):
+        # DISABLED - was a real incident, not a hypothesis. Pookie's own
+        # RFID was read successfully (confirmed in logs), entry should have
+        # been granted - but other cats' tags got read moments later during
+        # the same passage (collars readable from short range even when
+        # that cat isn't the one at the flap), re-triggering this block and
+        # re-locking the inside door before she ever got in. Her own call:
+        # once ANY valid RFID has granted entry, nothing should be able to
+        # take it back mid-passage - simpler and safer than trying to keep
+        # chasing exactly which combination of video-flicker + RFID re-read
+        # can flip tag_id_valid back to False. Kept below (not deleted) in
+        # case the original intent - a genuinely unknown tag replacing a
+        # known one - needs to be revisited later with a narrower condition.
+        if False and (
             motion_outside
             and tag_id
             and tag_id != previous_tag_id
@@ -1392,6 +1761,8 @@ def backend_main(
                     magnets.queue_command("lock_inside")
                     unlock_inside_tm = 0.0
                     _timeline_log_inside_close(TimelineAction.INSIDE_CLOSED_ENTRY_DENIED)
+                    with door_unlock_source_lock:
+                        door_unlock_source["inside"] = None
                     logging.info(
                         "[BACKEND] Entry denied after RFID overrode video identification; locking inside door."
                     )
@@ -1425,6 +1796,8 @@ def backend_main(
                                 magnets.queue_command("unlock_outside")
                                 unlock_outside_tm = _mono()
                                 _timeline_log_outside_open()
+                                with door_unlock_source_lock:
+                                    door_unlock_source["outside"] = "auto"
                                 # Mark this motion block as exit
                                 exit_in_progress = True
                         else:
@@ -1438,6 +1811,26 @@ def backend_main(
                     logging.error(f"[BACKEND] Error while deciding per-cat exit after RFID detection: {_e}")
                 finally:
                     pending_exit_rfid_check = False
+
+        # 09.10, Sid ("un de chaque coté de la chatière... ils font ca assez
+        # souvent"): wait_for_outside_rising_after_exit is only meant to be
+        # cleared by a fresh outside-motion rising edge (above), but that
+        # edge never comes if outside motion stays continuously active -
+        # two cats facing off at the flap, confirmed by Sid as frequent, not
+        # a rare edge case. Force-clear it after a safety timeout so a
+        # genuine entry attempt is never blocked indefinitely by this.
+        if (
+            wait_for_outside_rising_after_exit
+            and wait_for_outside_rising_after_exit_mono > 0.0
+            and (_mono() - wait_for_outside_rising_after_exit_mono) > WAIT_FOR_OUTSIDE_RISING_TIMEOUT_S
+        ):
+            logging.info(
+                f"[BACKEND] wait_for_outside_rising_after_exit timed out after "
+                f"{WAIT_FOR_OUTSIDE_RISING_TIMEOUT_S}s without a motion-outside rising edge "
+                f"(continuous outside motion) - clearing to allow a fresh entry decision."
+            )
+            wait_for_outside_rising_after_exit = False
+            wait_for_outside_rising_after_exit_mono = 0.0
 
         # Check if we are allowed to open the inside direction
         if (
@@ -1529,9 +1922,17 @@ def backend_main(
             # Process all elements in the buffer
             ids_of_current_motion_block = image_buffer.get_filtered_ids_mono(min_timestamp_mono=first_motion_outside_mono)
             ids_with_mouse = image_buffer.get_filtered_ids_mono(min_timestamp_mono=first_motion_outside_mono, min_mouse_probability=CONFIG['MOUSE_THRESHOLD'])
+            # 19.10, Sid ("plutôt qu'un seuil sur UNE frame, se baser sur
+            # plusieurs frames consécutives qui disent Prey d'affilée") -
+            # second seuil, plus bas, compté séparément - voir
+            # compute_mouse_check() dans decisions.py pour comment les deux
+            # se combinent (OR, ni l'un ni l'autre retiré). Désactivé par
+            # défaut (CONFIG['MOUSE_CONSENSUS_MIN_FRAMES'] == 0).
+            ids_with_mouse_consensus = image_buffer.get_filtered_ids_mono(min_timestamp_mono=first_motion_outside_mono, min_mouse_probability=CONFIG['MOUSE_CONSENSUS_THRESHOLD'])
         else:
             ids_of_current_motion_block = []
             ids_with_mouse = []
+            ids_with_mouse_consensus = []
 
         # Check if the inside magnet should be unlocked
         # Apply per-cat prey detection override (disable prey detection for this cat if configured)
@@ -1575,6 +1976,8 @@ def backend_main(
             len(ids_with_mouse),
             analysis_elapsed_s,
             float(CONFIG.get('MIN_SECONDS_TO_ANALYZE', 0.0) or 0.0),
+            len(ids_with_mouse_consensus),
+            int(CONFIG.get('MOUSE_CONSENSUS_MIN_FRAMES', 0) or 0),
         )
 
         # If per-cat prey detection is disabled for the currently identified cat,
@@ -1649,9 +2052,14 @@ def backend_main(
                             prey_cat_name = get_cat_name(tag_id if tag_id else tag_id_from_video)
                             prey_photo_url = None
                             try:
-                                if ids_with_mouse:
+                                # 19.10 : repli sur ids_with_mouse_consensus si
+                                # seul le chemin consensus a déclenché (frames
+                                # répétées sous MOUSE_THRESHOLD) - sinon la
+                                # notif partait sans photo dans ce cas.
+                                mouse_ids_for_photo = ids_with_mouse or ids_with_mouse_consensus
+                                if mouse_ids_for_photo:
                                     best_id = max(
-                                        ids_with_mouse,
+                                        mouse_ids_for_photo,
                                         key=lambda i: getattr(image_buffer.get_by_id(i), "mouse_probability", 0.0) or 0.0,
                                     )
                                     elem = image_buffer.get_by_id(best_id)
@@ -1668,10 +2076,10 @@ def backend_main(
                                 "False alarm? Reset the cooldown from Live view."
                             ).format(cat=prey_cat_name, minutes=lock_minutes)
                             send_notification_to_all(
-                                _("Kittyhack"), prey_body, url="/", tag=f"kittyhack-prey-{_mono():.3f}", image=prey_photo_url
+                                _("Paws Flap"), prey_body, url="/", tag=f"kittyhack-prey-{_mono():.3f}", image=prey_photo_url
                             )
                             send_fcm_notification_to_all_sync(
-                                _("Kittyhack"), prey_body, url="/", image=prey_photo_url
+                                _("Paws Flap"), prey_body, url="/", image=prey_photo_url
                             )
                     except Exception as e:
                         logging.warning(f"[BACKEND] Failed to send prey push notification: {e}")
@@ -1716,17 +2124,34 @@ def backend_main(
                 magnets.queue_command("lock_inside")
                 unlock_inside_tm = 0.0
                 _timeline_log_inside_close(TimelineAction.INSIDE_CLOSED_PREY)
+                with door_unlock_source_lock:
+                    door_unlock_source["inside"] = None
 
         if (unlock_inside and not _motion_processing_suspended()) or manual_door_override['unlock_inside']:
             logging.info(f"[BACKEND] Door unlock requested {'(manual override)' if manual_door_override['unlock_inside'] else ''}")
             logging.debug(f"[BACKEND] Motion outside: {motion_outside}, Motion inside: {motion_inside}, Tag ID: {tag_id}, Tag valid: {tag_id_valid}, Motion block ID: {motion_block_id}, Images with mouse: {len(ids_with_mouse)}, Images in current block: {len(ids_of_current_motion_block)} ({ids_of_current_motion_block})")
             if manual_door_override['unlock_inside'] and magnets.get_inside_state():
                 logging.info("[BACKEND] Manual override: Inside door is already open.")
+            elif manual_door_override['unlock_inside'] and magnets.get_outside_state():
+                # 09.10, Sid (Pi crashes repeatedly correlated with using the
+                # manual Presence-page buttons, confirmed via a live timeline:
+                # "Extérieur ouvert" immediately followed by "Intérieur ouvert
+                # (manuel)"): unlike the automatic path (outside_locked is one
+                # of its own 8 conditions, see the gate above), this manual
+                # override never checked the OTHER magnet at all - it could
+                # open both simultaneously, which a real hard-crash/no-route-
+                # to-host incident right after is consistent with (likely a
+                # simultaneous solenoid current draw the Pi's own supply
+                # can't absorb). Same "only one magnet" rule as everywhere
+                # else now applies here too.
+                logging.warning("[BACKEND] Manual override: Outside magnet is already unlocked. Only one magnet is allowed. Inside magnet will not be unlocked.")
             else:
                 magnets.empty_queue()
                 magnets.queue_command("unlock_inside")
                 unlock_inside_tm = _mono()
                 _timeline_log_inside_open(manual=bool(manual_door_override['unlock_inside']))
+                with door_unlock_source_lock:
+                    door_unlock_source["inside"] = "manual" if manual_door_override['unlock_inside'] else "auto"
                 if manual_door_override['unlock_inside']:
                     inside_manually_unlocked = True
                     # Only annotate if a real motion event is currently active.
@@ -1747,13 +2172,24 @@ def backend_main(
         if manual_door_override['unlock_outside']:
             if magnets.get_outside_state():
                 logging.info("[BACKEND] Manual override: Outside door is already open.")
+                outside_manually_unlocked = True
+                with door_unlock_source_lock:
+                    door_unlock_source["outside"] = "manual"
+            elif magnets.get_inside_state():
+                # 09.10: same "only one magnet" rule as the inside manual
+                # override above - see that comment for the full reasoning
+                # (Pi crashes correlated with these buttons).
+                logging.warning("[BACKEND] Manual override: Inside magnet is already unlocked. Only one magnet is allowed. Outside magnet will not be unlocked.")
             else:
                 logging.info("[BACKEND] Manual override: Opening outside door")
                 magnets.empty_queue()
                 magnets.queue_command("unlock_outside")
                 unlock_outside_tm = _mono()
                 _timeline_log_outside_open()
-            
+                outside_manually_unlocked = True
+                with door_unlock_source_lock:
+                    door_unlock_source["outside"] = "manual"
+
             manual_door_override['unlock_outside'] = False
 
         # 07.09, Sid: manual_door_override['lock_outside'] was set by the REST
@@ -1767,8 +2203,11 @@ def backend_main(
                 magnets.empty_queue()
                 magnets.queue_command("lock_outside")
                 _timeline_log_outside_close()
+                with door_unlock_source_lock:
+                    door_unlock_source["outside"] = None
             else:
                 logging.info("[BACKEND] Manual override: Outside door is already locked.")
+            outside_manually_unlocked = False
 
             manual_door_override['lock_outside'] = False
 
@@ -1778,6 +2217,8 @@ def backend_main(
                 magnets.empty_queue()
                 magnets.queue_command("lock_inside")
                 _timeline_log_inside_close(TimelineAction.INSIDE_CLOSED_MANUAL)
+                with door_unlock_source_lock:
+                    door_unlock_source["inside"] = None
             else:
                 logging.info("[BACKEND] Manual override: Inside door is already locked.")
             inside_manually_unlocked = False
@@ -1795,6 +2236,8 @@ def backend_main(
             logging.warning("[BACKEND] Maximum unlock time exceeded for inside door. Forcing lock.")
             magnets.queue_command("lock_inside")
             _timeline_log_inside_close(TimelineAction.INSIDE_CLOSED_MAX_TIME)
+            with door_unlock_source_lock:
+                door_unlock_source["inside"] = None
             if inside_manually_unlocked:
                 inside_manually_unlocked = False
             # Only annotate if a real motion event is currently active.
@@ -1807,6 +2250,9 @@ def backend_main(
         if magnets.get_outside_state() and (_mono() - unlock_outside_tm > MAX_UNLOCK_TIME) and magnets.check_queued("lock_outside") == False:
             logging.warning("[BACKEND] Maximum unlock time exceeded for outside door. Forcing lock.")
             magnets.queue_command("lock_outside")
+            outside_manually_unlocked = False
+            with door_unlock_source_lock:
+                door_unlock_source["outside"] = None
             _timeline_log_outside_close()
 
         last_outside_crossing = motion_outside_crossing

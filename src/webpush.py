@@ -98,7 +98,8 @@ def remove_subscription(endpoint: str) -> None:
 
 
 def send_notification_to_all(
-    title: str, body: str, url: str = "/", tag: str = "kittyhack", image: str | None = None
+    title: str, body: str, url: str = "/", tag: str = "kittyhack",
+    image: str | None = None, icon: str | None = None,
 ) -> None:
     """Push `title`/`body` to every stored subscription; prunes dead ones (404/410)."""
     with _lock:
@@ -110,6 +111,12 @@ def send_notification_to_all(
     data = {"title": title, "body": body, "url": url, "tag": tag}
     if image:
         data["image"] = image
+    # 07.10, Sid ("icone à droite... juste celle du logo alors qu'on avait
+    # décidé... que c'est la photo du chat qui devait s'afficher"): without
+    # this the service worker always falls back to the generic app icon -
+    # see pwa-service-worker.js's push handler.
+    if icon:
+        data["icon"] = icon
     payload = json.dumps(data)
     dead_endpoints = []
 

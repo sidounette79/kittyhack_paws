@@ -69,6 +69,36 @@ def test_compute_mouse_check_paths():
     assert ok is False and cond["no_mouse_detected"] is False
 
 
+def test_compute_mouse_check_consensus_disabled_by_default():
+    # consensus_min_frames omis (défaut 0) - comportement identique à avant,
+    # même avec beaucoup de frames au seuil bas, rien ne doit déclencher.
+    ok, cond = compute_mouse_check(True, 0, 2.0, 1.5)
+    assert ok is True and cond["no_mouse_detected"] is True
+    assert cond["mouse_consensus_detected"] is False
+
+
+def test_compute_mouse_check_consensus_path():
+    # 19.10, Sid - cas réel : 9 frames d'affilée avec Prey confirmé en
+    # vérité terrain (tâches LabelStudio 2577-2585), mais aucune frame
+    # individuelle n'aurait franchi MOUSE_THRESHOLD (70%) - exactement le
+    # scénario que ce chemin doit rattraper.
+    ok, cond = compute_mouse_check(True, 0, 2.0, 1.5, consensus_frame_count=9, consensus_min_frames=3)
+    assert ok is False
+    assert cond["no_mouse_detected"] is False
+    assert cond["mouse_consensus_detected"] is True
+
+    # Sous le minimum requis (2 frames répétées, seuil à 3) - ne déclenche pas.
+    ok, cond = compute_mouse_check(True, 0, 2.0, 1.5, consensus_frame_count=2, consensus_min_frames=3)
+    assert ok is True
+    assert cond["no_mouse_detected"] is True
+    assert cond["mouse_consensus_detected"] is False
+
+    # Le chemin seuil haut existant continue de fonctionner seul (consensus
+    # non configuré, min_frames=0) - aucune régression sur le comportement actuel.
+    ok, cond = compute_mouse_check(True, 3, 5.0, 1.5, consensus_frame_count=0, consensus_min_frames=0)
+    assert ok is False and cond["no_mouse_detected"] is False and cond["mouse_consensus_detected"] is False
+
+
 def test_no_prey_within_timeout_gates():
     assert no_prey_within_timeout(True, 100.0, 101.0, 300) is True
     assert no_prey_within_timeout(False, 0.0, 50.0, 300) is True

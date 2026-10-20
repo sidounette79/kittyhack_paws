@@ -626,6 +626,18 @@ def run() -> None:
         logging.warning("Column 'effective_fps' not found in the 'events' table. Adding it...")
         DatabaseCore.add_column_to_table(CONFIG['KITTYHACK_DATABASE_PATH'], "events", "effective_fps", "REAL")
 
+    # 08.10, Sid ("il n'y a qu'une vraie lecture de puce, le reste c'est de
+    # la video, ca devrait pas influencer l'ouverture"): the 'rfid' column
+    # alone can't tell a genuine chip read apart from the video model's
+    # guess (loop.py falls back to tag_id_from_video whenever no real tag_id
+    # was read). This flag carries that ground truth so Parcours/
+    # Chronologie/revision des photos can stop presenting a video guess as
+    # a confirmed identity. NULL/0 for every pre-existing row (unknown
+    # provenance) - only new events get a real value going forward.
+    if not DatabaseCore.check_if_column_exists(CONFIG['KITTYHACK_DATABASE_PATH'], "events", "rfid_is_real"):
+        logging.warning("Column 'rfid_is_real' not found in the 'events' table. Adding it...")
+        DatabaseCore.add_column_to_table(CONFIG['KITTYHACK_DATABASE_PATH'], "events", "rfid_is_real", "INTEGER")
+
     if not DatabaseCore.check_if_table_exists(CONFIG['KITTYHACK_DATABASE_PATH'], "motion_timeline"):
         logging.warning("Table 'motion_timeline' not found in the kittyhack database. Creating it...")
         DbMigrations.create_motion_timeline_table(CONFIG['KITTYHACK_DATABASE_PATH'])
@@ -645,6 +657,10 @@ def run() -> None:
     if not DatabaseCore.check_if_table_exists(CONFIG['KITTYHACK_DATABASE_PATH'], "model_review_scanned_blocks"):
         logging.warning("Table 'model_review_scanned_blocks' not found in the kittyhack database. Creating it...")
         DbMigrations.create_model_review_scanned_blocks_table(CONFIG['KITTYHACK_DATABASE_PATH'])
+
+    if not DatabaseCore.check_if_table_exists(CONFIG['KITTYHACK_DATABASE_PATH'], "rfid_ground_truth_processed_blocks"):
+        logging.warning("Table 'rfid_ground_truth_processed_blocks' not found in the kittyhack database. Creating it...")
+        DbMigrations.create_rfid_ground_truth_processed_blocks_table(CONFIG['KITTYHACK_DATABASE_PATH'])
 
     if not DatabaseCore.check_if_table_exists(CONFIG['KITTYHACK_DATABASE_PATH'], "remote_connection_log"):
         logging.warning("Table 'remote_connection_log' not found in the kittyhack database. Creating it...")
@@ -682,6 +698,23 @@ def run() -> None:
                     logging.warning(f"Column 'block_exit_after_prey' not found in the 'cats' table of {db}. Adding it...")
                     DatabaseCore.add_column_to_table(db, "cats", "block_exit_after_prey", "INTEGER DEFAULT 1")
                     DatabaseCore.write_stmt_to_database(db, "UPDATE cats SET block_exit_after_prey = 1 WHERE block_exit_after_prey IS NULL")
+                # 07.10, Sid ("un petit espace biographie"): free-form cat
+                # profile fields, same idempotent add-if-missing pattern -
+                # all nullable, no backfill needed (an empty bio is just a
+                # blank form, not a broken one).
+                for bio_col, bio_type in [
+                    ("species", "TEXT"),
+                    ("sex", "TEXT"),
+                    ("sterilized", "INTEGER"),
+                    ("birth_date", "TEXT"),
+                    ("weight_kg", "REAL"),
+                    ("breed_primary", "TEXT"),
+                    ("breed_secondary", "TEXT"),
+                    ("bio_comments", "TEXT"),
+                ]:
+                    if not DatabaseCore.check_if_column_exists(db, "cats", bio_col):
+                        logging.warning(f"Column '{bio_col}' not found in the 'cats' table of {db}. Adding it...")
+                        DatabaseCore.add_column_to_table(db, "cats", bio_col, bio_type)
         except Exception as e:
             logging.error(f"Failed to ensure per-cat settings columns in database {db}: {e}")
 

@@ -1,24 +1,36 @@
-"""Multi-camera prey watchdog (07.09, Sid).
+"""Multi-camera watchdog (07.09, Sid).
 
 Kittyhack itself only ever analyses ONE active camera source at a time
 (CAMERA_SOURCE = internal | ip_camera) - there's no built-in way to fuse
 several cameras into one prey decision. This script is a small, separate
-process that does exactly that: it watches N independent RTSP cameras in
-parallel (the ones covering the terrace/catio approach, not just the flap
-itself), runs the same TFLite model Kittyhack uses, and - the instant ANY
-of them sees a mouse/bird with high enough confidence - calls Kittyhack's
-own REST API to lock the real (house-facing) flap in both directions for
-LOCK_DURATION_AFTER_PREY_DETECTION seconds. Kittyhack keeps handling normal
-entry/exit on its own primary camera; this only ever adds an extra,
-more-cautious trigger to lock down early.
+process that watches N independent RTSP cameras in parallel (the ones
+covering the terrace/catio approach, not just the flap itself) and captures
+frames for Kittyhack's own UI (Presence/Live preview) and training-sample
+archive (Parcours correlation, Label Studio).
+
+08.10, Sid ("désactive le blocage via watchdog" / "c'est clairement pas
+fiable"): this used to ALSO run its own independent prey model per camera
+and lock the real flap + send an email the instant any one of them saw a
+mouse/bird with high enough confidence - a second, less reliable layer on
+top of Kittyhack's own already-trusted prey detection on its primary
+camera (single low camera-distance frame, no corroboration). That trigger
+is now fully disabled (see CameraWatcher.run()'s comment) - kept in the
+code, not deleted, in case it's ever wanted back. Local YOLO/TFLite
+inference itself now only runs for "chatiere" (close enough to the action
+to be reliable); the 3 peripheral cameras instead poll their own onboard
+Reolink AI (GetAiState) to know when to save a training-sample frame - see
+REOLINK_HTTP below.
 
 Run as a second process alongside app.py (see compose.yaml).
 """
 
 import json
 import logging
+from logging.handlers import TimedRotatingFileHandler
 import os
+import select
 import smtplib
+import subprocess
 import threading
 import time
 from email.mime.text import MIMEText
@@ -27,7 +39,14 @@ import cv2
 import numpy as np
 import paho.mqtt.client as mqtt
 import requests
+import urllib3
 from tflite_runtime.interpreter import Interpreter
+
+# terrasse's Reolink HTTPS endpoint uses a self-signed cert (verify=False by
+# design, same LAN, same credentials already trusted via RTSP) - silence the
+# resulting per-request warning instead of letting it spam the log on every
+# poll.
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 from src.api import create_token
 from src.baseconfig import CONFIG, load_config
@@ -38,8 +57,38 @@ from src.model.yolo_model import YoloModel
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [WATCHDOG] %(message)s")
 log = logging.getLogger("watchdog")
 
+# 11.10, Sid ("on peut garder en stock les logs... pendant 7 jours ?"):
+# same fix as kittyhack-remote's own configure_logging() - `docker logs` is
+# tied to the current container id, lost on any --force-recreate. Separate
+# file from kittyhack-remote's own (different container, same /data bind
+# mount), daily rotation, 7 days kept.
+try:
+    _log_dir = "/data/logs"
+    os.makedirs(_log_dir, exist_ok=True)
+    _file_handler = TimedRotatingFileHandler(
+        os.path.join(_log_dir, "kittyhack-watchdog.log"),
+        when="midnight", backupCount=7, encoding="utf-8",
+    )
+    _file_handler.setFormatter(logging.Formatter("%(asctime)s [WATCHDOG] %(message)s"))
+    logging.getLogger().addHandler(_file_handler)
+except Exception as e:
+    log.warning("[LOGGING] Failed to set up persistent file log: %s", e)
+
 TOKEN_FILE = os.path.join(kittyhack_root(), "watchdog_token.json")
-API_BASE = "http://127.0.0.1:80/api/v1"
+# 11.10, Sid: real crash-notification gap found - this container used to
+# reach kittyhack-remote via network_mode: "service:kittyhack-remote"
+# (shares its network namespace, so 127.0.0.1 worked), which breaks every
+# time kittyhack-remote restarts for ANY reason, not just a deliberate
+# --force-recreate (confirmed tonight: a plain restart, same container id,
+# still tears down the shared netns - every camera went "Network is
+# unreachable" simultaneously, and the watchdog stayed blind to the Pi
+# crash it was supposed to be watching for, so its own "disconnected 2min"
+# notification never fired). Both containers already sit on the same
+# Compose default bridge network regardless (see compose.yaml) - reaching
+# kittyhack-remote by its service name instead of 127.0.0.1 and joining
+# that normal network (compose.yaml change alongside this) removes the
+# fragile coupling entirely instead of needing a manual recreate forever.
+API_BASE = "http://kittyhack-remote:80/api/v1"
 RECONNECT_DELAY_S = 5.0
 
 # 04.10, Sid: the watchdog + kittyhack-remote's own continuous chatiere
@@ -48,23 +97,55 @@ RECONNECT_DELAY_S = 5.0
 # moving host never was going to fix this, the two containers alone need
 # nearly the whole machine). Prey pre-detection on the 3 peripheral cameras
 # doesn't need sub-2s latency to still be useful, so they're cut way down.
-# Chatiere stays closer to the original 1.5s cadence (a cat reaches the flap
-# fast from right there) but gets a temporary speed-up on real PIR motion
-# instead of running hot all the time - see CHATIERE_BOOST_* and the MQTT
-# subscription in MqttStatus below.
+# 08.10, Sid ("réduire sa cadence (2s -> plus lent, sauf pendant le boost
+# PIR)"): cutting local detection on the 3 peripheral cameras barely moved
+# watchdog's own CPU (still ~119%, confirmed via `ps` right after deploy) -
+# chatiere's own 2s-cadence inference was already the dominant cost on its
+# own, independent of the other 3. Idle base interval slowed down to 8s -
+# the PIR-triggered boost (CHATIERE_BOOST_*, MQTT subscription in
+# MqttStatus below) already covers "a cat is actually approaching" with a
+# real 1.5s cadence for 20s, so the idle rate doesn't need to be fast too.
 CAMERA_POLL_INTERVAL_S = {
-    "chatiere": 2.0,
+    "chatiere": 8.0,
     "terrasse": 10.0,
     "jardin_japonais": 10.0,
     "entree": 10.0,
 }
 DEFAULT_POLL_INTERVAL_S = 10.0
-CHATIERE_BOOST_INTERVAL_S = 1.5
+# 11.10, Sid ("le réglage ne devrait être actif que quand il y a une
+# détection... CPU ça fait quoi en plus ?"): tightened from 1.5s - the RTSP
+# decode itself (cap.read(), _run_continuous() below) already runs flat-out
+# continuously regardless of this value, so the only real marginal cost is
+# more frequent local YOLO inference calls (self.detector.run()), and only
+# within an active CHATIERE_BOOST_DURATION_S trigger window, never while
+# idle - confirmed, not just assumed, by reading _poll_interval()'s own
+# gating logic. First real-world step towards CAM PI's own 10fps
+# (REMOTE_INFERENCE_MAX_FPS) cadence - re-measure actual CPU% during a real
+# trigger before tightening further.
+CHATIERE_BOOST_INTERVAL_S = 0.3
 CHATIERE_BOOST_DURATION_S = 20.0
-# Written by MqttStatus's on_message handler, read by chatiere's
+# 08.10, Sid ("elle s'active au PIR et elle s'active si une des Reolink
+# détecte quelque chose - pendant 3 minutes? comme ça elle est prête en cas
+# de défaillance du PIR"): a second, longer trigger source backing up the
+# PIR one - a peripheral camera's own Reolink AI seeing an animal is a
+# less immediate/precise signal than the PIR (it could be any of the 3
+# cameras, not necessarily right at the flap), so it gets a longer window
+# to still catch the cat by the time it actually reaches the flap.
+CHATIERE_REOLINK_TRIGGER_DURATION_S = 180.0
+# Written by MqttStatus's on_message handler AND by a peripheral camera's
+# own thread (via _extend_chatiere_trigger below), read by chatiere's
 # CameraWatcher thread - a single float assignment/read is atomic enough in
 # CPython for this (no lock needed, worst case is one stale poll decision).
 _chatiere_boost_until = [0.0]
+
+
+def _extend_chatiere_trigger(duration_s: float) -> None:
+    """Push chatiere's trigger window forward, never backward - a shorter
+    new trigger (e.g. PIR) must never cut a longer one already in progress
+    (e.g. a Reolink detection) short."""
+    candidate = time.monotonic() + duration_s
+    if candidate > _chatiere_boost_until[0]:
+        _chatiere_boost_until[0] = candidate
 
 # 09.09, Sid: on a flaky RTSP link (terrasse/entree, weak WiFi -> packet
 # loss), ffmpeg's h264 decoder does error concealment on a corrupted frame
@@ -88,12 +169,136 @@ BLANK_FRAME_STD_THRESHOLD = 10.0
 # resolution and never drop. HEVC is also less tolerant of a lost packet
 # (corrupts a longer span before recovering) - matches the near-flat-gray
 # frames from error concealment we were seeing on these two specifically.
+# 08.10, Sid: physically swapped the "Chambre boubous" camera (the only one
+# of the 4 with an HTTP/HTTPS toggle in its Reolink server settings) into
+# the chatiere position - IPs are DHCP-reserved/fixed, so .121 follows the
+# camera to its new physical spot rather than staying tied to "chatiere".
+# 09.10, Sid ("il faut rajouter l'ancienne chatière... celle qui était
+# chatière avant et qui est devenue chatière Int"): the original chatiere
+# camera (RTSP+ONVIF only, no HTTP/HTTPS toggle - see REOLINK_HTTP's own
+# comment below, confirmed again live via a real cv2.VideoCapture test on
+# .21) - physically repositioned indoors, facing the flap from the inside.
+# Kept out of REOLINK_HTTP/CAMERAS_WITH_DETECTION: no onboard AI capability
+# on this camera, same reason the original chatiere position never had it
+# either before the swap.
 CAMERAS = {
-    "chatiere": "rtsp://admin:Dorothee79%25@192.168.178.21:554/h264Preview_01_main",
+    # 11.10 (round 2), Sid ("passer en basse résolution... beaucoup plus
+    # de frames"): was _01_main (2560x1440) - under real CPU contention
+    # during an actual passage (confirmed live, up to ~500% combined
+    # demand on this 4-core box), decoding that high-res stream was the
+    # real bottleneck, not the CHATIERE_BOOST_INTERVAL_S poll setting -
+    # confirmed via the real API response for a live exit: only 8 frames
+    # in the whole event window, with a 31s capture gap right before the
+    # cat even left. Switched to _01_sub (640x360, same resolution as the
+    # other cameras below) - much cheaper to decode, so the boost interval
+    # can actually be reached in practice. Trade-off: slightly less sharp
+    # per-frame identification, accepted knowingly over density.
+    "chatiere": "rtsp://admin:Dorothee79%25@192.168.178.121:554/h264Preview_01_sub",
+    # 09.10, Sid ("elle était toujours en flux de qualité... tu peux la
+    # descendre en basse qualité"): _01_sub (640x360), not _01_main
+    # (2560x1440) - same reasoning as terrasse/entree's own sub-stream
+    # switch above, just missed it when adding this one.
+    "chatiere_int": "rtsp://admin:Dorothee79%25@192.168.178.21:554/h264Preview_01_sub",
     "terrasse": "rtsp://admin:Dorothee79%25@192.168.178.44:554/h264Preview_01_sub",
     "jardin_japonais": "rtsp://admin:Dorothee79@192.168.178.138:554/h264Preview_01_main",
     "entree": "rtsp://admin:Dorothee79%25@192.168.178.108:554/h264Preview_01_sub",
 }
+
+# 08.10, Sid ("peut-on se brancher au détecteur de mouvement de présence de
+# reolink pour donner de meilleures images dans parcours"): each peripheral
+# camera's own onboard AI (GetAiState, api.cgi) replaces this script's local
+# model for them (see CAMERAS_WITH_DETECTION below) - both as the CPU-saving
+# move already agreed, AND to drive TRAINING_SAMPLES_DIR captures (what
+# journeys.py's Parcours correlation actually reads) off a real "there's a
+# cat in frame" signal instead of local inference. Port/protocol verified
+# directly against each real camera today (curl), not assumed - they differ
+# per camera's own HTTP/HTTPS toggle in its Reolink app settings:
+#   - jardin_japonais, entree: plain HTTP on port 80.
+#   - terrasse, chatiere: HTTPS only (HTTP disabled), self-signed cert.
+# Password taken from the same RTSP credentials above (one real % in
+# "Dorothee79%25" decodes to a literal "%" in the password - matches what's
+# actually configured on the camera, confirmed working).
+#
+# 08.10, Sid: the original chatiere camera had no HTTP/HTTPS toggle at all
+# (RTSP+ONVIF only, confirmed by exhaustive port/protocol testing earlier
+# today) - she swapped it with "Chambre boubous" (which does have one,
+# verified live via curl: GetAiState responds with dog_cat.support=1) so
+# chatiere now ALSO gets this as a third trigger source, backing up both
+# the PIR and the 3 peripheral cameras' own Reolink AI - see
+# CameraWatcher._run_continuous()'s own poll below. Unlike the 3 peripheral
+# entries, chatiere keeps self.detector (CAMERAS_WITH_DETECTION) and never
+# switches to _run_peripheral() - see CameraWatcher.run()'s dispatch.
+REOLINK_HTTP = {
+    "chatiere": {"host": "192.168.178.121", "https": True, "user": "admin", "password": "Dorothee79%"},
+    "terrasse": {"host": "192.168.178.44", "https": True, "user": "admin", "password": "Dorothee79%"},
+    "jardin_japonais": {"host": "192.168.178.138", "https": False, "user": "admin", "password": "Dorothee79"},
+    "entree": {"host": "192.168.178.108", "https": False, "user": "admin", "password": "Dorothee79%"},
+}
+
+
+def _reolink_dog_cat_detected(cfg: dict) -> bool | None:
+    """Poll this camera's own onboard AI state directly - True/False if we
+    got a real answer, None on any error (treated as "no signal, don't
+    capture" by the caller, same as a transient network issue shouldn't
+    spam the log or fabricate a detection)."""
+    scheme = "https" if cfg["https"] else "http"
+    url = f"{scheme}://{cfg['host']}/api.cgi"
+    try:
+        r = requests.get(
+            url,
+            params={"cmd": "GetAiState", "channel": 0, "user": cfg["user"], "password": cfg["password"]},
+            timeout=5,
+            verify=False,
+        )
+        r.raise_for_status()
+        data = r.json()
+        return bool(data[0]["value"]["dog_cat"]["alarm_state"])
+    except Exception as e:
+        log.debug("Reolink GetAiState failed for %s: %s", cfg["host"], e)
+        return None
+
+
+def _wake_kittyflap_camera(token: str, duration_s: float) -> None:
+    """08.10, Sid ("la détection Reolink active potentiellement la caméra
+    KF pour les cas où PIR a un angle mort"): a Reolink camera's own AI
+    seeing an animal is relayed to kittyhack-remote's own internal flap
+    camera (PAUSE_CAMERA_WHEN_IDLE) via this small authenticated API call -
+    src/api.py's POST /camera/wake. Best-effort: a failure here (network
+    hiccup, API down) just means this one backup path didn't fire - PIR and
+    the Reolink-side detection/boost in this process are unaffected."""
+    try:
+        r = requests.post(
+            f"{API_BASE}/camera/wake",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"duration_s": duration_s},
+            timeout=5,
+        )
+        if not r.ok:
+            log.warning("camera/wake API call failed: %s %s", r.status_code, r.text)
+    except Exception as e:
+        log.debug("camera/wake API call failed: %s", e)
+
+
+def _grab_single_frame(rtsp_url: str, discard_reads: int = 2) -> np.ndarray | None:
+    """Open a short-lived RTSP connection, read (and discard) a couple of
+    initial frames - an RTSP decoder needs a moment to sync to a real
+    I-frame, the very first read(s) right after opening can be garbage/stale
+    - then return one real frame and close immediately. Used by
+    CameraWatcher._run_peripheral() instead of a persistent VideoCapture,
+    so a camera with its own Reolink AI never pays for continuous H264
+    decode when nothing's happening (08.10, Sid)."""
+    cap = cv2.VideoCapture(rtsp_url, cv2.CAP_FFMPEG)
+    try:
+        if not cap.isOpened():
+            return None
+        frame = None
+        for _ in range(discard_reads + 1):
+            ok, frame = cap.read()
+            if not ok:
+                return None
+        return frame
+    finally:
+        cap.release()
 
 # Deliberately more cautious than Kittyhack's own default (70): a false
 # lockdown just costs a cat a few extra minutes outside, a missed one costs
@@ -200,7 +405,7 @@ class MqttStatus:
 
         def _on_message(client, userdata, msg):
             if msg.payload.decode(errors="ignore") == "detected":
-                _chatiere_boost_until[0] = time.monotonic() + CHATIERE_BOOST_DURATION_S
+                _extend_chatiere_trigger(CHATIERE_BOOST_DURATION_S)
 
         self.client.on_connect = _on_connect
         self.client.on_message = _on_message
@@ -312,33 +517,53 @@ class MouseDetector:
                 self.boxes_idx, self.classes_idx, self.scores_idx = 0, 1, 2
             log.info("Loaded default TFLite model for prey detection: %s", self.model_path)
 
-    def run(self, frame: np.ndarray) -> tuple[float, bool]:
-        """Returns (prey_probability, any_detection) - the latter true if
-        *any* label (cat identity or prey) cleared TRAINING_SAMPLE_MIN_CONFIDENCE,
-        used to gate training-sample capture regardless of whether it was
-        specifically prey."""
+    def run(self, frame: np.ndarray) -> tuple[float, bool, list[dict]]:
+        """Returns (prey_probability, any_detection, detections) - the
+        middle value true if *any* label (cat identity or prey) cleared
+        TRAINING_SAMPLE_MIN_CONFIDENCE, used to gate training-sample capture
+        regardless of whether it was specifically prey. ``detections`` is
+        every box found (name/probability/x/y/width/height, percent,
+        top-left-anchored - same convention as DetectedObjectSchema in
+        src/database.py), regardless of confidence - 10.10, Sid ("avec les
+        incrustations aussi"): used to draw boxes on the dense event-frame
+        sequence (see _save_event_frame below), not just gate a save."""
         if self.kind == "yolo":
             return self._run_yolo(frame)
         return self._run_tflite(frame)
 
-    def _run_yolo(self, frame: np.ndarray) -> tuple[float, bool]:
+    def _run_yolo(self, frame: np.ndarray) -> tuple[float, bool, list[dict]]:
         results = self.yolo.predict(frame, imgsz=self.imgsz, verbose=False)
         prey_probability = 0.0
         any_detection = False
+        detections: list[dict] = []
+        frame_h, frame_w = frame.shape[0], frame.shape[1]
         for r in results:
             if r.boxes is None:
                 continue
             names = r.names if hasattr(r, "names") else {}
-            for cls_idx, conf in zip(r.boxes.cls.tolist(), r.boxes.conf.tolist()):
+            for cls_idx, conf, xyxy in zip(
+                r.boxes.cls.tolist(), r.boxes.conf.tolist(), r.boxes.xyxy.tolist()
+            ):
                 label = str(names.get(int(cls_idx), "")).lower()
                 probability = float(conf * 100)
                 if label in _PREY_LABELS and probability > prey_probability:
                     prey_probability = probability
                 if probability >= TRAINING_SAMPLE_MIN_CONFIDENCE:
                     any_detection = True
-        return prey_probability, any_detection
+                x1, y1, x2, y2 = xyxy
+                detections.append(
+                    {
+                        "name": label,
+                        "probability": round(probability, 1),
+                        "x": round(100.0 * x1 / frame_w, 2),
+                        "y": round(100.0 * y1 / frame_h, 2),
+                        "width": round(100.0 * (x2 - x1) / frame_w, 2),
+                        "height": round(100.0 * (y2 - y1) / frame_h, 2),
+                    }
+                )
+        return prey_probability, any_detection, detections
 
-    def _run_tflite(self, frame: np.ndarray) -> tuple[float, bool]:
+    def _run_tflite(self, frame: np.ndarray) -> tuple[float, bool, list[dict]]:
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         frame_resized = cv2.resize(frame_rgb, (self.width, self.height))
         input_data = np.expand_dims(frame_resized, axis=0)
@@ -357,6 +582,10 @@ class MouseDetector:
 
         mouse_probability = 0.0
         any_detection = False
+        # 10.10, Sid: this fallback TFLite model isn't the one active on her
+        # "chatiere" camera today (custom YOLO is), and its own output
+        # tensors don't carry box coordinates in the same layout handled
+        # above - no box overlay for this path, just the existing gate.
         for i in range(len(scores)):
             object_name = self.labels[int(classes[i])]
             probability = float(scores[i] * 100)
@@ -364,7 +593,33 @@ class MouseDetector:
                 mouse_probability = probability
             if probability >= TRAINING_SAMPLE_MIN_CONFIDENCE:
                 any_detection = True
-        return mouse_probability, any_detection
+        return mouse_probability, any_detection, []
+
+
+def _drain_stale_frames(cap: "cv2.VideoCapture", max_grabs: int = 15) -> None:
+    """13.10, Sid (root-caused via live evidence - a Reolink clip saved for
+    a real event showed a frozen scene ~18s before the cat actually
+    entered, while the Kittyflap panel tracked real time correctly):
+    cv2.VideoCapture with the FFmpeg backend buffers decoded frames
+    internally, and this loop spends up to 5s blocked on the Reolink HTTP
+    poll (_reolink_dog_cat_detected) plus variable YOLO inference time
+    between reads - the stream keeps arriving and queues up during that
+    block. The next cap.read() then returns the OLDEST queued frame
+    (FIFO), not the live one: captured_at (11.10's fix, stamped right
+    after read()) correctly reflects wall-clock read time, but the
+    frame's actual visual content (and Reolink's own burned-in overlay
+    timestamp) stays stale behind it. CAP_PROP_BUFFERSIZE=1 alone isn't
+    reliable (some FFmpeg backends ignore it) - grab() without retrieve()
+    skips the decode step, so this is cheap, and running it right before
+    every read() fast-forwards through whatever queued up since the last
+    one. Bounded so a genuinely dead/slow stream can't hang the loop; the
+    throttled fast path (many quick reads between heavy polls, see the
+    poll-interval check right after this) means any backlog too big to
+    clear in one pass still gets caught up within a few iterations.
+    """
+    for _ in range(max_grabs):
+        if not cap.grab():
+            break
 
 
 def _is_frame_usable(frame: np.ndarray) -> bool:
@@ -390,6 +645,59 @@ def _save_training_sample(cam_name: str, frame: np.ndarray) -> None:
         log.warning("[%s] Could not save training sample: %s", cam_name, e)
 
 
+# 10.10, Sid ("deux vidéos côte à côte... avec les incrustations aussi"):
+# a dense, unconditional frame+box sequence captured only while chatiere's
+# own trigger window is active (PIR or a Reolink detection elsewhere - see
+# _chatiere_boost_until), so it's naturally bounded to real passage events
+# rather than growing forever. Separate from TRAINING_SAMPLES_DIR on
+# purpose - that one stays sparse/gated for Label Studio, this one is dense
+# for the event-comparison viewer and keeps every frame regardless of
+# confidence. Storage isn't a concern ("j'ai 2 to de libre") - no retention
+# logic here, same as the existing training-sample archive.
+EVENT_FRAMES_DIR = "/data/watchdog_event_frames"
+
+
+def _save_event_frame(cam_name: str, frame: np.ndarray, detections: list[dict], captured_at: float | None = None) -> None:
+    """Save one frame of the dense per-event sequence, plus a JSON sidecar
+    with its detection boxes (same shape the frontend already renders for
+    the flap's own camera - see EventModal.tsx's DetectedObject).
+
+    11.10 (round 2), Sid ("pour illustrer le decalage temporel" - a real
+    screenshot showing the Reolink panel's own on-screen camera overlay
+    18s earlier than the timestamp the UI was syncing against): confirmed
+    real cause - this used to stamp `time.time()` fresh right here, i.e.
+    AFTER the caller's Reolink AI HTTP poll (_reolink_dog_cat_detected,
+    its own up-to-5s timeout) and the full YOLO inference pass
+    (self.detector.run()) had already run on this same frame. Under real
+    CPU contention (confirmed elsewhere this session: up to ~500%
+    combined demand during an actual passage) that gap is not
+    negligible, and it's cumulative tick over tick - exactly the kind of
+    drift that would make the EventModal's new real-time sync (which
+    trusts this filename timestamp) show a stale-looking Reolink frame
+    next to a timely Pi one. `captured_at` is now stamped by the caller
+    immediately after the frame is actually grabbed (cap.read() /
+    _read_hw_frame()), before any of that slow processing - falls back to
+    "now" only if a caller doesn't pass one (keeps this function safe to
+    call from anywhere without breaking)."""
+    try:
+        os.makedirs(EVENT_FRAMES_DIR, exist_ok=True)
+        ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 90])
+        if not ok:
+            return
+        ts = captured_at if captured_at is not None else time.time()
+        # Milliseconds in the filename - at a 1.5s boost cadence two frames
+        # landing in the same second is unlikely but not impossible, and
+        # the sort order (filename = timestamp) must stay unambiguous.
+        stamp = time.strftime("%Y%m%d_%H%M%S", time.localtime(ts)) + f"_{int(ts * 1000) % 1000:03d}"
+        filename = f"{cam_name}_{stamp}.jpg"
+        with open(os.path.join(EVENT_FRAMES_DIR, filename), "wb") as f:
+            f.write(buf.tobytes())
+        with open(os.path.join(EVENT_FRAMES_DIR, filename[:-4] + ".json"), "w", encoding="utf-8") as f:
+            json.dump(detections, f)
+    except Exception as e:
+        log.warning("[%s] Could not save event frame: %s", cam_name, e)
+
+
 def _save_frame_snapshot(cam_name: str, frame: np.ndarray) -> None:
     """Atomically write the latest frame as a small JPEG for the UI preview."""
     try:
@@ -408,16 +716,126 @@ def _save_frame_snapshot(cam_name: str, frame: np.ndarray) -> None:
         log.warning("[%s] Could not save frame snapshot: %s", cam_name, e)
 
 
-class CameraWatcher(threading.Thread):
-    """One thread per camera: keeps a VideoCapture alive, polls for prey."""
+# 11.10 (round 2), Sid ("meilleures photos avec moins de charge CPU et
+# plus de photos aussi" / "regarde pour le GPU et mets en place ce dont on
+# a parlé"): OLDMEDIA's Intel iGPU (J4125, Quick Sync - confirmed present
+# via /dev/dri, passed through in compose.yaml) can hardware-decode
+# chatiere's full main stream (2560x1920, real IR/night-vision quality)
+# for a fraction of the CPU cost of software-decoding it - verified live:
+# a real ffmpeg -hwaccel vaapi decode+downscale of the actual camera
+# produced a clean 640x480 frame with a lower measured CPU peak than the
+# equivalent software path. `scale_vaapi` itself failed ("VAProfile not
+# supported" - this driver/GPU combo has no VPP entrypoint), so the
+# downscale after hwdownload is a cheap CPU resize of an already-decoded
+# frame instead - decode (the expensive part) is still fully offloaded to
+# the GPU. Falls back to the existing software _01_sub cv2.VideoCapture
+# path (CAMERAS["chatiere"]) if the hardware decoder fails to start or
+# produces no frame within HW_DECODE_STARTUP_TIMEOUT_S - never silently
+# stuck without a working camera.
+CHATIERE_MAIN_RTSP_URL = "rtsp://admin:Dorothee79%25@192.168.178.121:554/h264Preview_01_main"
+HW_DECODE_DEVICE = "/dev/dri/renderD128"
+HW_DECODE_WIDTH = 640
+HW_DECODE_HEIGHT = 480
+HW_DECODE_FRAME_BYTES = HW_DECODE_WIDTH * HW_DECODE_HEIGHT * 3
+HW_DECODE_STARTUP_TIMEOUT_S = 8.0
 
-    def __init__(self, name: str, rtsp_url: str, detector: MouseDetector, on_prey_detected, mqtt_status: "MqttStatus"):
+
+def _start_hw_decoder(rtsp_url: str) -> subprocess.Popen | None:
+    """Starts a persistent ffmpeg process that hardware-decodes (VAAPI) the
+    given RTSP stream and writes raw BGR24 frames of HW_DECODE_WIDTH x
+    HW_DECODE_HEIGHT to stdout, back to back, one after another - read one
+    at a time with _read_hw_frame(). Returns None if ffmpeg itself could
+    not even be started (binary missing, bad args) - a stream that opens
+    but fails later is instead caught by _read_hw_frame() returning None."""
+    cmd = [
+        "ffmpeg",
+        "-loglevel", "error",
+        "-hwaccel", "vaapi",
+        "-hwaccel_device", HW_DECODE_DEVICE,
+        "-hwaccel_output_format", "vaapi",
+        "-rtsp_transport", "tcp",
+        "-i", rtsp_url,
+        "-vf", f"hwdownload,format=nv12,scale={HW_DECODE_WIDTH}:{HW_DECODE_HEIGHT}",
+        "-f", "rawvideo",
+        "-pix_fmt", "bgr24",
+        "-an",
+        "pipe:1",
+    ]
+    try:
+        return subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=HW_DECODE_FRAME_BYTES * 2)
+    except Exception as e:
+        log.warning("Could not start hardware decoder: %s", e)
+        return None
+
+
+def _read_hw_frame(proc: subprocess.Popen, timeout_s: float = 5.0) -> np.ndarray | None:
+    """Reads exactly one BGR24 frame from the decoder's stdout pipe.
+    Returns None on EOF/short read (process died or stream ended) OR if no
+    data arrives within timeout_s - a plain blocking read() here could hang
+    the whole camera thread forever if ffmpeg wedges without closing the
+    pipe, which select() with a timeout avoids (11.10, Sid: "il faut bien
+    evidemment que toutes ces operations ne nuisent jamais a la boucle de
+    detection et au pilotage des aimants" - this runs in the separate
+    watchdog container, never the magnet-control one, but a hung thread is
+    bad practice regardless of which process it's in)."""
+    buf = bytearray()
+    deadline = time.monotonic() + timeout_s
+    try:
+        while len(buf) < HW_DECODE_FRAME_BYTES:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return None
+            ready, _, _ = select.select([proc.stdout], [], [], remaining)
+            if not ready:
+                return None
+            chunk = proc.stdout.read(HW_DECODE_FRAME_BYTES - len(buf))
+            if not chunk:
+                return None
+            buf.extend(chunk)
+    except Exception:
+        return None
+    return np.frombuffer(bytes(buf), dtype=np.uint8).reshape((HW_DECODE_HEIGHT, HW_DECODE_WIDTH, 3))
+
+
+def _stop_hw_decoder(proc: subprocess.Popen | None) -> None:
+    """Terminates the decoder process cleanly - must be called on every exit
+    path (reconnect, camera thread stop) or ffmpeg processes pile up as
+    zombies, one per reconnect, slowly starving the container."""
+    if proc is None:
+        return
+    try:
+        proc.kill()
+        proc.wait(timeout=5)
+    except Exception:
+        pass
+
+
+class CameraWatcher(threading.Thread):
+    """One thread per camera: keeps a VideoCapture alive, polls for prey.
+
+    08.10, Sid ("coupe déjà le modèle pour entrée, jardin japonais et
+    terrasse" / "désactive le blocage via watchdog"): detector is now
+    optional - None for the 3 peripheral cameras (snapshot-only, no local
+    inference at all, see main() below) since they see cats from too far to
+    detect reliably and were costing most of the ~376% combined CPU already
+    documented above. Separately, the lockdown trigger (on_prey_detected)
+    is never wired up anymore for ANY camera, including chatiere - the
+    watchdog's own independent lock+email was a second, less reliable layer
+    on top of Kittyhack's own already-trusted prey detection on its primary
+    camera; chatiere's local model keeps running here only for its other
+    use (TRAINING_SAMPLES_DIR capture), not to trigger a lockdown anymore.
+    """
+
+    def __init__(self, name: str, rtsp_url: str, detector: MouseDetector | None, on_prey_detected, mqtt_status: "MqttStatus", api_token: str):
         super().__init__(daemon=True, name=f"cam-{name}")
         self.cam_name = name
         self.rtsp_url = rtsp_url
         self.detector = detector
         self.on_prey_detected = on_prey_detected
         self.mqtt_status = mqtt_status
+        # 08.10, Sid: used to call POST /camera/wake when this camera's own
+        # Reolink AI sees an animal - see _wake_kittyflap_camera() above.
+        self.api_token = api_token
         self._stop = threading.Event()
         # Instance attribute (not a run()-local) so a stream reconnect - common
         # on a weak-signal camera - doesn't reset the sampling cadence.
@@ -433,23 +851,146 @@ class CameraWatcher(threading.Thread):
         return self._base_poll_interval
 
     def run(self):
+        # 08.10, Sid ("on peut décoder que quand y a un mouvement reolink?"):
+        # a camera with its own Reolink AI and no local model no longer
+        # needs a persistent RTSP connection decoding every frame nonstop
+        # just to maybe save one occasionally - see _run_peripheral().
+        # Chatiere also gained a Reolink AI today (camera swap - see
+        # REOLINK_HTTP above) but still needs its own local model
+        # (self.detector, from CAMERAS_WITH_DETECTION) for real prey
+        # detection up close, and low latency on a real PIR trigger - keyed
+        # on self.detector rather than REOLINK_HTTP membership alone so it
+        # keeps the original always-connected approach, just with an added
+        # Reolink poll as a third trigger source (see _run_continuous()).
+        if self.cam_name in REOLINK_HTTP and self.detector is None:
+            self._run_peripheral()
+        else:
+            self._run_continuous()
+
+    def _run_peripheral(self):
+        """No persistent VideoCapture at all - poll Reolink's own AI state
+        (cheap, no video decode involved) once per _base_poll_interval, and
+        only open+grab+close the RTSP stream for that one tick's worth of
+        work (live-preview snapshot always, training sample + chatiere
+        trigger only when Reolink actually saw an animal)."""
+        reolink_cfg = REOLINK_HTTP[self.cam_name]
+        self.mqtt_status.publish_camera_status(self.cam_name, "online")
         while not self._stop.is_set():
-            cap = cv2.VideoCapture(self.rtsp_url, cv2.CAP_FFMPEG)
-            if not cap.isOpened():
-                log.warning("[%s] Could not open stream, retrying in %ss", self.cam_name, RECONNECT_DELAY_S)
-                self.mqtt_status.publish_camera_status(self.cam_name, "offline")
-                time.sleep(RECONNECT_DELAY_S)
-                continue
-            log.info("[%s] Stream opened.", self.cam_name)
+            detected = _reolink_dog_cat_detected(reolink_cfg)
+            frame = _grab_single_frame(self.rtsp_url)
+            if frame is None:
+                log.warning("[%s] Could not grab a frame this tick.", self.cam_name)
+            elif not _is_frame_usable(frame):
+                log.warning("[%s] Corrupted/blank frame (decode error concealment), skipping.", self.cam_name)
+            else:
+                _save_frame_snapshot(self.cam_name, frame)
+                now = time.monotonic()
+                if detected and now - self._last_sample_at >= TRAINING_SAMPLE_COOLDOWN_S:
+                    self._last_sample_at = now
+                    _save_training_sample(self.cam_name, frame)
+                    # 08.10, Sid ("comme ça elle est prête en cas de
+                    # défaillance du PIR"): backup trigger for chatiere's
+                    # own inference - see _run_continuous()'s gate.
+                    _extend_chatiere_trigger(CHATIERE_REOLINK_TRIGGER_DURATION_S)
+                    # 08.10, Sid ("on couvre tous les cas et on utilise
+                    # toutes les ressources selon leur capacité"): also
+                    # give the internal flap camera's own model the same
+                    # backup wake-up - a cat spotted on a peripheral camera
+                    # is heading towards the flap, same reasoning as the
+                    # chatiere trigger just above.
+                    _wake_kittyflap_camera(self.api_token, CHATIERE_REOLINK_TRIGGER_DURATION_S)
+            self._stop.wait(self._base_poll_interval)
+
+    def _run_continuous(self):
+        # 11.10 (round 2): chatiere tries hardware (VAAPI) decode of the
+        # camera's full main stream first - real IR/night-vision quality,
+        # cheap on CPU since the GPU does the decode (see the module-level
+        # comment above _start_hw_decoder). Any other camera, or chatiere
+        # if the hardware path doesn't come up cleanly, uses the existing
+        # software cv2.VideoCapture path on self.rtsp_url (the sub stream)
+        # unchanged - never silently stuck without a working camera.
+        # 11.10, DISABLED pending fix: confirmed live in production (not
+        # just in isolated testing) that the hw path reconnects every
+        # ~12-17s ("Stream opened (hardware decode)" / "Lost frame,
+        # reconnecting" in a tight loop) - real stderr from ffmpeg shows
+        # "CSeq 6 expected, 0 received" (RTSP session desync) followed by
+        # "Failed to sync surface" / "Failed to download frame: -5" (VAAPI
+        # decode error), which kills the whole ffmpeg process. The
+        # reconnect loop below absorbs the crash without ever getting
+        # stuck, but reconnecting this often is real instability, not
+        # occasional noise - falling back to the known-stable sub-stream
+        # path until the RTSP/VAAPI error is root-caused and fixed.
+        #
+        # 19.10, Sid ("on explore toutes les options") - les 3 pistes "pas
+        # encore essayées" ci-dessus ont toutes été testées EN ISOLÉ
+        # (docker exec, ffmpeg à la main, jamais le service réel touché) et
+        # ont toutes échoué :
+        #   - "-reconnect 1/-reconnect_at_eof/-reconnect_streamed" : rejeté
+        #     net par ffmpeg ("Option reconnect not found") - c'est une
+        #     option du protocole http(s), pas rtsp, inapplicable ici.
+        #   - "-err_detect ignore_err" : accepté, mais le crash (CSeq
+        #     désync -> VAAPI surface sync failure) reproduit à l'identique.
+        #   - "-rtsp_transport udp" : encore pire (des centaines de paquets
+        #     RTP perdus en rafale) et plante quand même de la même façon.
+        # Conclusion : pas un réglage ffmpeg à ajuster, le désync RTSP
+        # lui-même (cause racine jamais élucidée) doit être réglé en amont
+        # pour que VAAPI redevienne viable ici. Décodage logiciel reste le
+        # chemin stable.
+        use_hw = False and self.cam_name == "chatiere"
+        while not self._stop.is_set():
+            hw_proc = None
+            cap = None
+            if use_hw:
+                hw_proc = _start_hw_decoder(CHATIERE_MAIN_RTSP_URL)
+                if hw_proc is not None:
+                    deadline = time.monotonic() + HW_DECODE_STARTUP_TIMEOUT_S
+                    hw_ok = False
+                    while time.monotonic() < deadline:
+                        if hw_proc.poll() is not None:
+                            break
+                        if _read_hw_frame(hw_proc, timeout_s=2.0) is not None:
+                            hw_ok = True
+                            break
+                    if not hw_ok:
+                        log.warning(
+                            "[%s] Hardware decoder failed to produce a frame within %ss - "
+                            "falling back to software decode.", self.cam_name, HW_DECODE_STARTUP_TIMEOUT_S
+                        )
+                        _stop_hw_decoder(hw_proc)
+                        hw_proc = None
+            if hw_proc is None:
+                cap = cv2.VideoCapture(self.rtsp_url, cv2.CAP_FFMPEG)
+                # 13.10, Sid (root-caused via live evidence - a Reolink clip
+                # saved for a real event showed a frozen scene ~18s before
+                # the cat actually entered, while the Kittyflap panel
+                # tracked real time correctly): best-effort, not sufficient
+                # alone - see _drain_stale_frames below for why.
+                cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                if not cap.isOpened():
+                    log.warning("[%s] Could not open stream, retrying in %ss", self.cam_name, RECONNECT_DELAY_S)
+                    self.mqtt_status.publish_camera_status(self.cam_name, "offline")
+                    time.sleep(RECONNECT_DELAY_S)
+                    continue
+            log.info("[%s] Stream opened%s.", self.cam_name, " (hardware decode)" if hw_proc is not None else "")
             self.mqtt_status.publish_camera_status(self.cam_name, "online")
             last_poll = 0.0
             try:
                 while not self._stop.is_set():
-                    ok, frame = cap.read()
+                    if hw_proc is not None:
+                        frame = _read_hw_frame(hw_proc)
+                        ok = frame is not None
+                    else:
+                        _drain_stale_frames(cap)
+                        ok, frame = cap.read()
                     if not ok or frame is None:
                         log.warning("[%s] Lost frame, reconnecting.", self.cam_name)
                         self.mqtt_status.publish_camera_status(self.cam_name, "offline")
                         break
+                    # 11.10 (round 2): captured right here, before the
+                    # Reolink AI poll + YOLO inference below that can each
+                    # take real time under load - see _save_event_frame's
+                    # own comment for why this matters.
+                    frame_captured_wall = time.time()
                     now = time.monotonic()
                     if now - last_poll < self._poll_interval():
                         continue
@@ -458,19 +999,62 @@ class CameraWatcher(threading.Thread):
                         log.warning("[%s] Corrupted/blank frame (decode error concealment), skipping.", self.cam_name)
                         continue
                     _save_frame_snapshot(self.cam_name, frame)
+                    # 08.10, Sid ("comme ça elle est prête en cas de
+                    # défaillance du PIR"): chatiere's own Reolink AI (new
+                    # camera, see REOLINK_HTTP above) is a third trigger
+                    # source alongside the PIR and the 3 peripheral
+                    # cameras - a plain HTTP poll, no extra video decode, so
+                    # it rides the same cadence as the snapshot above.
+                    if self.cam_name in REOLINK_HTTP and _reolink_dog_cat_detected(REOLINK_HTTP[self.cam_name]):
+                        _extend_chatiere_trigger(CHATIERE_REOLINK_TRIGGER_DURATION_S)
+                        # 08.10, Sid ("potentiellement cette de camera KF
+                        # pour les cas ou PIR a un angle mort"): this
+                        # camera's own Reolink AI backs up the internal
+                        # flap camera too, not just its own local model.
+                        _wake_kittyflap_camera(self.api_token, CHATIERE_REOLINK_TRIGGER_DURATION_S)
+                    # 08.10, Sid ("elle s'active au PIR..."): chatiere's own
+                    # model only actually runs within a trigger window (PIR
+                    # or, as a backup, a peripheral Reolink detection) - CPU
+                    # cost stays near zero the rest of the time, not just
+                    # slower (CAMERA_POLL_INTERVAL_S's 8s idle rate above
+                    # still governs the snapshot cadence, unaffected).
+                    if time.monotonic() >= _chatiere_boost_until[0]:
+                        continue
+                    # 09.10: chatiere_int has no REOLINK_HTTP entry (older
+                    # camera model, RTSP/ONVIF only - see REOLINK_HTTP's own
+                    # comment above) and no local model either
+                    # (CAMERAS_WITH_DETECTION), so self.detector is None here
+                    # - it was the first camera to hit this combination, and
+                    # the unconditional .run() below was looping on
+                    # "'NoneType' object has no attribute 'run'" every
+                    # single frame, burning real CPU on the watchdog
+                    # container for no purpose.
+                    if self.detector is None:
+                        continue
                     try:
-                        mouse_probability, any_detection = self.detector.run(frame)
+                        mouse_probability, any_detection, detections = self.detector.run(frame)
                     except Exception as e:
                         log.error("[%s] Inference error: %s", self.cam_name, e)
                         continue
                     if any_detection and now - self._last_sample_at >= TRAINING_SAMPLE_COOLDOWN_S:
                         self._last_sample_at = now
                         _save_training_sample(self.cam_name, frame)
+                    # 10.10, Sid ("deux vidéos côte à côte"): we're already
+                    # past the `_chatiere_boost_until` gate above, so every
+                    # poll reaching here is within a real trigger window -
+                    # save it unconditionally (not gated on any_detection
+                    # like the sparse training sample above) so the event
+                    # viewer gets a dense, continuous sequence to compare
+                    # against the flap's own camera, not just the odd hit.
+                    _save_event_frame(self.cam_name, frame, detections, captured_at=frame_captured_wall)
+                    # Lockdown trigger disabled - see class docstring above.
                     if mouse_probability >= WATCHDOG_MOUSE_THRESHOLD:
-                        log.warning("[%s] Prey suspected (%.0f%%).", self.cam_name, mouse_probability)
-                        self.on_prey_detected(self.cam_name, mouse_probability)
+                        log.warning("[%s] Prey suspected (%.0f%%) - lockdown disabled, no action taken.", self.cam_name, mouse_probability)
             finally:
-                cap.release()
+                if hw_proc is not None:
+                    _stop_hw_decoder(hw_proc)
+                if cap is not None:
+                    cap.release()
             if not self._stop.is_set():
                 time.sleep(RECONNECT_DELAY_S)
 
@@ -518,21 +1102,38 @@ class LockdownController:
         send_email_alert(self.smtp_cfg, source, probability)
 
 
+#  08.10, Sid ("coupe déjà le modèle pour entrée, jardin japonais et
+# terrasse"): only chatiere runs local detection now - it's the only one
+# close enough to the action to detect reliably, and the other 3 were most
+# of the ~376% combined CPU already documented above for no real benefit
+# ("les autres n'apportent rien"). They keep their periodic frame snapshot
+# (used by Parcours/Presence) - see CameraWatcher.run()'s detector-is-None
+# branch - just no model loaded, no inference, no training samples.
+CAMERAS_WITH_DETECTION = {"chatiere"}
+
+
 def main():
     load_config()
     lock_duration = float(CONFIG.get("LOCK_DURATION_AFTER_PREY_DETECTION", 180) or 180)
-    log.info("Starting multi-camera watchdog (%d cameras, threshold %.0f%%, lock %ss)",
-              len(CAMERAS), WATCHDOG_MOUSE_THRESHOLD, lock_duration)
+    log.info("Starting multi-camera watchdog (%d cameras, %d with local detection, threshold %.0f%%)",
+              len(CAMERAS), len(CAMERAS_WITH_DETECTION), WATCHDOG_MOUSE_THRESHOLD)
 
     token = _get_or_create_token()
     secrets = _get_or_create_secrets()
     mqtt_status = MqttStatus(secrets["mqtt"])
+    # 08.10, Sid ("désactive le blocage via watchdog"): LockdownController
+    # kept (not deleted) in case this is ever wanted back, but its .trigger
+    # is no longer wired to any camera - see CameraWatcher.run().
     controller = LockdownController(token, lock_duration, mqtt_status, secrets["smtp"])
 
     # Each thread gets its own Interpreter instance - a TFLite interpreter is
     # not safe to call concurrently from multiple threads.
     watchers = [
-        CameraWatcher(name, url, MouseDetector(), controller.trigger, mqtt_status)
+        CameraWatcher(
+            name, url,
+            MouseDetector() if name in CAMERAS_WITH_DETECTION else None,
+            controller.trigger, mqtt_status, token,
+        )
         for name, url in CAMERAS.items()
     ]
     for w in watchers:

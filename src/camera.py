@@ -797,6 +797,12 @@ class ImageBufferElement:
         self.no_mouse_probability = no_mouse_probability
         self.own_cat_probability = own_cat_probability
         self.tag_id = tag_id
+        # 08.10, Sid ("il n'y a qu'une vraie lecture de puce, le reste c'est
+        # de la video"): tag_id above is ambiguous - it holds either a real
+        # RFID chip read OR the video model's guessed identity, with nothing
+        # to tell them apart downstream. This flag is the actual ground
+        # truth, set by ImageBuffer.update_tag_id()'s is_real param.
+        self.tag_id_is_real = False
         self.detected_objects = detected_objects
 
     def __repr__(self):
@@ -987,11 +993,17 @@ class ImageBuffer:
                 return True
         return False
     
-    def update_tag_id(self, id: int, tag_id: str) -> bool:
-        """Set RFID ``tag_id`` on the element with ``id``. Returns True if found."""
+    def update_tag_id(self, id: int, tag_id: str, is_real: bool = True) -> bool:
+        """Set RFID ``tag_id`` on the element with ``id``. Returns True if found.
+
+        08.10, Sid: ``is_real`` records whether this came from a genuine
+        chip read (caller passes the real ``tag_id``) or from the video
+        model's guess (caller passes ``tag_id_from_video``) - see
+        loop.py's two call sites."""
         for element in self._buffer:
             if element.id == id:
                 element.tag_id = tag_id
+                element.tag_id_is_real = is_real
                 return True
         return False
     

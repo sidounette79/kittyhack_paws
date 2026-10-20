@@ -167,6 +167,31 @@ def _last_entry_for_rfid(database: str, rfid: str):
     return created_at_utc, local_dt
 
 
+def _last_exit_for_rfid(database: str, rfid: str):
+    """Most recent 'went outside' event for this cat, regardless of day.
+    07.10, Sid ("Dernière sortie"): same shape/reasoning as
+    _last_entry_for_rfid() above, just the complementary event type - this
+    one was never actually built even on the Shiny side despite having been
+    discussed."""
+    stmt = f"""
+        SELECT created_at FROM events
+        WHERE rfid = {_sql_quote(rfid)}
+          AND {_event_type_sql_in("event_type", (EventType.CAT_WENT_OUTSIDE,))}
+          AND deleted = 0
+        ORDER BY created_at DESC LIMIT 1
+    """
+    df = DatabaseCore.read_df_from_database(database, stmt)
+    if df.empty:
+        return None, None
+    created_at_utc = df.iloc[0]["created_at"]
+    try:
+        local_str = DateTimeUtil.get_local_date_from_utc_date(created_at_utc)
+        local_dt = pd.to_datetime(local_str).to_pydatetime()
+    except Exception:
+        local_dt = None
+    return created_at_utc, local_dt
+
+
 def _presence_events_for_rfid(database: str, rfid: str) -> pd.DataFrame:
     """Full dedup'd, UTC-timestamped, sorted in/out event history for this
     cat (columns: event_type, ts_utc). Shared by every day/week presence
@@ -292,6 +317,59 @@ def _day_glance_prey_counts(database: str, rfid: str, local_date) -> tuple[int, 
     glances = df[df["event_type"].str.startswith(_GLANCE_EVENT_TYPE)]["block_id"].nunique()
     prey_blocked = df[df["event_type"].str.startswith(_PREY_BLOCKED_EVENT_TYPE)]["block_id"].nunique()
     return int(glances), int(prey_blocked)
+
+
+_FR_MONTH_ABBR = [
+    "Jan", "Fev", "Mar", "Avr", "Mai", "Jun",
+    "Jul", "Aou", "Sep", "Oct", "Nov", "Dec",
+]
+
+
+def _monthly_prey_counts_for_rfid(database: str, rfid: str, months: int = 6) -> list[dict]:
+    """07.10, Sid ("un petit graphique comme ça... le nombre total"), modeled
+    on a reference screenshot of another app's "Monthly Prey Statistics" bar
+    chart: distinct prey-blocked motion blocks per calendar month, oldest
+    first, for the last `months` months including the current one. Same
+    block_id-dedup reasoning as _day_glance_prey_counts - a prey event spans
+    many photo rows, not one."""
+    tz = ZoneInfo(CONFIG["TIMEZONE"])
+    now_local = datetime.now(tz)
+    month_starts = []
+    y, m = now_local.year, now_local.month
+    for _i in range(months):
+        month_starts.append((y, m))
+        m -= 1
+        if m == 0:
+            m = 12
+            y -= 1
+    month_starts.reverse()
+
+    range_start_local = datetime(month_starts[0][0], month_starts[0][1], 1, tzinfo=tz)
+    range_start_utc = range_start_local.astimezone(ZoneInfo("UTC")).strftime("%Y-%m-%d %H:%M:%S%z")
+
+    stmt = f"""
+        SELECT block_id, event_type, created_at FROM events
+        WHERE rfid = {_sql_quote(rfid)}
+        AND event_type LIKE '{_PREY_BLOCKED_EVENT_TYPE}%'
+        AND deleted = 0
+        AND created_at >= '{range_start_utc}'
+    """
+    df = DatabaseCore.read_df_from_database(database, stmt)
+    months_out = [
+        {"month": f"{y:04d}-{m:02d}", "label": _FR_MONTH_ABBR[m - 1], "count": 0}
+        for y, m in month_starts
+    ]
+    if df.empty:
+        return months_out
+
+    df["ts_utc"] = pd.to_datetime(df["created_at"], format="mixed", utc=True, errors="coerce")
+    df = df.dropna(subset=["ts_utc"])
+    df["ts_local"] = df["ts_utc"].dt.tz_convert(tz)
+    df = df.drop_duplicates(subset="block_id")
+    counts_by_month = df.groupby(df["ts_local"].dt.strftime("%Y-%m")).size()
+    for entry in months_out:
+        entry["count"] = int(counts_by_month.get(entry["month"], 0))
+    return months_out
 
 
 # 07.10, Sid ("quand je clique sur Entree, j'ai le filtre de la

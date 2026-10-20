@@ -615,7 +615,19 @@ class RemoteModelTrainer:
                     )
                 else:
                     if show_notification and show_in_progress:
-                        ui.notification_show(_("Model training is in progress. Please check back later."), duration=5, type="default")
+                        # 07.10: was a direct ui.notification_show() call, a
+                        # Shiny-only API - silently did nothing once called
+                        # from a non-Shiny context (the React AI-training
+                        # page's own polling). Same UserNotifications.add()
+                        # pattern as the "aborted" branch just above, which
+                        # already works from either side.
+                        UserNotifications.add(
+                            header=_("Model Training"),
+                            message=_("Model training is in progress. Please check back later."),
+                            type="message",
+                            id="model_training_in_progress",
+                            skip_if_id_exists=True,
+                        )
         else:
             training_status = "not_in_progress"
         

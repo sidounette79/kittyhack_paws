@@ -1063,9 +1063,11 @@ class EventsRepo:
                 _cols = set(r[1] for r in cursor.fetchall())
                 has_dims = ('img_width' in _cols and 'img_height' in _cols)
                 has_effective_fps = ('effective_fps' in _cols)
+                has_rfid_is_real = ('rfid_is_real' in _cols)
             except Exception:
                 has_dims = False
                 has_effective_fps = False
+                has_rfid_is_real = False
 
             # Check for motion_timeline table using the open cursor (avoids re-acquiring the lock).
             try:
@@ -1134,6 +1136,8 @@ class EventsRepo:
                         columns += ", img_width, img_height"
                     if has_effective_fps:
                         columns += ", effective_fps"
+                    if has_rfid_is_real:
+                        columns += ", rfid_is_real"
                     values = ', '.join(['?' for _ in columns.split(', ')])
                     values_list = [
                         db_block_id,
@@ -1151,6 +1155,8 @@ class EventsRepo:
                         values_list.extend([img_w, img_h])
                     if has_effective_fps:
                         values_list.append(float(effective_fps_block))
+                    if has_rfid_is_real:
+                        values_list.append(1 if getattr(element, "tag_id_is_real", False) else 0)
                     cursor.execute(f"INSERT INTO events ({columns}) VALUES ({values})", values_list)
                     new_row_id = cursor.lastrowid
                     # Persist original image to filesystem (if available)
@@ -1206,6 +1212,48 @@ class EventsRepo:
             for db_photo_id in db_photo_ids['id']:
                 EventsRepo.get_thubmnail_by_id(database, db_photo_id)
             logging.info(f"[DATABASE] Generated {len(db_photo_ids)} thumbnails for block ID '{db_block_id}'. (Filesystem storage)")
+
+    @staticmethod
+    def backfill_block_rfid(database: str, block_id: int, real_tag_id: str) -> int:
+        """08.10, Sid ("forcer le systeme a ecrire... en forcant l'utilisation
+        du vrai RFID... meme si le systeme se trompe"): a block already
+        written (rfid empty or video-only) gets corrected once a real chip
+        read arrives shortly after - see loop.py's RFID_BACKFILL_WINDOW_S.
+        Returns the number of rows updated (0 if the block/rows don't exist
+        yet - a real possibility since the original write runs in its own
+        thread, see write_motion_block_to_db)."""
+        # Checked BEFORE acquiring our own lock below - check_if_column_exists()
+        # takes the same non-reentrant db_write_lock internally, so calling it
+        # while already holding the lock would just silently fail (not
+        # deadlock, since it's a non-blocking acquire) and under-report the
+        # column as missing.
+        has_rfid_is_real = DatabaseCore.check_if_column_exists(database, "events", "rfid_is_real")
+        result = DatabaseCore.lock_database()
+        if not result.success:
+            logging.error(f"[DATABASE] Failed to acquire lock for RFID backfill on block {block_id}: {result.message}")
+            return 0
+        try:
+            conn = sqlite3.connect(database, timeout=30)
+            cursor = conn.cursor()
+            if has_rfid_is_real:
+                cursor.execute(
+                    "UPDATE events SET rfid = ?, rfid_is_real = 1 WHERE block_id = ?",
+                    (real_tag_id, int(block_id)),
+                )
+            else:
+                cursor.execute(
+                    "UPDATE events SET rfid = ? WHERE block_id = ?",
+                    (real_tag_id, int(block_id)),
+                )
+            updated = cursor.rowcount
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            logging.error(f"[DATABASE] Failed to backfill RFID for block {block_id}: {e}")
+            return 0
+        finally:
+            DatabaseCore.release_database()
+        return updated
 
     @staticmethod
     def _purge_excess_photos_with_cursor(
@@ -1867,6 +1915,30 @@ class CatsRepo:
         )
 
     @staticmethod
+    def set_bio(database: str, cat_id: int, bio: dict) -> Result:
+        """07.10, Sid ("un petit espace biographie"): single UPDATE for all
+        cat.bio_* / cats profile columns at once, all nullable free-form
+        fields - same reasoning as set_block_exit_after_prey (kept out of
+        db_update_cat_data_by_id to avoid a long positional-arg signature)."""
+        def _q(value):
+            if value is None or value == "":
+                return "NULL"
+            return "'" + str(value).replace("'", "''") + "'"
+
+        assignments = [
+            f"species = {_q(bio.get('species'))}",
+            f"sex = {_q(bio.get('sex'))}",
+            f"sterilized = {'NULL' if bio.get('sterilized') is None else int(bool(bio.get('sterilized')))}",
+            f"birth_date = {_q(bio.get('birth_date'))}",
+            f"weight_kg = {'NULL' if bio.get('weight_kg') in (None, '') else float(bio.get('weight_kg'))}",
+            f"breed_primary = {_q(bio.get('breed_primary'))}",
+            f"breed_secondary = {_q(bio.get('breed_secondary'))}",
+            f"bio_comments = {_q(bio.get('bio_comments'))}",
+        ]
+        stmt = f"UPDATE cats SET {', '.join(assignments)} WHERE id = {int(cat_id)}"
+        return DatabaseCore.write_stmt_to_database(database, stmt)
+
+    @staticmethod
     def get_cat_name_rfid_dict(database: str):
         """Map RFID (or lowercase name) → display name."""
         stmt = "SELECT rfid, name FROM cats"
@@ -2139,17 +2211,32 @@ class ModelReviewRepo:
             DatabaseCore.release_database()
 
     @staticmethod
-    def get_pending(database: str, limit: int = 200) -> pd.DataFrame:
+    def get_pending(database: str, limit: int = 200, model_version: str | None = None) -> pd.DataFrame:
         # 06.10, Sid ("je peine à savoir si c'est un autre événement" /
         # "rajouter ce qu'a donné le RFID"): model_review_queue only stores
         # photo_id - block_id and rfid live on the events row, joined in here
         # so the review UI can group by event and show the RFID without an
         # extra query per row.
+        # 08.10, Sid ("j'espérais en avoir à chaque fois un peu moins, pas
+        # 2x plus"): activating a new model starts a brand new pending batch
+        # under its own model_version (upsert_disagreement's unique key is
+        # (photo_id, model_version)) WITHOUT clearing the previous model's
+        # still-pending rows - optional filter so the queue only shows the
+        # CURRENTLY active model's own backlog, not every model ever scanned.
+        version_filter = ""
+        if model_version:
+            escaped = model_version.replace(chr(39), chr(39) + chr(39))
+            version_filter = f" AND q.model_version = '{escaped}'"
         return DatabaseCore.read_df_from_database(
             database,
-            "SELECT q.*, e.block_id AS event_block_id, e.rfid AS event_rfid "
+            # 08.10, Sid ("le RFID pris en compte dans la révision, il se
+            # base sur quoi?"): e.rfid can be a video-model guess, not a
+            # real chip read (see events.rfid_is_real) - carried through so
+            # the review UI can mark it, same as Parcours/Chronologie.
+            "SELECT q.*, e.block_id AS event_block_id, e.rfid AS event_rfid, "
+            "e.rfid_is_real AS event_rfid_is_real "
             "FROM model_review_queue q LEFT JOIN events e ON e.id = q.photo_id "
-            f"WHERE q.status = 'pending' ORDER BY q.id ASC LIMIT {int(limit)}",
+            f"WHERE q.status = 'pending'{version_filter} ORDER BY q.id ASC LIMIT {int(limit)}",
         )
 
     @staticmethod
@@ -2165,10 +2252,14 @@ class ModelReviewRepo:
         return df.iloc[0].to_dict() if not df.empty else None
 
     @staticmethod
-    def get_pending_count(database: str) -> int:
+    def get_pending_count(database: str, model_version: str | None = None) -> int:
         try:
+            version_filter = ""
+            if model_version:
+                escaped = model_version.replace(chr(39), chr(39) + chr(39))
+                version_filter = f" AND model_version = '{escaped}'"
             df = DatabaseCore.read_df_from_database(
-                database, "SELECT COUNT(*) as c FROM model_review_queue WHERE status = 'pending'"
+                database, f"SELECT COUNT(*) as c FROM model_review_queue WHERE status = 'pending'{version_filter}"
             )
             return int(df.iloc[0]["c"]) if not df.empty else 0
         except Exception as e:
@@ -2242,6 +2333,56 @@ class ModelReviewRepo:
             DatabaseCore.release_database()
 
 
+class RfidGroundTruthRepo:
+    """09.10, Sid ("la revérification doit gérer automatiquement de
+    réattribuer cet événement-là au bon chat tout du long"): a real RFID
+    chip read (events.rfid_is_real = 1) is ground truth, more reliable than
+    any YOLO pass - no re-inference needed at all, just comparing the
+    already-stored dominant cat against the chip's own cat and writing a
+    confirmed detection_feedback correction when they disagree. Tracks which
+    motion blocks this has already processed, separate from
+    model_review_scanned_blocks on purpose: that table is scoped per
+    model_version (a fresh model makes every block eligible again), but this
+    has nothing to do with any model version - a block is settled once, for
+    good, regardless of which model is active later."""
+
+    @staticmethod
+    def get_processed_block_ids(database: str) -> set:
+        try:
+            df = DatabaseCore.read_df_from_database(
+                database, "SELECT block_id FROM rfid_ground_truth_processed_blocks"
+            )
+            return set(int(b) for b in df["block_id"].tolist()) if not df.empty else set()
+        except Exception as e:
+            logging.error(f"[DATABASE] Failed to read processed RFID ground-truth blocks: {e}")
+            return set()
+
+    @staticmethod
+    def mark_blocks_processed(database: str, block_ids: list) -> Result:
+        if not block_ids:
+            return Result(True, "")
+        result = DatabaseCore.lock_database()
+        if not result.success:
+            return result
+        try:
+            conn = sqlite3.connect(database, timeout=30)
+            now = DateTimeUtil.get_utc_date_string(tm.time())
+            conn.executemany(
+                "INSERT OR IGNORE INTO rfid_ground_truth_processed_blocks (block_id, processed_at) VALUES (?, ?)",
+                [(int(b), now) for b in block_ids],
+            )
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            error_message = f"[DATABASE] Failed to mark RFID ground-truth blocks processed: {e}"
+            logging.error(error_message)
+            return Result(False, error_message)
+        else:
+            return Result(True, "")
+        finally:
+            DatabaseCore.release_database()
+
+
 class RemoteConnectionLogRepo:
     """04.10, Sid: remote<->Kittyflap connect/disconnect history, so she can
     actually see over days/weeks whether the link holds up - not just trust
@@ -2294,7 +2435,8 @@ class DbMigrations:
                 img_height INTEGER,
                 effective_fps REAL,
                 deleted BOOLEAN DEFAULT 0,
-                thumbnail BLOB
+                thumbnail BLOB,
+                rfid_is_real INTEGER
             )
         """
         result = DatabaseCore.write_stmt_to_database(database, stmt)
@@ -2400,6 +2542,28 @@ class DbMigrations:
         result = DatabaseCore.write_stmt_to_database(database, stmt)
         if result.success:
             logging.info(f"[DATABASE] Successfully created the 'model_review_scanned_blocks' table in the database '{database}'.")
+        return result
+
+    @staticmethod
+    def create_rfid_ground_truth_processed_blocks_table(database: str):
+        """Create the ``rfid_ground_truth_processed_blocks`` table if missing.
+
+        09.10, Sid ("réattribuer cet événement-là au bon chat tout du long"):
+        tracks which motion blocks the RFID-ground-truth reassignment has
+        already processed - NOT scoped per model_version (see
+        RfidGroundTruthRepo's own docstring), a block settled by a real chip
+        read stays settled regardless of which model gets trained/activated
+        later.
+        """
+        stmt = """
+            CREATE TABLE IF NOT EXISTS rfid_ground_truth_processed_blocks (
+                block_id INTEGER PRIMARY KEY,
+                processed_at DATETIME
+            )
+        """
+        result = DatabaseCore.write_stmt_to_database(database, stmt)
+        if result.success:
+            logging.info(f"[DATABASE] Successfully created the 'rfid_ground_truth_processed_blocks' table in the database '{database}'.")
         return result
 
     @staticmethod
@@ -2753,6 +2917,7 @@ detection_feedback_get_for_photos = DetectionFeedbackRepo.get_for_photos
 detection_feedback_pending_export_count = DetectionFeedbackRepo.get_pending_export_count
 create_model_review_queue_table = DbMigrations.create_model_review_queue_table
 create_model_review_scanned_blocks_table = DbMigrations.create_model_review_scanned_blocks_table
+create_rfid_ground_truth_processed_blocks_table = DbMigrations.create_rfid_ground_truth_processed_blocks_table
 create_kittyhack_photo_table = DbMigrations.create_kittyhack_photo_table
 create_kittyhack_cats_table = DbMigrations.create_kittyhack_cats_table
 migrate_cats_to_kittyhack = DbMigrations.migrate_cats_to_kittyhack

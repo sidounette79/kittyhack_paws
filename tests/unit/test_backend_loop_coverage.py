@@ -329,6 +329,349 @@ def test_rfid_overrides_video_and_locks(harness):
     assert harness.magnets.get_inside_state() is False
 
 
+def test_different_known_cat_finalizes_open_block(loop_db, caplog):
+    """11.10, Sid ("le mélange entrée/sortie peut-il bloquer un chat à tort
+    ?"): confirmed real bug the crash investigation found - a second known
+    cat's real RFID read while the first cat's motion block was still open
+    used to get silently merged into it (no identity check at all). A real
+    chip read for a DIFFERENT already-known cat must finalize the open block
+    instead - never trigger on an unknown/stranger tag (noise), and never on
+    the prey classifier (which carries no RFID, so this path can't see it)."""
+    from src.database import CatsRepo
+
+    CatsRepo.db_add_new_cat(
+        loop_db, "Nala", "CAT002", "",
+        enable_prey_detection=True, allow_entry=True, allow_exit=True,
+    )
+    h = build_loop_context(db_path=loop_db, cat_name="Patoune", cat_rfid="CAT001")
+    try:
+        baseconfig.CONFIG["ALLOWED_TO_ENTER"] = AllowedToEnter.KNOWN
+        baseconfig.CONFIG["MOUSE_CHECK_ENABLED"] = False
+
+        # Patoune's own real chip read opens and owns the current block.
+        h.set_outside(True)
+        h.pump(2)
+        h.inject_rfid("CAT001")
+        h.advance(0.5)
+        h.pump(3)
+
+        # A stranger tag (unregistered) must NOT split the block - just noise.
+        caplog.clear()
+        h.inject_rfid("UNKNOWN_TAG")
+        h.advance(0.5)
+        h.pump(3)
+        assert not any("Different known cat detected" in r.message for r in caplog.records)
+
+        # Nala's own real, DIFFERENT, already-known tag arrives while the
+        # block is still open - this must finalize Patoune's block instead
+        # of merging Nala's motion into it.
+        caplog.clear()
+        h.inject_rfid("CAT002")
+        h.advance(0.5)
+        h.pump(3)
+        assert any("Different known cat detected" in r.message for r in caplog.records)
+    finally:
+        h.shutdown()
+        image_buffer.clear()
+
+
+def test_video_identity_majority_vote_resists_single_outlier(loop_db, caplog):
+    """11.10 (round 2), Sid ("sur les 20 premières images c'est Nala, pas de
+    logique que la 21e soit Pookie, la 23e Patoune puis de nouveau Nala"):
+    real data that same day showed 41.5% of blocks with video detection
+    flickering between distinct cat identities within a single passage,
+    because the old logic picked the single highest-confidence detection
+    ever seen in the whole block - one later noisy outlier frame could
+    override 20 consistent prior frames. Switched to a per-image vote count
+    that requires a strict majority to switch identity."""
+    from src.database import CatsRepo
+
+    CatsRepo.db_add_new_cat(
+        loop_db, "Pookie", "CAT002", "",
+        enable_prey_detection=True, allow_entry=True, allow_exit=True,
+    )
+    h = build_loop_context(db_path=loop_db, cat_name="Nala", cat_rfid="CAT001")
+    try:
+        baseconfig.CONFIG["USE_CAMERA_FOR_CAT_DETECTION"] = True
+        baseconfig.CONFIG["CAT_THRESHOLD"] = 50.0
+        baseconfig.CONFIG["MOUSE_CHECK_ENABLED"] = False
+
+        h.set_outside(True)
+        h.pump(2)
+
+        # 20 consistent frames identifying Nala at a moderate confidence.
+        for _ in range(20):
+            _inject_frame(h, own_cat=70.0, cat_name="Nala")
+        h.pump(3)
+        assert any("matches RFID tag 'CAT001'" in r.message for r in caplog.records)
+
+        # One single later frame misidentifies Pookie at a HIGHER confidence
+        # than any individual Nala frame - the old bug would have flipped
+        # identity on this single frame alone.
+        caplog.clear()
+        _inject_frame(h, own_cat=95.0, cat_name="Pookie")
+        h.pump(3)
+        assert not any("matches RFID tag 'CAT002'" in r.message for r in caplog.records)
+
+        # Enough further Pookie frames to legitimately build a real majority
+        # must still be able to correct the identity (keeps the 05.10 fix's
+        # own ability to self-correct an early wrong guess, see the comment
+        # block in loop.py right above this logic).
+        for _ in range(25):
+            _inject_frame(h, own_cat=70.0, cat_name="Pookie")
+        h.pump(3)
+        assert any("matches RFID tag 'CAT002'" in r.message for r in caplog.records)
+    finally:
+        h.shutdown()
+        image_buffer.clear()
+
+
+def test_video_identity_splits_block_on_strong_recent_majority_of_different_cat(loop_db, caplog):
+    """11.10 (round 2 continued), Sid ("on traite aussi si ya moyen" - two
+    different cats passing through the SAME motion block before either has
+    an RFID read): the majority-vote fix above resists single-frame noise,
+    but that also means a genuinely different cat arriving later would only
+    slowly (if ever) outvote the first cat's whole accumulated history. A
+    strong recent majority (not a single frame) of a different, known cat
+    must split the block instead, mirroring the existing RFID-based split."""
+    from src.database import CatsRepo
+
+    CatsRepo.db_add_new_cat(
+        loop_db, "Patoune", "CAT002", "",
+        enable_prey_detection=True, allow_entry=True, allow_exit=True,
+    )
+    h = build_loop_context(db_path=loop_db, cat_name="Nala", cat_rfid="CAT001")
+    try:
+        baseconfig.CONFIG["USE_CAMERA_FOR_CAT_DETECTION"] = True
+        baseconfig.CONFIG["CAT_THRESHOLD"] = 50.0
+        baseconfig.CONFIG["MOUSE_CHECK_ENABLED"] = False
+
+        h.set_outside(True)
+        h.pump(2)
+
+        # Nala establishes a strong majority first.
+        for _ in range(20):
+            _inject_frame(h, own_cat=70.0, cat_name="Nala")
+        h.pump(3)
+        assert any("matches RFID tag 'CAT001'" in r.message for r in caplog.records)
+
+        # A real different cat (Patoune) now dominates the most recent
+        # frames - 8/8 of the last window, well above the required majority.
+        caplog.clear()
+        for _ in range(8):
+            _inject_frame(h, own_cat=70.0, cat_name="Patoune")
+        h.pump(3)
+        assert any("Different known cat detected by video only" in r.message for r in caplog.records)
+        assert any("immediately starting a new block" in r.message for r in caplog.records)
+    finally:
+        h.shutdown()
+        image_buffer.clear()
+
+
+def test_video_identity_no_split_on_weak_recent_minority(loop_db, caplog):
+    """A handful of stray frames for a different cat (below the required
+    recent majority) must NOT split the block - that's the same per-frame
+    noise the majority-vote fix is meant to absorb, not a real second cat."""
+    from src.database import CatsRepo
+
+    CatsRepo.db_add_new_cat(
+        loop_db, "Patoune", "CAT002", "",
+        enable_prey_detection=True, allow_entry=True, allow_exit=True,
+    )
+    h = build_loop_context(db_path=loop_db, cat_name="Nala", cat_rfid="CAT001")
+    try:
+        baseconfig.CONFIG["USE_CAMERA_FOR_CAT_DETECTION"] = True
+        baseconfig.CONFIG["CAT_THRESHOLD"] = 50.0
+        baseconfig.CONFIG["MOUSE_CHECK_ENABLED"] = False
+
+        h.set_outside(True)
+        h.pump(2)
+
+        for _ in range(20):
+            _inject_frame(h, own_cat=70.0, cat_name="Nala")
+        h.pump(3)
+        assert any("matches RFID tag 'CAT001'" in r.message for r in caplog.records)
+
+        caplog.clear()
+        for _ in range(2):
+            _inject_frame(h, own_cat=70.0, cat_name="Patoune")
+        h.pump(3)
+        assert not any("Different known cat detected by video only" in r.message for r in caplog.records)
+    finally:
+        h.shutdown()
+        image_buffer.clear()
+
+
+def test_video_identity_no_split_when_incumbent_barely_established(loop_db, caplog):
+    """Real false positive Sid caught live (11.10): a single cat (Nala)
+    approached the flap, backed off, and came back - only ONE physical cat
+    the whole time. But the incumbent identity had only just been assigned
+    (2 votes) when a short noisy streak misidentified her as Patoune for
+    6/8 of the most recent frames - at that point in a fresh block, "the
+    last 8 frames" IS basically the block's entire history, not a late
+    arrival after an established presence. The split fired incorrectly,
+    confirmed via real production logs the same day. Must not split when
+    the incumbent hasn't built up a real track record yet - a freshly
+    assigned identity gets corrected by the ordinary majority-vote path
+    instead, not the split path."""
+    from src.database import CatsRepo
+
+    CatsRepo.db_add_new_cat(
+        loop_db, "Patoune", "CAT002", "",
+        enable_prey_detection=True, allow_entry=True, allow_exit=True,
+    )
+    h = build_loop_context(db_path=loop_db, cat_name="Nala", cat_rfid="CAT001")
+    try:
+        baseconfig.CONFIG["USE_CAMERA_FOR_CAT_DETECTION"] = True
+        baseconfig.CONFIG["CAT_THRESHOLD"] = 50.0
+        baseconfig.CONFIG["MOUSE_CHECK_ENABLED"] = False
+
+        h.set_outside(True)
+        h.pump(2)
+
+        # Nala barely gets assigned (only 2 votes) before a noisy streak of
+        # 6 "patoune" misreads follows - same ratio (6/8) as the real
+        # incident, but with the incumbent nowhere near established yet.
+        for _ in range(2):
+            _inject_frame(h, own_cat=92.0, cat_name="Nala")
+        h.pump(2)
+        assert any("matches RFID tag 'CAT001'" in r.message for r in caplog.records)
+
+        caplog.clear()
+        for _ in range(6):
+            _inject_frame(h, own_cat=78.0, cat_name="Patoune")
+        h.pump(3)
+        assert not any("Different known cat detected by video only" in r.message for r in caplog.records)
+    finally:
+        h.shutdown()
+        image_buffer.clear()
+
+
+def test_vote_winner_propagates_into_stored_photo_labels(loop_db, caplog):
+    """11.10 (round 2 continued), Sid ("reporter ton correctif dans les
+    videos/photos - c'est avec ca que je peux entrainer le modele"): the
+    majority-vote fix only ever changed tag_id_from_video (door decisions +
+    the one timeline label) - each individual stored photo kept its own
+    raw, noisy per-frame name untouched. Verify the block's final, winning
+    identity gets written onto every stored cat-identity detection before
+    the block is written to the database, so the training-review workflow
+    shows the corrected name instead of the per-frame noise."""
+    from src.database import CatsRepo
+    from src.camera import image_buffer as ib
+
+    CatsRepo.db_add_new_cat(
+        loop_db, "Pookie", "CAT002", "",
+        enable_prey_detection=True, allow_entry=True, allow_exit=True,
+    )
+    h = build_loop_context(db_path=loop_db, cat_name="Nala", cat_rfid="CAT001")
+    try:
+        baseconfig.CONFIG["USE_CAMERA_FOR_CAT_DETECTION"] = True
+        baseconfig.CONFIG["CAT_THRESHOLD"] = 50.0
+        baseconfig.CONFIG["MOUSE_CHECK_ENABLED"] = False
+
+        h.set_outside(True)
+        h.pump(2)
+
+        # 20 consistent Nala frames establish the majority, plus one noisy
+        # Pookie outlier the vote correctly ignores for the decision - but
+        # the stored photo itself still reads "pookie" until propagation.
+        for _ in range(20):
+            _inject_frame(h, own_cat=70.0, cat_name="Nala")
+        _inject_frame(h, own_cat=95.0, cat_name="Pookie")
+        h.pump(3)
+
+        # Finalize the block (motion stops).
+        h.set_outside(False)
+        h.advance(0.5)
+        h.pump(5)
+
+        ids = ib.get_filtered_ids(0.0)
+        assert ids, "expected images still in the buffer to check"
+        names = set()
+        for i in ids:
+            img = ib.get_by_id(i)
+            for obj in (img.detected_objects or []):
+                names.add(obj.object_name.lower())
+        assert names == {"nala"}
+    finally:
+        h.shutdown()
+        image_buffer.clear()
+
+
+def test_video_cat_detection_skipped_during_confirmed_exit(harness, caplog):
+    """11.10, Sid ("j'aimerais éliminer au mieux les faux positifs... c'est
+    obligatoirement le bon chat vu qu'il rentre dans le tunnel, ça lit RFID"):
+    once an exit is in progress AND a real chip read has confirmed identity,
+    re-scanning video for cat identity is pure redundant noise (the source of
+    the flickering "Nala 42% / Patoune 79%" labels on the same physical cat
+    seen in the crash investigation). Must stay fully active for entry/
+    before-RFID cases - only this specific combination is skipped."""
+    baseconfig.CONFIG["ALLOWED_TO_EXIT"] = AllowedToExit.ALLOW
+    baseconfig.CONFIG["USE_CAMERA_FOR_CAT_DETECTION"] = True
+    baseconfig.CONFIG["CAT_THRESHOLD"] = 50.0
+    baseconfig.CONFIG["MOUSE_CHECK_ENABLED"] = False
+
+    # Inside motion -> exit permitted (ALLOW mode needs no RFID at all to
+    # unlock), then the cat's own real chip read confirms who it is.
+    harness.set_inside(True)
+    harness.pump(3)
+    assert harness.magnets.get_outside_state() is True
+
+    harness.inject_rfid("CAT001")
+    harness.advance(0.5)
+    harness.pump(2)
+
+    # Now outside motion continues (cat walking through the tunnel) with a
+    # high-confidence video frame for a DIFFERENT cat name injected - would
+    # normally flip tag_id_from_video and log a video-detection line.
+    caplog.clear()
+    harness.set_outside(True)
+    harness.pump(2)
+    _inject_frame(harness, own_cat=92.0, cat_name="Mia")
+    harness.pump(5)
+
+    assert not any("by video stream" in r.message for r in caplog.records)
+
+
+def test_video_cat_detection_still_skipped_after_outside_timeout_relock(harness, caplog):
+    """11.10, Sid real-world test that caught this: the FIRST version of the
+    above fix gated on `exit_in_progress`, which goes back to False via the
+    OPEN_OUTSIDE_TIMEOUT auto-relock (below, once motion_inside reads 0) well
+    before the block itself finalizes - a cat still lingering in outside-PIR
+    view after that point kept generating "by video stream" log lines in
+    production. `current_block_rfid` must keep suppressing video for the
+    whole block regardless of this earlier, unrelated magnet-timeout reset."""
+    baseconfig.CONFIG["ALLOWED_TO_EXIT"] = AllowedToExit.ALLOW
+    baseconfig.CONFIG["USE_CAMERA_FOR_CAT_DETECTION"] = True
+    baseconfig.CONFIG["CAT_THRESHOLD"] = 50.0
+    baseconfig.CONFIG["MOUSE_CHECK_ENABLED"] = False
+
+    harness.set_inside(True)
+    harness.pump(3)
+    assert harness.magnets.get_outside_state() is True
+
+    harness.inject_rfid("CAT001")
+    harness.advance(0.5)
+    harness.pump(2)
+
+    # Cat has left the inside zone - OPEN_OUTSIDE_TIMEOUT (1.0s in tests,
+    # see the module-level monkeypatch above) now elapses and auto-relocks,
+    # resetting exit_in_progress to False while the block stays open.
+    harness.set_inside(False)
+    harness.advance(1.5)
+    harness.pump(3)
+    assert harness.magnets.get_outside_state() is False
+
+    # Cat is still lingering in view outside - must NOT re-trigger video.
+    caplog.clear()
+    harness.set_outside(True)
+    harness.pump(2)
+    _inject_frame(harness, own_cat=92.0, cat_name="Mia")
+    harness.pump(5)
+
+    assert not any("by video stream" in r.message for r in caplog.records)
+
+
 # --- Manual overrides / max unlock ------------------------------------------
 
 
@@ -551,6 +894,52 @@ def test_max_motion_block_seconds_finalizes(harness):
     harness.advance(5.5)
     harness.pump(5)
     assert harness.magnets.get_inside_state() is False
+
+
+def test_mouse_check_recovers_after_forced_block_finalize(harness, caplog):
+    """11.10, Sid (vrai incident: Boubou RFID-confirmé, "allowed to enter", jamais
+    réouvert pendant 4 minutes réelles - les logs montrent le même Block ID du début
+    à la fin, preuve que motion_outside n'est jamais retombé à 0): le garde-fou
+    MAX_MOTION_BLOCK_SECONDS existe précisément pour le cas où le mouvement extérieur
+    ne retombe jamais proprement ("continuous movement near flap"), mais finalisait le
+    bloc SANS en redémarrer un nouveau - first_motion_outside_mono restait gelé à 0.0
+    (plus aucun "rising edge" ne pouvant se produire tant que le mouvement continue),
+    bloquant sufficient_analysis_time à False pour toujours et empêchant toute
+    réouverture pour un chat déjà identifié et autorisé."""
+    baseconfig.CONFIG["ALLOWED_TO_ENTER"] = AllowedToEnter.KNOWN
+    baseconfig.CONFIG["MOUSE_CHECK_ENABLED"] = True
+    baseconfig.CONFIG["MIN_SECONDS_TO_ANALYZE"] = 1.0
+
+    harness.set_outside(True)
+    harness.inject_rfid("CAT001")
+    harness.pump(3)
+
+    # Motion never falls back to 0 - MAX_MOTION_BLOCK_SECONDS (5.0s in tests, see the
+    # module-level monkeypatch above) gets exceeded while motion_outside is still 1,
+    # forcing the safety-net finalize.
+    harness.advance(5.5)
+    harness.pump(3)
+    assert any(
+        "Finalizing to prevent endless block growth" in r.message for r in caplog.records
+    )
+    assert any(
+        "immediately starting a new block" in r.message for r in caplog.records
+    )
+
+    # Re-confirm identity for the new block the forced finalize should have started
+    # (unlock_inside_decision_made was reset by it) - same cat, still physically present.
+    harness.inject_rfid("CAT001")
+    harness.pump(2)
+    harness.advance(1.2)  # past MIN_SECONDS_TO_ANALYZE (1.0s) for the NEW block's timer
+    harness.pump(2)
+
+    # Without the fix, sufficient_analysis_time stays frozen at False forever after
+    # the forced finalize (first_motion_outside_mono stuck at 0.0, no new rising edge
+    # possible), and this condition never flips back to True.
+    assert any(
+        "Mouse check condition 'sufficient_analysis_time' changed to True" in r.message
+        for r in caplog.records
+    )
 
 
 # --- Immediate lock / deferred entry / cat went inside -----------------------

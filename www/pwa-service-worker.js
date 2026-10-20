@@ -122,10 +122,14 @@ self.addEventListener('push', event => {
     // when it reuses an existing tag.
     renotify: true,
     data: { url: payload.url },
-    icon: '/favicon-192x192.png',
+    // 07.10, Sid: `icon` is the cat's own registered photo when the backend
+    // knows which cat triggered this event (payload.icon, a /cat-photo/
+    // <rfid>.jpg URL) - falls back to the generic app icon only when no cat
+    // was identified.
+    icon: payload.icon || '/favicon-192x192.png',
     // Android's status-bar icon is alpha-mask only (color is ignored and
     // renders as a solid blob) - needs a real white-on-transparent silhouette,
-    // not the full-color logo used for `icon` above.
+    // not the full-color logo/cat photo used for `icon` above.
     badge: '/notif-badge.png',
   };
   if (payload.image) {

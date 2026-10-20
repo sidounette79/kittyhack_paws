@@ -46,6 +46,22 @@ from src.webpush import _send_json
 SERVICE_ACCOUNT_FILE = os.path.join(kittyhack_root(), "fcm_service_account.json")
 TOKENS_FILE = os.path.join(kittyhack_root(), "fcm_tokens.json")
 
+# 07.10, Sid ("j'ai reçu pawflap sans photo et sans icone"): FCM's servers
+# fetch notification.image themselves to embed it in the push, server-side -
+# a relative path (what loop.py/webpush.py pass around, fine for a browser
+# service worker resolving against its own origin) just fails silently
+# there. Same single-tenant deployment as webpush.py's hardcoded
+# VAPID_CLAIM_SUB, so hardcoding the one real public domain here too.
+PUBLIC_BASE_URL = "https://paws.sidounette.ch"
+
+
+def _absolute_url(path: str | None) -> str | None:
+    if not path:
+        return None
+    if path.startswith("http://") or path.startswith("https://"):
+        return path
+    return PUBLIC_BASE_URL + path
+
 _lock = threading.Lock()
 _token_cache: dict = {"access_token": None, "expires_at": 0.0}
 
@@ -205,8 +221,9 @@ async def send_fcm_notification_to_all(
                     "android": {"priority": "high"},
                 }
             }
-            if image:
-                message["message"]["notification"]["image"] = image
+            absolute_image = _absolute_url(image)
+            if absolute_image:
+                message["message"]["notification"]["image"] = absolute_image
             try:
                 async with session.post(
                     endpoint, headers=headers, json=message,
