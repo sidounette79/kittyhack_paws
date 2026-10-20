@@ -33,6 +33,10 @@
        même endroit") - visible uniquement sous l'onglet Revérification,
        voir renderModelReviewBar() dans app.js. -->
   <div class="export-bar" id="model-review-bar" hidden></div>
+  <!-- 20.10, Sid ("un bouton qui sort aussi la comparaison... un clic
+       lance les 10 derniers événements, puis ceux d'avant") - visible
+       uniquement sous l'onglet Comparaison, voir renderCompareBar(). -->
+  <div class="export-bar" id="compare-bar" hidden></div>
 </header>
 
 <div id="queue" class="queue-grid"></div>
@@ -82,7 +86,7 @@
     <button onclick="closeMrDetail()">&larr; retour</button>
     <span class="mono" id="mr-detail-meta" style="font-size:12px;color:var(--text-dim)"></span>
   </div>
-  <div class="image-wrap" id="mr-image-wrap">
+  <div class="image-wrap" id="mr-image-wrap" onclick="toggleMrZoom()">
     <img id="mr-detail-img" src="" alt="">
   </div>
   <div class="mr-legend">

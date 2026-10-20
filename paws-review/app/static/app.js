@@ -13,16 +13,18 @@ let cats = [];
 let drawing = null;
 let lastStats = {};
 
-// 18.10, Sid ("tu me fais un onglet avec celles de labelstudio ?" puis
-// "un onglet Reolink ?") - captures sans identité de chat (pas de RFID),
-// importées en bloc par provenance plutôt que vues au fil de l'eau comme
-// le Kittyflap - LabelStudio (import_labelstudio.py, ~4800, vérité-terrain
-// actuelle) et Reolink (ingest_reolink.py, watchdog_training_samples,
-// ~18000, jusqu'ici jamais repris pour l'entraînement). Onglet à part
-// plutôt qu'un chat parmi d'autres : filtre par provenance, pas par
-// identité.
+// 18.10, Sid ("un onglet Reolink ?") - captures sans identité de chat (pas
+// de RFID), importées en bloc par provenance plutôt que vues au fil de
+// l'eau comme le Kittyflap (ingest_reolink.py, watchdog_training_samples).
+// Onglet à part plutôt qu'un chat parmi d'autres : filtre par provenance,
+// pas par identité.
+// 20.10, Sid ("remplacer l'onglet labelstudio qui ne servira plus") -
+// LabelStudio décommissionné (voir Paws Review lui-même, qui le
+// remplace), son onglet source (~4800 captures, déjà toutes importées une
+// fois pour toutes) retiré - plus aucune nouvelle capture n'arrivera par
+// ce canal. Son emplacement dans la barre d'onglets réutilisé par
+// COMPARE_TAB ci-dessous.
 const SOURCE_TABS = [
-  { key: '__labelstudio__', label: 'LabelStudio', source: 'labelstudio', statKey: 'labelstudio_pending' },
   { key: '__reolink__', label: 'Reolink', source: 'reolink', statKey: 'reolink_pending' },
   // 19.10, Sid ("un dossier dans docker dans lequel je peux ajouter
   // manuellement des photos qui viendraient direct dans paws reviews") -
@@ -59,6 +61,13 @@ const REVIEWED_TABS = [
 // endroit") - file à part (model_review_queue), pas un filtre sur
 // captures comme les autres onglets - voir loadModelReviewQueue().
 const MODEL_REVIEW_TAB = '__model_review__';
+
+// 20.10, Sid ("un bouton qui sort aussi la comparaison... un clic lance
+// les 10 derniers événements, puis ceux d'avant") - pas une file de
+// revue (rien à valider/écarter ici), juste une action qui génère une
+// galerie HTML (vérité terrain/ancien modèle/nouveau modèle) et un lien
+// vers elle - voir startCompareRecent()/compareRecentMore().
+const COMPARE_TAB = '__compare__';
 
 async function api(path, opts) {
   const res = await fetch(path, opts);
@@ -226,7 +235,12 @@ function renderTabs() {
          onclick="selectTab('${MODEL_REVIEW_TAB}')">
       Revérification<span class="count">${mrCount}</span>
     </div>`;
-  tabsEl.innerHTML = allTab + catTabs + sourceTabs + preyTab + reviewedTabs + modelReviewTab;
+  const compareTab = `
+    <div class="tab ${currentTab === COMPARE_TAB ? 'active' : ''}"
+         style="${currentTab === COMPARE_TAB ? 'background:var(--accent)' : 'border-color:var(--accent)'}"
+         onclick="selectTab('${COMPARE_TAB}')">
+      Comparaison</div>`;
+  tabsEl.innerHTML = allTab + catTabs + sourceTabs + preyTab + reviewedTabs + modelReviewTab + compareTab;
 }
 
 function selectTab(name) {
@@ -234,9 +248,12 @@ function selectTab(name) {
   selectedIds.clear(); // une sélection d'un autre onglet n'a plus de sens ici
   renderTabs();
   document.getElementById('model-review-bar').hidden = currentTab !== MODEL_REVIEW_TAB;
+  document.getElementById('compare-bar').hidden = currentTab !== COMPARE_TAB;
   if (currentTab === MODEL_REVIEW_TAB) {
     checkModelReviewStatus();
     loadModelReviewQueue();
+  } else if (currentTab === COMPARE_TAB) {
+    renderCompareBar();
   } else {
     loadQueue();
   }
@@ -471,7 +488,12 @@ async function navigateMrDetail(delta) {
   await renderMrDetailView();
 }
 
+function toggleMrZoom() {
+  document.getElementById('mr-image-wrap').classList.toggle('zoomed');
+}
+
 async function renderMrDetailView() {
+  document.getElementById('mr-image-wrap').classList.remove('zoomed');
   const q = mrQueue[mrIndex];
   document.getElementById('mr-detail-meta').textContent =
     `capture #${q.capture_id} · chat : ${q.cat_name || '?'} (${q.cat_source || '?'})`;
@@ -520,6 +542,70 @@ async function resolveMrCurrent(action) {
   }
   if (mrIndex >= mrQueue.length) mrIndex = mrQueue.length - 1;
   await renderMrDetailView();
+}
+
+// 20.10, Sid ("un bouton qui sort aussi la comparaison... un clic lance
+// les 10 derniers événements, puis ceux d'avant") - pas une file de revue,
+// une seule action qui génère une galerie HTML (voir model_compare.py
+// run_recent_events) et un lien vers elle, ouverte dans un nouvel onglet.
+// offset avance de 10 à chaque clic "suivants" ; compareResult garde le
+// dernier lien affiché pour ne pas le perdre en revenant sur l'onglet.
+let compareOffset = 0;
+let compareResult = null;
+let compareLoading = false;
+
+function renderCompareBar() {
+  const bar = document.getElementById('compare-bar');
+  if (compareLoading) {
+    bar.innerHTML = `<span class="export-msg">Comparaison en cours (ancien/nouveau modèle, ça peut prendre quelques secondes)...</span>`;
+    return;
+  }
+  if (!compareResult) {
+    bar.innerHTML = `<button onclick="startCompareRecent()">Comparer les 10 derniers événements</button>`;
+    return;
+  }
+  const r = compareResult;
+  const hasMore = r.offset + r.count < r.total_events;
+  bar.innerHTML = `
+    <span class="export-msg">✓ ${r.count} événement(s) comparé(s) (${r.offset + 1}-${r.offset + r.count} sur ${r.total_events})</span>
+    <a href="${r.url}" target="_blank"><button>Ouvrir la galerie</button></a>
+    ${hasMore ? `<button onclick="compareRecentMore()">10 événements précédents</button>` : ''}
+    <button onclick="startCompareRecent()">Recommencer depuis les plus récents</button>`;
+}
+
+async function startCompareRecent() {
+  compareOffset = 0;
+  compareResult = null;
+  compareLoading = true;
+  renderCompareBar();
+  try {
+    compareResult = await api('/app-api/model-compare/recent', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ offset: compareOffset, limit: 10 }),
+    });
+  } catch (e) {
+    compareResult = null;
+  }
+  compareLoading = false;
+  renderCompareBar();
+}
+
+async function compareRecentMore() {
+  compareOffset += 10;
+  compareLoading = true;
+  renderCompareBar();
+  try {
+    compareResult = await api('/app-api/model-compare/recent', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ offset: compareOffset, limit: 10 }),
+    });
+  } catch (e) {
+    compareOffset -= 10; // échec - on ne perd pas la position déjà atteinte
+  }
+  compareLoading = false;
+  renderCompareBar();
 }
 
 async function openDetail(index) {

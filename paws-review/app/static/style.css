@@ -283,6 +283,13 @@ header h1 { font-size: 16px; margin: 0 0 8px; }
   overflow-y: auto;
 }
 #mr-detail.open { display: flex; }
+/* 20.10, Sid ("un moyen d'agrandir les photos ?") - les vignettes IR nuit
+   sont souvent trop petites pour trancher un vrai désaccord (proie minuscule,
+   chat dans l'ombre) ; clic pour agrandir à la largeur dispo plutôt que les
+   520px habituels, #mr-detail a déjà overflow-y:auto donc la page scroll
+   normalement une fois l'image plus grande que l'écran. */
+#mr-image-wrap { cursor: zoom-in; }
+#mr-image-wrap.zoomed { max-width: none; width: 100%; cursor: zoom-out; }
 .box.mr-old { border-color: var(--accent); background: rgba(232,163,61,.12); }
 .box.mr-new { border-color: #5b9bd5; background: rgba(91,155,213,.15); }
 .mr-legend { display: flex; gap: 10px; margin-top: 10px; font-size: 12px; font-family: 'JetBrains Mono', monospace; }

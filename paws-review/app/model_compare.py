@@ -37,6 +37,7 @@ from PIL import Image, ImageDraw, ImageFont
 from app.boxes import effective_boxes
 from app.catalog_db import get_conn, init_db
 from app.config import STORAGE_ROOT
+from app.model_review import _dominant_label
 from app.labels import CLASSES, canonicalize
 
 COMPARISONS_DIR = os.path.join(STORAGE_ROOT, "model_comparisons")
@@ -147,6 +148,145 @@ def _predict_boxes(model, image_path: str) -> list[tuple[str, float, float, floa
             label = names.get(int(cls), str(int(cls)))
             out.append((label, x1 * 100.0, y1 * 100.0, (x2 - x1) * 100.0, (y2 - y1) * 100.0, float(conf) * 100.0))
     return out
+
+
+def _recent_event_groups(conn: sqlite3.Connection, offset: int, limit: int) -> tuple[list, int]:
+    """20.10, Sid ("un bouton qui sort la comparaison... un clic lance les
+    10 derniers événements, puis ceux d'avant") - un événement = un groupe
+    de captures qui partagent le même block_id (un vrai passage), pas une
+    frame isolée ; les sources jamais groupées (certaines captures Reolink)
+    restent chacune leur propre événement. Un seul représentant par
+    événement, choisi avec la même priorité Prey-d'abord que
+    model_review._dominant_label - cohérent avec le reste de l'outil.
+    Retourne (lignes représentatives, nombre total d'événements) pour la
+    pagination par clic."""
+    rows = conn.execute(
+        """SELECT id, block_id, original_path, detected_objects_json, created_at FROM captures
+           WHERE review_status IN ('confirmed', 'corrected') AND original_path IS NOT NULL
+           ORDER BY created_at DESC"""
+    ).fetchall()
+
+    groups: dict = {}
+    for row in rows:
+        key = row["block_id"] if row["block_id"] is not None else f"solo-{row['id']}"
+        groups.setdefault(key, []).append(row)
+
+    ordered_keys = sorted(groups, key=lambda k: max(r["created_at"] for r in groups[k]), reverse=True)
+    page_keys = ordered_keys[offset: offset + limit]
+
+    reps = []
+    for key in page_keys:
+        best_row, best_label, best_prob = None, None, -1.0
+        for row in groups[key]:
+            boxes = effective_boxes(conn, row["id"], row["detected_objects_json"])
+            label, prob, _, _ = _dominant_label(boxes)
+            if label is None:
+                continue
+            is_prey, was_prey = label == "Prey", best_label == "Prey"
+            if best_row is None or (is_prey and not was_prey) or (is_prey == was_prey and prob > best_prob):
+                best_row, best_label, best_prob = row, label, prob
+        if best_row is not None:
+            reps.append(best_row)
+
+    return reps, len(ordered_keys)
+
+
+def run_recent_events(old_dir: str, new_dir: str, offset: int, limit: int, out_dir: str | None = None) -> dict:
+    """Variante chronologique de run() : au lieu d'un échantillon aléatoire
+    équilibré par classe, prend les N événements réels les plus récents
+    (pagination par offset/limit, un clic = une page), vérité terrain
+    (vert) / ancien modèle (orange) / nouveau modèle (bleu) côte à côte."""
+    from ultralytics import YOLO
+
+    init_db()
+    old_model = YOLO(os.path.join(old_dir, "model.pt"))
+    new_model = YOLO(os.path.join(new_dir, "model.pt"))
+
+    ts = time.strftime("%Y%m%d_%H%M%S")
+    out_dir = out_dir or os.path.join(COMPARISONS_DIR, f"{ts}_recent_o{offset}")
+    os.makedirs(out_dir, exist_ok=True)
+
+    with get_conn() as conn:
+        rows, total_events = _recent_event_groups(conn, offset, limit)
+        gallery_entries = []
+        for row in rows:
+            if not os.path.isfile(row["original_path"]):
+                continue
+            img = Image.open(row["original_path"]).convert("RGB")
+
+            gt_boxes = effective_boxes(conn, row["id"], row["detected_objects_json"])
+            gt = [(b["label"], b["x"], b["y"], b["width"], b["height"], b["probability"]) for b in gt_boxes]
+            old_pred = _predict_boxes(old_model, row["original_path"])
+            new_pred = _predict_boxes(new_model, row["original_path"])
+
+            panel_gt = _draw_boxes(img, gt, COLOR_GT)
+            panel_old = _draw_boxes(img, old_pred, COLOR_OLD)
+            panel_new = _draw_boxes(img, new_pred, COLOR_NEW)
+            W, H = img.size
+            combined = Image.new("RGB", (W * 3 + 20, H), (20, 20, 20))
+            combined.paste(panel_gt, (0, 0))
+            combined.paste(panel_old, (W + 10, 0))
+            combined.paste(panel_new, (2 * W + 20, 0))
+
+            fname = f"capture_{row['id']}.jpg"
+            combined.save(os.path.join(out_dir, fname), quality=90)
+            gallery_entries.append({
+                "filename": fname,
+                "capture_id": row["id"],
+                "created_at": row["created_at"],
+                "gt_classes": sorted({canonicalize(l) for l, *_ in gt} - {None}),
+                "old_classes": sorted({canonicalize(l) for l, *_ in old_pred} - {None}),
+                "new_classes": sorted({canonicalize(l) for l, *_ in new_pred} - {None}),
+            })
+
+    _write_recent_gallery_html(out_dir, gallery_entries, old_dir, new_dir, offset, total_events)
+    url = "/model-comparisons/" + os.path.basename(out_dir) + "/index.html"
+    return {
+        "out_dir": out_dir, "url": url, "count": len(gallery_entries),
+        "total_events": total_events, "offset": offset, "limit": limit,
+    }
+
+
+def _write_recent_gallery_html(out_dir: str, entries: list[dict], old_dir: str, new_dir: str, offset: int, total_events: int):
+    rows_html = []
+    for e in entries:
+        tags = []
+        for cls in e["gt_classes"]:
+            had_old, had_new = cls in e["old_classes"], cls in e["new_classes"]
+            if not had_old and had_new:
+                tags.append(f'<span class="tag win">{cls} rattrapé</span>')
+            elif had_old and not had_new:
+                tags.append(f'<span class="tag regress">{cls} régression</span>')
+            elif not had_old and not had_new:
+                tags.append(f'<span class="tag miss">{cls} toujours loupé</span>')
+        rows_html.append(f"""
+        <div class="row">
+          <div class="meta">{e['created_at']} - capture #{e['capture_id']} {''.join(tags)}</div>
+          <img src="{e['filename']}" loading="lazy">
+        </div>""")
+
+    shown_from = offset + 1
+    shown_to = offset + len(entries)
+    html = f"""<!doctype html><html><head><meta charset="utf-8">
+<title>Comparaison événements récents</title>
+<style>
+body{{background:#111;color:#eee;font-family:system-ui;margin:0;padding:16px}}
+h1{{font-size:16px}}
+.legend{{font-size:13px;color:#aaa;margin-bottom:16px}}
+.row{{margin-bottom:24px}}
+.meta{{font-size:13px;margin-bottom:4px;color:#ccc}}
+.tag{{padding:2px 8px;border-radius:4px;font-size:12px;margin-left:8px}}
+.tag.win{{background:#27ae60}}
+.tag.miss{{background:#c0392b}}
+.tag.regress{{background:#8e44ad}}
+img{{max-width:100%;border:1px solid #333}}
+</style></head><body>
+<h1>Vérité terrain (vert) / ancien modèle (orange, {os.path.basename(old_dir)}) / nouveau modèle (bleu, {os.path.basename(new_dir)})</h1>
+<div class="legend">Événements {shown_from}-{shown_to} sur {total_events} (les plus récents d'abord)</div>
+{''.join(rows_html)}
+</body></html>"""
+    with open(os.path.join(out_dir, "index.html"), "w", encoding="utf-8") as f:
+        f.write(html)
 
 
 def run(old_dir: str, new_dir: str, sample_size: int, out_dir: str | None = None):

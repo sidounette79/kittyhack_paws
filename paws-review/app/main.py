@@ -404,6 +404,31 @@ def model_review_status():
     return read_model_review_state()
 
 
+# 20.10, Sid ("un bouton qui sort aussi la comparaison... un clic lance
+# les 10 derniers événements, puis ceux d'avant") - model_compare.py
+# tournait jusqu'ici à la demande dans un conteneur jetable (ultralytics/
+# torch volontairement hors de l'image) ; depuis l'ajout du scan GPU de
+# model_review.py, ces mêmes dépendances sont déjà dans l'image, donc ce
+# bouton peut tourner directement ici. Même dossier de modèles que la
+# revérification (MODELS_DIR, pas le /models en lecture seule que
+# model_compare.py suppose en usage CLI) - ancien/nouveau = les deux
+# modèles les plus récents, auto-sélectionnés.
+@app.post("/app-api/model-compare/recent")
+def model_compare_recent(payload: dict = Body(...)):
+    from app.model_compare import run_recent_events
+    from app.model_review import MODELS_DIR
+
+    offset = int(payload.get("offset") or 0)
+    limit = int(payload.get("limit") or 10)
+    dirs = list_model_dirs()
+    if len(dirs) < 2:
+        raise HTTPException(409, f"Seulement {len(dirs)} modèle(s) disponible(s), 2 nécessaires")
+    new_dir = os.path.join(MODELS_DIR, dirs[0])
+    old_dir = os.path.join(MODELS_DIR, dirs[1])
+    result = run_recent_events(old_dir, new_dir, offset, limit)
+    return result
+
+
 @app.get("/app-api/model-review/queue")
 def model_review_queue(limit: int = 200):
     with get_conn() as conn:
