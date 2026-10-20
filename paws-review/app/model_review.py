@@ -58,9 +58,16 @@ def _wait_for_detection_idle(cancel_check=None) -> bool:
     active, pour toujours lui céder le GPU partagé. Retourne False si annulé
     pendant l'attente, True dès que c'est sûr de continuer (y compris quand
     KITTYHACK_API_URL n'est pas configuré, ou que l'appel échoue - ne jamais
-    bloquer indéfiniment le scan sur un statut manquant/cassé)."""
+    bloquer indéfiniment le scan sur un statut manquant/cassé).
+
+    20.10, Sid ("la pause effective sur passage de chat n'a jamais été
+    prouvée par les logs") - log.info au moment où une pause réelle
+    commence et quand elle se termine (avec sa durée), pour avoir une
+    preuve noir sur blanc que le garde-fou se déclenche vraiment, pas
+    juste confiance aveugle dans le code."""
     if not KITTYHACK_API_URL:
         return True
+    pause_started_at = None
     while True:
         try:
             r = requests.get(
@@ -74,7 +81,15 @@ def _wait_for_detection_idle(cancel_check=None) -> bool:
             log.debug("detection/status indisponible, on ne bloque pas : %s", e)
             return True
         if not busy:
+            if pause_started_at is not None:
+                log.info(
+                    "Boucle live redevenue idle - reprise du scan après %.1fs de pause.",
+                    time.time() - pause_started_at,
+                )
             return True
+        if pause_started_at is None:
+            pause_started_at = time.time()
+            log.info("Boucle live occupée (passage réel) - scan mis en pause pour lui céder le GPU.")
         if cancel_check is not None and cancel_check():
             return False
         time.sleep(_DETECTION_POLL_INTERVAL_S)
@@ -300,6 +315,25 @@ def run_model_review(model_version: str, num_captures: int = 200, cancel_event=N
                 continue  # accord - rien à faire, rien à flaguer
 
             prey_involved = old_label == "Prey" or new_label == "Prey"
+
+            # 20.10, Sid (cas réel ce soir : vérité terrain "Boubou",
+            # nouveau modèle dit "Pookie" - en fait DEUX chats différents
+            # réellement présents sur la même capture) - _dominant_label ne
+            # choisit qu'UN représentant par côté (Prey d'abord, sinon la
+            # meilleure confiance), donc sur une image à plusieurs chats
+            # l'ancien et le nouveau peuvent légitimement mettre en avant
+            # chacun un individu différent sans qu'aucun des deux ait tort.
+            # Si le choix du nouveau modèle correspond à un AUTRE chat déjà
+            # présent en vérité terrain, ce n'est pas un vrai désaccord -
+            # jamais appliqué quand Prey est impliqué (même prudence que
+            # partout ailleurs : une proie ne doit jamais être rendue
+            # silencieuse par ce genre de filtre).
+            if not prey_involved:
+                old_labels_present = {canonicalize(b.get("label")) for b in old_boxes} - {None}
+                if new_label in old_labels_present:
+                    auto_resolved += 1
+                    continue
+
             if row["cat_source"] == "rfid" and not prey_involved:
                 # Vérité terrain RFID plus fiable qu'une inférence fraîche -
                 # désaccord ignoré en silence, jamais écrit, jamais flagué.

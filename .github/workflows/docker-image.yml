@@ -17,6 +17,13 @@ on:
       - "requirements.txt"
       - "requirements_remote.txt"
       - "**.py"
+      # 20.10, Sid ("se redéclenche inutilement à chaque changement dans
+      # paws-review/") - "**.py" matchait aussi les .py de paws-review/,
+      # qui a son propre workflow dédié (paws-review-image.yml) - négation
+      # après le pattern positif (l'ordre compte, le dernier qui matche
+      # gagne), même dépôt mais jamais besoin de reconstruire l'un pour un
+      # changement dans l'autre.
+      - "!paws-review/**"
       - ".github/workflows/docker-image.yml"
   workflow_dispatch: {}
 

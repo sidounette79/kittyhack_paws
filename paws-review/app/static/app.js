@@ -592,9 +592,23 @@ function renderCompareBar(state) {
   const hasMore = r.total_events > 0;
   bar.innerHTML = filterSelect + `
     <span class="export-msg">✓ ${r.total_shown} événement(s) accumulé(s) dans la galerie${r.class_filter ? ` (filtre : ${r.class_filter})` : ''}${hasMore ? `, ${r.total_events} restant(s)` : ', plus aucun restant'}</span>
-    <a href="${r.url}" target="_blank"><button>Ouvrir la galerie</button></a>
+    <a href="${r.url}" target="_blank" onclick="markCompareGalleryOpened()"><button>Ouvrir la galerie</button></a>
     ${hasMore ? `<button onclick="compareRecentMore()">${COMPARE_BATCH} événements précédents</button>` : ''}
     <button onclick="startCompareRecent()">Recommencer (nouvelle galerie)</button>`;
+}
+
+// 20.10, Sid ("je clique 4x sur 50... je reclique 4x sur 50 pour avoir les
+// 200 d'après dans une deuxième galerie mais ça me génère une galerie de
+// 400") - rien ne marquait la session comme "consommée" une fois la
+// galerie effectivement ouverte, donc chaque clic suivant continuait
+// d'accumuler indéfiniment. Ouvrir le lien marque la session terminée :
+// le prochain clic sur le bouton de lot repart sur une galerie neuve
+// (session_dir redevient null), sans perdre le fait que les événements
+// déjà montrés restent exclus pour de bon (model_compare_scanned, pas lié
+// à la galerie elle-même).
+function markCompareGalleryOpened() {
+  compareResult = null;
+  renderCompareBar();
 }
 
 function setCompareClassFilter(value) {

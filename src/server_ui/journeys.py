@@ -22,6 +22,7 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import pandas as pd
+import requests
 from faicons import icon_svg
 from shiny import reactive, render, ui
 
@@ -29,9 +30,34 @@ from src.baseconfig import CONFIG, set_language
 from src.database import CatsRepo, DatabaseCore
 from src.server_ui.event_modal import btn_show_event, show_event_server
 from src.helper import DateTimeUtil, EventType
-from src.labelstudio_api import upload_image_to_labelstudio_project
-from src.system import LabelStudioInstall
 from src.server_ui.context import SessionContext
+
+# 20.10, Sid ("comme on a supprimé Label Studio et qu'on fait tout par peer
+# review") - remplace l'ancien envoi vers Label Studio (service arrêté,
+# upload_image_to_labelstudio_project / LabelStudioInstall retirés) : le
+# bouton "envoyer" de Parcours dépose maintenant directement dans la file
+# d'ingestion manuelle de Paws Review (/app-api/manual-drop/upload, voir
+# app/main.py côté paws-review, repris par ingest_manual.py toutes les
+# 5min). Même hôte, même convention que le garde-fou GPU (src/api.py
+# detection/status) : IP LAN du host, pas 127.0.0.1 (conteneurs/projets
+# compose séparés) ni le domaine public (inutile, même machine).
+PAWS_REVIEW_URL = os.environ.get("PAWS_REVIEW_URL", "http://192.168.178.127:8082")
+PAWS_REVIEW_UPLOAD_TOKEN = os.environ.get("PAWS_REVIEW_UPLOAD_TOKEN", "")
+
+
+def _upload_to_paws_review(image_bytes: bytes, filename: str) -> bool:
+    try:
+        resp = requests.post(
+            f"{PAWS_REVIEW_URL}/app-api/manual-drop/upload",
+            files={"file": (filename, image_bytes, "image/jpeg")},
+            headers={"x-upload-token": PAWS_REVIEW_UPLOAD_TOKEN},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        return True
+    except Exception as e:
+        logging.warning(f"[JOURNEY] Paws Review upload failed: {e}")
+        return False
 
 _ = set_language(CONFIG["LANGUAGE"])
 
@@ -715,20 +741,11 @@ def register_journeys(input, output, session, ctx: SessionContext):
                 ui.notification_show(_("Capture deleted."), type="message", duration=3)
 
             elif action == "send":
-                project_id = CONFIG.get("LABELSTUDIO_PROJECT", "").strip()
-                api_token = CONFIG.get("LABELSTUDIO_API_TOKEN", "").strip()
-                if not project_id or not api_token:
+                if not PAWS_REVIEW_UPLOAD_TOKEN:
                     ui.notification_show(
-                        _(
-                            "Label Studio is not configured. Please set an API token and select a project in the settings."
-                        ),
+                        _("Paws Review upload token is not configured."),
                         type="warning",
                         duration=5,
-                    )
-                    return
-                if not LabelStudioInstall.get_labelstudio_status():
-                    ui.notification_show(
-                        _("Label Studio is not running."), type="warning", duration=5
                     )
                     return
                 if not os.path.exists(path):
@@ -740,30 +757,24 @@ def register_journeys(input, output, session, ctx: SessionContext):
                     ui.HTML(
                         '<div class="d-flex align-items-center gap-2">'
                         '<div class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></div>'
-                        f"<span>{_('Sending picture to Label Studio...')}</span>"
+                        f"<span>{_('Sending picture to Paws Review...')}</span>"
                         "</div>"
                     ),
                     id="journey_ls_upload_progress",
                     type="message",
                     duration=None,
                 )
-                success = await asyncio.to_thread(
-                    upload_image_to_labelstudio_project,
-                    project_id=int(project_id),
-                    image_bytes=img_bytes,
-                    filename=filename,
-                    token=api_token,
-                )
+                success = await asyncio.to_thread(_upload_to_paws_review, img_bytes, filename)
                 ui.notification_remove("journey_ls_upload_progress")
                 if success:
                     ui.notification_show(
-                        _("Picture sent to Label Studio successfully."),
+                        _("Picture sent to Paws Review successfully."),
                         type="message",
                         duration=3,
                     )
                 else:
                     ui.notification_show(
-                        _("Failed to send picture to Label Studio."),
+                        _("Failed to send picture to Paws Review."),
                         type="error",
                         duration=5,
                     )
