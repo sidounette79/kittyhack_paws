@@ -415,17 +415,26 @@ def model_review_status():
 # modèles les plus récents, auto-sélectionnés.
 @app.post("/app-api/model-compare/recent")
 def model_compare_recent(payload: dict = Body(...)):
-    from app.model_compare import run_recent_events
+    from app.model_compare import COMPARISONS_DIR, run_recent_events
     from app.model_review import MODELS_DIR
 
     offset = int(payload.get("offset") or 0)
     limit = int(payload.get("limit") or 10)
+    prey_only = bool(payload.get("prey_only"))
+    # session_dir : uniquement une valeur qu'on a nous-mêmes renvoyée sur un
+    # appel précédent (voir "out_dir" ci-dessous) - jamais un chemin arbitraire
+    # du client, d'où la vérification qu'il reste bien sous COMPARISONS_DIR.
+    session_dir = payload.get("session_dir")
+    if session_dir:
+        session_dir = os.path.join(COMPARISONS_DIR, os.path.basename(session_dir))
+        if not os.path.isdir(session_dir):
+            session_dir = None
     dirs = list_model_dirs()
     if len(dirs) < 2:
         raise HTTPException(409, f"Seulement {len(dirs)} modèle(s) disponible(s), 2 nécessaires")
     new_dir = os.path.join(MODELS_DIR, dirs[0])
     old_dir = os.path.join(MODELS_DIR, dirs[1])
-    result = run_recent_events(old_dir, new_dir, offset, limit)
+    result = run_recent_events(old_dir, new_dir, offset, limit, prey_only=prey_only, session_dir=session_dir)
     return result
 
 

@@ -150,7 +150,7 @@ def _predict_boxes(model, image_path: str) -> list[tuple[str, float, float, floa
     return out
 
 
-def _recent_event_groups(conn: sqlite3.Connection, offset: int, limit: int) -> tuple[list, int]:
+def _recent_event_groups(conn: sqlite3.Connection, offset: int, limit: int, prey_only: bool = False) -> tuple[list, int]:
     """20.10, Sid ("un bouton qui sort la comparaison... un clic lance les
     10 derniers événements, puis ceux d'avant") - un événement = un groupe
     de captures qui partagent le même block_id (un vrai passage), pas une
@@ -158,8 +158,17 @@ def _recent_event_groups(conn: sqlite3.Connection, offset: int, limit: int) -> t
     restent chacune leur propre événement. Un seul représentant par
     événement, choisi avec la même priorité Prey-d'abord que
     model_review._dominant_label - cohérent avec le reste de l'outil.
-    Retourne (lignes représentatives, nombre total d'événements) pour la
-    pagination par clic."""
+
+    prey_only (20.10, Sid "un filtre Prey... je vois direct le primordial")
+    - filtre AVANT pagination sur la vérité terrain ORIGINALE (effective_boxes,
+    pas les prédictions des modèles) : un événement est gardé si une de ses
+    captures contenait réellement une proie confirmée/corrigée. Coût : il
+    faut évaluer effective_boxes sur tous les groupes pour filtrer avant de
+    découper la page, pas seulement sur les 10 retenus - acceptable à cette
+    échelle (quelques centaines d'événements, pas d'inférence ici).
+
+    Retourne (lignes représentatives, nombre total d'événements PERTINENTS
+    pour ce filtre) pour la pagination par clic."""
     rows = conn.execute(
         """SELECT id, block_id, original_path, detected_objects_json, created_at FROM captures
            WHERE review_status IN ('confirmed', 'corrected') AND original_path IS NOT NULL
@@ -172,6 +181,17 @@ def _recent_event_groups(conn: sqlite3.Connection, offset: int, limit: int) -> t
         groups.setdefault(key, []).append(row)
 
     ordered_keys = sorted(groups, key=lambda k: max(r["created_at"] for r in groups[k]), reverse=True)
+
+    if prey_only:
+        kept_keys = []
+        for key in ordered_keys:
+            for row in groups[key]:
+                boxes = effective_boxes(conn, row["id"], row["detected_objects_json"])
+                if any(canonicalize(b.get("label")) == "Prey" for b in boxes):
+                    kept_keys.append(key)
+                    break
+        ordered_keys = kept_keys
+
     page_keys = ordered_keys[offset: offset + limit]
 
     reps = []
@@ -191,24 +211,45 @@ def _recent_event_groups(conn: sqlite3.Connection, offset: int, limit: int) -> t
     return reps, len(ordered_keys)
 
 
-def run_recent_events(old_dir: str, new_dir: str, offset: int, limit: int, out_dir: str | None = None) -> dict:
+def run_recent_events(
+    old_dir: str, new_dir: str, offset: int, limit: int,
+    prey_only: bool = False, session_dir: str | None = None,
+) -> dict:
     """Variante chronologique de run() : au lieu d'un échantillon aléatoire
     équilibré par classe, prend les N événements réels les plus récents
     (pagination par offset/limit, un clic = une page), vérité terrain
-    (vert) / ancien modèle (orange) / nouveau modèle (bleu) côte à côte."""
+    (vert) / ancien modèle (orange) / nouveau modèle (bleu) côte à côte.
+
+    20.10, Sid ("si je clique 3x avant d'aller sur la galerie, j'en vois
+    30 ?") - session_dir (reçu du frontend, c'est le out_dir renvoyé par
+    l'appel précédent) fait que chaque clic ACCUMULE dans la MÊME galerie
+    au lieu d'en recréer une nouvelle à chaque fois : le manifeste
+    _entries.json porte la liste complète vue jusqu'ici, fusionnée (sans
+    doublon par capture_id) et retriée avant de régénérer index.html en
+    entier. Sans session_dir (premier clic, ou "recommencer"), une
+    nouvelle galerie est créée."""
     from ultralytics import YOLO
 
     init_db()
     old_model = YOLO(os.path.join(old_dir, "model.pt"))
     new_model = YOLO(os.path.join(new_dir, "model.pt"))
 
-    ts = time.strftime("%Y%m%d_%H%M%S")
-    out_dir = out_dir or os.path.join(COMPARISONS_DIR, f"{ts}_recent_o{offset}")
+    if session_dir:
+        out_dir = session_dir
+    else:
+        ts = time.strftime("%Y%m%d_%H%M%S")
+        out_dir = os.path.join(COMPARISONS_DIR, f"{ts}_recent")
     os.makedirs(out_dir, exist_ok=True)
 
+    manifest_path = os.path.join(out_dir, "_entries.json")
+    existing_entries = []
+    if os.path.isfile(manifest_path):
+        with open(manifest_path) as f:
+            existing_entries = json.load(f)
+
     with get_conn() as conn:
-        rows, total_events = _recent_event_groups(conn, offset, limit)
-        gallery_entries = []
+        rows, total_events = _recent_event_groups(conn, offset, limit, prey_only)
+        new_entries = []
         for row in rows:
             if not os.path.isfile(row["original_path"]):
                 continue
@@ -230,7 +271,7 @@ def run_recent_events(old_dir: str, new_dir: str, offset: int, limit: int, out_d
 
             fname = f"capture_{row['id']}.jpg"
             combined.save(os.path.join(out_dir, fname), quality=90)
-            gallery_entries.append({
+            new_entries.append({
                 "filename": fname,
                 "capture_id": row["id"],
                 "created_at": row["created_at"],
@@ -239,15 +280,22 @@ def run_recent_events(old_dir: str, new_dir: str, offset: int, limit: int, out_d
                 "new_classes": sorted({canonicalize(l) for l, *_ in new_pred} - {None}),
             })
 
-    _write_recent_gallery_html(out_dir, gallery_entries, old_dir, new_dir, offset, total_events)
+    seen_ids = {e["capture_id"] for e in existing_entries}
+    merged = existing_entries + [e for e in new_entries if e["capture_id"] not in seen_ids]
+    merged.sort(key=lambda e: e["created_at"], reverse=True)
+
+    with open(manifest_path, "w") as f:
+        json.dump(merged, f)
+
+    _write_recent_gallery_html(out_dir, merged, old_dir, new_dir, total_events, prey_only)
     url = "/model-comparisons/" + os.path.basename(out_dir) + "/index.html"
     return {
-        "out_dir": out_dir, "url": url, "count": len(gallery_entries),
-        "total_events": total_events, "offset": offset, "limit": limit,
+        "out_dir": out_dir, "url": url, "count": len(new_entries), "total_shown": len(merged),
+        "total_events": total_events, "offset": offset, "limit": limit, "prey_only": prey_only,
     }
 
 
-def _write_recent_gallery_html(out_dir: str, entries: list[dict], old_dir: str, new_dir: str, offset: int, total_events: int):
+def _write_recent_gallery_html(out_dir: str, entries: list[dict], old_dir: str, new_dir: str, total_events: int, prey_only: bool):
     rows_html = []
     for e in entries:
         tags = []
@@ -265,8 +313,7 @@ def _write_recent_gallery_html(out_dir: str, entries: list[dict], old_dir: str, 
           <img src="{e['filename']}" loading="lazy">
         </div>""")
 
-    shown_from = offset + 1
-    shown_to = offset + len(entries)
+    filter_note = " - filtré sur les événements avec une proie réelle (vérité terrain)" if prey_only else ""
     html = f"""<!doctype html><html><head><meta charset="utf-8">
 <title>Comparaison événements récents</title>
 <style>
@@ -282,7 +329,7 @@ h1{{font-size:16px}}
 img{{max-width:100%;border:1px solid #333}}
 </style></head><body>
 <h1>Vérité terrain (vert) / ancien modèle (orange, {os.path.basename(old_dir)}) / nouveau modèle (bleu, {os.path.basename(new_dir)})</h1>
-<div class="legend">Événements {shown_from}-{shown_to} sur {total_events} (les plus récents d'abord)</div>
+<div class="legend">{len(entries)} événements affichés sur {total_events} au total{filter_note} (les plus récents d'abord)</div>
 {''.join(rows_html)}
 </body></html>"""
     with open(os.path.join(out_dir, "index.html"), "w", encoding="utf-8") as f:

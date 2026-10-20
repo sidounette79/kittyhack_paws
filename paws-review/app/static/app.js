@@ -553,24 +553,42 @@ async function resolveMrCurrent(action) {
 let compareOffset = 0;
 let compareResult = null;
 let compareLoading = false;
+// 20.10, Sid ("un filtre Prey... je vois direct le primordial") - sur la
+// vérité terrain originale, pas les prédictions. Changer ce filtre
+// recommence une session neuve (voir toggleComparePreyOnly) : mélanger
+// des événements filtrés et non filtrés dans une même galerie accumulée
+// n'aurait pas de sens.
+let comparePreyOnly = false;
 
 function renderCompareBar() {
   const bar = document.getElementById('compare-bar');
+  const preyCheckbox = `
+    <label class="hint" style="display:inline-flex;align-items:center;gap:4px;margin-right:8px">
+      <input type="checkbox" ${comparePreyOnly ? 'checked' : ''} onchange="toggleComparePreyOnly(this.checked)">
+      Proies uniquement
+    </label>`;
   if (compareLoading) {
-    bar.innerHTML = `<span class="export-msg">Comparaison en cours (ancien/nouveau modèle, ça peut prendre quelques secondes)...</span>`;
+    bar.innerHTML = preyCheckbox + `<span class="export-msg">Comparaison en cours (ancien/nouveau modèle, ça peut prendre quelques secondes)...</span>`;
     return;
   }
   if (!compareResult) {
-    bar.innerHTML = `<button onclick="startCompareRecent()">Comparer les 10 derniers événements</button>`;
+    bar.innerHTML = preyCheckbox + `<button onclick="startCompareRecent()">Comparer les 10 derniers événements</button>`;
     return;
   }
   const r = compareResult;
-  const hasMore = r.offset + r.count < r.total_events;
-  bar.innerHTML = `
-    <span class="export-msg">✓ ${r.count} événement(s) comparé(s) (${r.offset + 1}-${r.offset + r.count} sur ${r.total_events})</span>
+  const hasMore = (compareOffset + 10) < r.total_events;
+  bar.innerHTML = preyCheckbox + `
+    <span class="export-msg">✓ ${r.total_shown} événement(s) accumulé(s) dans la galerie (${r.total_events} au total${r.prey_only ? ' avec proie' : ''})</span>
     <a href="${r.url}" target="_blank"><button>Ouvrir la galerie</button></a>
     ${hasMore ? `<button onclick="compareRecentMore()">10 événements précédents</button>` : ''}
     <button onclick="startCompareRecent()">Recommencer depuis les plus récents</button>`;
+}
+
+function toggleComparePreyOnly(checked) {
+  comparePreyOnly = checked;
+  compareResult = null; // nouveau filtre = nouvelle galerie, pas de mélange
+  compareOffset = 0;
+  renderCompareBar();
 }
 
 async function startCompareRecent() {
@@ -582,7 +600,7 @@ async function startCompareRecent() {
     compareResult = await api('/app-api/model-compare/recent', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ offset: compareOffset, limit: 10 }),
+      body: JSON.stringify({ offset: compareOffset, limit: 10, prey_only: comparePreyOnly }),
     });
   } catch (e) {
     compareResult = null;
@@ -599,7 +617,10 @@ async function compareRecentMore() {
     compareResult = await api('/app-api/model-compare/recent', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ offset: compareOffset, limit: 10 }),
+      body: JSON.stringify({
+        offset: compareOffset, limit: 10, prey_only: comparePreyOnly,
+        session_dir: compareResult ? compareResult.out_dir.split('/').pop() : null,
+      }),
     });
   } catch (e) {
     compareOffset -= 10; // échec - on ne perd pas la position déjà atteinte
