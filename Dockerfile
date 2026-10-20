@@ -64,7 +64,18 @@ WORKDIR /app
 # changes); the actual application source is bind-mounted at runtime (see compose.yaml)
 # so day-to-day code edits (dual-camera work) don't need an image rebuild.
 COPY requirements.txt requirements_remote.txt ./
-RUN pip install --no-cache-dir -r requirements.txt -r requirements_remote.txt
+# 20.10, Sid ("je veux le GPU partout où c'est possible") - real failure
+# tonight after the driver fix finally worked: the built image (CUDA-
+# flavored torch pulled in by plain `torch==2.6.0`, nvidia-cublas-cu12/
+# nvidia-cudnn-cu12/etc - entirely unused, this host has no NVIDIA GPU,
+# the real GPU work here is Intel iGPU via OpenVINO) came out over
+# GitHub's 2GB release-asset limit. --extra-index-url here only, not in
+# requirements.txt itself - that file is shared with the native ARM
+# kittyflap build (different platform, different wheels needed there;
+# this index is x86_64-only and simply won't match on ARM, so it's inert
+# there rather than risky).
+RUN pip install --no-cache-dir --extra-index-url https://download.pytorch.org/whl/cpu \
+    -r requirements.txt -r requirements_remote.txt
 
 ENV KITTYHACK_MODE=remote
 ENV KITTYHACK_INSTALL_BASE=/data
