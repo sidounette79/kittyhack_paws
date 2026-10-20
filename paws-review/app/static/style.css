@@ -1,0 +1,291 @@
+:root {
+  color-scheme: dark;
+  --bg: #121316;
+  --surface: #1b1d22;
+  --surface-2: #23262c;
+  --border: #2e323a;
+  --text: #eceef1;
+  --text-dim: #9aa0ab;
+  --accent: #e8a33d;
+  --danger: #e35d5d;
+  --good: #5fb87a;
+  --cat-pookie: #e8a33d;
+  --cat-patoune: #5b9bd5;
+  --cat-nala: #4fb8a0;
+  --cat-boubou: #b185db;
+  --cat-unknown: #6b7280;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  height: 100%;
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Manrope', system-ui, sans-serif;
+}
+
+.mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
+
+body { padding-inline: 16px; padding-bottom: 24px; }
+
+header {
+  position: sticky;
+  top: env(safe-area-inset-top, 0px);
+  background: var(--bg);
+  padding-block: 12px 8px;
+  border-bottom: 1px solid var(--border);
+  z-index: 10;
+}
+header h1 { font-size: 16px; margin: 0 0 8px; }
+
+.tabs {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+}
+.tab {
+  flex: 0 0 auto;
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-dim);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.tab.active { color: var(--bg); border-color: transparent; }
+.tab .count { font-family: 'JetBrains Mono', monospace; opacity: .8; margin-left: 4px; }
+
+.stats-bar {
+  display: flex;
+  gap: 14px;
+  font-size: 12px;
+  color: var(--text-dim);
+  padding-block: 8px;
+  font-family: 'JetBrains Mono', monospace;
+}
+.stats-bar b { color: var(--text); }
+
+/* 18.10, Sid : bouton/notification d'export pour l'entraînement. Vide
+   (et donc invisible, pas de border/padding) tant qu'aucun état n'a été
+   rendu - renderExportBar() remplit toujours au moins un bouton. */
+.export-bar:empty { display: none; }
+.export-bar {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  font-size: 13px; padding: 10px 0;
+}
+.export-bar button, .export-bar .btn-download {
+  background: var(--accent); color: #241704; border: none; border-radius: 8px;
+  padding: 8px 14px; font-size: 13px; font-weight: 700; text-decoration: none;
+}
+.export-msg { color: var(--text-dim); }
+.export-error { color: var(--danger); }
+
+.queue-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+  gap: 6px;
+  padding-block: 12px;
+}
+.queue-tile {
+  position: relative;
+  aspect-ratio: 1;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 2px solid var(--border);
+  cursor: pointer;
+  background: var(--surface-2);
+}
+.queue-tile img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.queue-tile.prey { border-color: var(--danger); }
+.queue-tile.disagreement { border-color: var(--accent); }
+.queue-tile.selected { border-color: var(--accent); box-shadow: inset 0 0 0 2px var(--accent); }
+.queue-tile .flag {
+  position: absolute; top: 4px; left: 4px;
+  font-size: 10px; padding: 1px 5px; border-radius: 4px;
+  background: rgba(0,0,0,.6); color: #fff; font-family: 'JetBrains Mono', monospace;
+}
+/* 18.10, Sid : case à cocher pour la sélection multiple (bulk-bar) -
+   agrandie au-delà de son rendu visuel pour rester facile à toucher. */
+.tile-check {
+  position: absolute; top: 2px; right: 2px;
+  width: 22px; height: 22px; margin: 0;
+  accent-color: var(--accent);
+}
+
+.bulk-bar {
+  position: sticky; top: 0; z-index: 5;
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  background: var(--surface); border: 1px solid var(--accent); border-radius: 10px;
+  padding: 10px 12px; margin-bottom: 10px;
+}
+.bulk-bar button {
+  background: var(--surface-2); color: var(--text); border: 1px solid var(--border);
+  border-radius: 8px; padding: 8px 12px; font-size: 13px; font-weight: 600;
+}
+.bulk-bar #bulk-count { font-weight: 700; margin-right: auto; }
+
+.empty-state {
+  text-align: center;
+  padding-block: 40px;
+  color: var(--text-dim);
+  font-size: 14px;
+}
+
+/* --- Vue détail --- */
+#detail {
+  position: fixed; inset: 0;
+  background: var(--bg);
+  z-index: 20;
+  display: none;
+  flex-direction: column;
+  padding: 16px;
+  padding-top: calc(16px + env(safe-area-inset-top, 0px));
+  padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+  overflow-y: auto;
+}
+#detail.open { display: flex; }
+
+.detail-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+}
+.detail-top button {
+  background: var(--surface-2); color: var(--text); border: 1px solid var(--border);
+  border-radius: 8px; padding: 8px 12px; font-size: 14px;
+}
+
+.image-wrap {
+  position: relative;
+  width: 100%;
+  max-width: 520px;
+  margin: 0 auto;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  touch-action: none;
+  user-select: none;
+}
+.image-wrap img { width: 100%; display: block; }
+
+.box {
+  position: absolute;
+  border: 2px solid var(--good);
+  background: rgba(95,184,122,.12);
+}
+.box.unconfirmed { border-color: var(--accent); background: rgba(232,163,61,.12); }
+.box.prey { border-color: var(--danger); background: rgba(227,93,93,.15); }
+.box.drawing { border-color: #fff; border-style: dashed; }
+.box .box-label {
+  position: absolute; top: -20px; left: -2px;
+  font-size: 11px; padding: 1px 5px; border-radius: 4px;
+  background: rgba(0,0,0,.7); color: #fff; white-space: nowrap;
+  font-family: 'JetBrains Mono', monospace;
+}
+.box { cursor: move; touch-action: none; }
+/* 18.10, Sid : poignée de redimensionnement coin bas-droit - voir
+   wireBoxResize() dans app.js. Agrandie au-delà de son rendu visuel
+   (::after) pour rester facile à attraper au doigt sans recouvrir le
+   coin de la boîte. */
+.box-handle {
+  position: absolute; right: -8px; bottom: -8px;
+  width: 20px; height: 20px;
+  cursor: nwse-resize; touch-action: none;
+}
+.box-handle::after {
+  content: ''; position: absolute; right: 6px; bottom: 6px;
+  width: 10px; height: 10px; border-radius: 3px;
+  background: var(--accent); border: 2px solid var(--bg);
+}
+
+/* 18.10, Sid ("j'ai 2x Patoune, je sais pas laquelle je supprime") -
+   badge numéroté partagé entre une boîte sur l'image et sa ligne dans la
+   liste en dessous (même object_index, même couleur) - voir indexColor()
+   dans app.js. Positionné au coin haut-droit sur l'image (le label est
+   déjà au coin haut-gauche, la poignée en bas-droite) ; en ligne, simple
+   pastille devant le menu déroulant. */
+.index-badge {
+  width: 20px; height: 20px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 11px; font-weight: 700; color: #0a0a0a;
+  font-family: 'JetBrains Mono', monospace; flex-shrink: 0;
+}
+.box .index-badge { position: absolute; top: -20px; right: -2px; }
+
+.hint {
+  text-align: center; color: var(--text-dim); font-size: 12px; margin-top: 8px;
+}
+
+/* 18.10, Sid : menu déroulant posé sur la boîte tracée à la main, au lieu
+   du prompt() texte libre - voir pickLabel() dans app.js. */
+.label-picker {
+  position: absolute;
+  z-index: 10;
+  background: var(--surface); color: var(--text); border: 1px solid var(--accent);
+  border-radius: 6px; padding: 6px 8px; font-size: 13px;
+  box-shadow: 0 2px 10px rgba(0,0,0,.5);
+}
+
+.box-list {
+  margin-top: 16px;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.box-row {
+  display: flex; align-items: center; gap: 8px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+  padding: 8px 10px;
+}
+.box-row select {
+  flex: 1; background: var(--surface-2); color: var(--text); border: 1px solid var(--border);
+  border-radius: 6px; padding: 6px 8px; font-size: 13px;
+}
+.box-row .prob { font-size: 11px; color: var(--text-dim); font-family: 'JetBrains Mono', monospace; }
+.box-row button { background: var(--surface-2); color: var(--text-dim); border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; font-size: 12px; }
+
+.actions {
+  position: sticky; bottom: 0;
+  display: flex; flex-direction: column; gap: 8px;
+  padding-top: 16px; margin-top: auto;
+  background: linear-gradient(transparent, var(--bg) 30%);
+}
+.actions-row { display: flex; gap: 8px; }
+.actions button {
+  flex: 1; padding: 12px; border-radius: 10px; border: none; font-size: 14px; font-weight: 700;
+}
+.btn-confirm { background: var(--good); color: #0a1a10; }
+.btn-reject { background: var(--surface-2); color: var(--text); border: 1px solid var(--border) !important; }
+/* 18.10, Sid : navigation pure (sans rien soumettre) - plus discrète que
+   Écarter/Valider, pas une décision. */
+.btn-nav { background: transparent; color: var(--text-dim); border: 1px solid var(--border) !important; font-weight: 600; }
+.actions button:disabled { opacity: .5; }
+.btn-add-box { background: var(--accent); color: #241704; }
+
+/* 20.10, Sid ("le module de revérification") - même structure que #detail
+   mais lecture seule (comparaison ancien/nouveau, jamais d'édition de
+   boîte ici) - couleurs alignées sur model_compare.py (orange = ancien,
+   bleu = nouveau). */
+#mr-detail {
+  position: fixed; inset: 0;
+  background: var(--bg);
+  z-index: 20;
+  display: none;
+  flex-direction: column;
+  padding: 16px;
+  padding-top: calc(16px + env(safe-area-inset-top, 0px));
+  padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+  overflow-y: auto;
+}
+#mr-detail.open { display: flex; }
+.box.mr-old { border-color: var(--accent); background: rgba(232,163,61,.12); }
+.box.mr-new { border-color: #5b9bd5; background: rgba(91,155,213,.15); }
+.mr-legend { display: flex; gap: 10px; margin-top: 10px; font-size: 12px; font-family: 'JetBrains Mono', monospace; }
+.mr-chip { padding: 4px 10px; border-radius: 6px; }
+.mr-chip.mr-old { background: rgba(232,163,61,.2); color: var(--accent); }
+.mr-chip.mr-new { background: rgba(91,155,213,.2); color: #5b9bd5; }

@@ -1,0 +1,33 @@
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+Pillow==10.4.0
+ImageHash==4.3.1
+python-multipart==0.0.9
+requests==2.32.3
+
+# 20.10, Sid ("le module de revérification... je contrôle tout au même
+# endroit") - app/model_review.py a besoin d'ultralytics pour tourner
+# l'inférence localement (pas de machine louée pour ça, contrairement à
+# l'entraînement). Volontairement sorti du choix initial "jamais dans
+# l'image de base" (voir model_compare.py/event_compare.py, toujours
+# installés à la volée) : cette fois le besoin est un vrai bouton courant
+# dans l'app, pas un script ponctuel - le vrai coût (image plus lourde) est
+# accepté en échange. --extra-index-url pour éviter les roues CUDA,
+# inutilement énormes ici (ni CUDA ni CPU torch ne font le vrai travail
+# une fois sur GPU Intel - seul OpenVINO sait lui parler - mais torch
+# reste une dépendance d'ultralytics quoi qu'il arrive).
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch
+torchvision
+ultralytics
+opencv-python-headless
+
+# 20.10, Sid ("tout ce qu'il faut pour soulager le CPU, carte blanche") -
+# paws-review a maintenant le même accès à l'iGPU Intel que kittyhack-
+# remote (privileged + /dev/dri, voir compose.yaml). Version pinnée
+# volontairement en dessous du minimum qu'Ultralytics réclame normalement
+# (>=2024.0.0) : re-vécu cette nuit sur ce même matériel (Celeron J4125) -
+# 2023.3.0 est la SEULE version qui voit l'iGPU, 2024+ retombe en CPU. Ne
+# JAMAIS laisser pip la mettre à jour sans retester le GPU derrière - voir
+# YOLO_AUTOINSTALL=False dans compose.yaml.
+openvino==2023.3.0

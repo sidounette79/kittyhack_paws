@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Paws Review</title>
+<meta name="theme-color" content="#121316">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Paws Review">
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/icon-192.png">
+<link rel="apple-touch-icon" href="/icon-192.png">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;800&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<header>
+  <h1>Paws Review</h1>
+  <div class="tabs" id="tabs"></div>
+  <div class="stats-bar" id="stats"></div>
+  <!-- 18.10, Sid ("un bouton qui lance l'export des photos validées...
+       une notif qui dit que le zip est prêt") - état persistant (survit
+       au rechargement de la page, voir pollExportStatus() dans app.js),
+       pas juste un toast éphémère. -->
+  <div class="export-bar" id="export-bar"></div>
+  <!-- 19.10, Sid ("crée le bouton et on teste ensuite en live") - même
+       pattern persistant que export-bar (pollTrainStatus() dans app.js). -->
+  <div class="export-bar" id="train-bar"></div>
+  <!-- 20.10, Sid ("le module de revérification... je contrôle tout au
+       même endroit") - visible uniquement sous l'onglet Revérification,
+       voir renderModelReviewBar() dans app.js. -->
+  <div class="export-bar" id="model-review-bar" hidden></div>
+</header>
+
+<div id="queue" class="queue-grid"></div>
+<div id="empty" class="empty-state" hidden>Rien à réviser ici pour l'instant.</div>
+
+<!-- 18.10, Sid ("en sélectionner plusieurs d'un coup pour les écarter en
+     une fois") - barre flottante, visible seulement si au moins une
+     vignette est cochée. -->
+<!-- 20.10, Sid ("sur le même modèle... sélectionner plusieurs pour les
+     écarter en une fois") - contenu reconstruit par renderBulkBar() selon
+     l'onglet actif (actions différentes en mode Revérification). -->
+<div id="bulk-bar" class="bulk-bar" hidden></div>
+
+<div id="detail">
+  <div class="detail-top">
+    <button onclick="closeDetail()">&larr; retour</button>
+    <span class="mono" id="detail-meta" style="font-size:12px;color:var(--text-dim)"></span>
+  </div>
+  <div class="image-wrap" id="image-wrap">
+    <img id="detail-img" src="" alt="">
+  </div>
+  <div class="hint">Touche une boîte pour corriger son étiquette. Trace un rectangle sur une zone vide pour ajouter une détection manquée.</div>
+  <div class="box-list" id="box-list"></div>
+  <div class="actions">
+    <div class="actions-row">
+      <button class="btn-reject" onclick="submitReview('rejected')">Écarter</button>
+      <button class="btn-confirm" onclick="submitReview('confirmed')">Valider</button>
+    </div>
+    <!-- 18.10, Sid ("écarter une série à la suite, et quand y'en a une à
+         retraiter je fais suivant sans la traiter") - navigue dans la
+         queue chargée sans rien soumettre au serveur, contrairement à
+         Écarter/Valider. -->
+    <div class="actions-row">
+      <button class="btn-nav" onclick="navigateDetail(-1)">&larr; Précédent</button>
+      <button class="btn-nav" onclick="navigateDetail(1)">Suivant &rarr;</button>
+    </div>
+  </div>
+</div>
+
+<!-- 20.10, Sid ("le module de revérification") - vue dédiée plutôt que de
+     réutiliser #detail (son éditeur de boîtes glisser/déposer est bâti
+     pour corriger la vérité terrain, pas pour comparer ancien/nouveau) :
+     ici juste deux boîtes en lecture seule (ancien en orange, nouveau en
+     bleu, mêmes couleurs que model_compare.py) et deux décisions. -->
+<div id="mr-detail">
+  <div class="detail-top">
+    <button onclick="closeMrDetail()">&larr; retour</button>
+    <span class="mono" id="mr-detail-meta" style="font-size:12px;color:var(--text-dim)"></span>
+  </div>
+  <div class="image-wrap" id="mr-image-wrap">
+    <img id="mr-detail-img" src="" alt="">
+  </div>
+  <div class="mr-legend">
+    <span class="mr-chip mr-old" id="mr-old-chip"></span>
+    <span class="mr-chip mr-new" id="mr-new-chip"></span>
+  </div>
+  <div class="actions">
+    <div class="actions-row">
+      <button class="btn-reject" onclick="resolveMrCurrent('dismiss')">Garder l'ancien</button>
+      <button class="btn-confirm" onclick="resolveMrCurrent('apply')">Appliquer le nouveau</button>
+    </div>
+    <div class="actions-row">
+      <button class="btn-nav" onclick="navigateMrDetail(-1)">&larr; Précédent</button>
+      <button class="btn-nav" onclick="navigateMrDetail(1)">Suivant &rarr;</button>
+    </div>
+  </div>
+</div>
+
+<script src="/app.js"></script>
+</body>
+</html>

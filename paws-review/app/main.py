@@ -1,0 +1,470 @@
+import json
+import os
+import time
+import zipfile
+
+from fastapi import Body, FastAPI, File, Header, HTTPException, UploadFile
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+from starlette.types import Scope
+
+from app.boxes import effective_boxes
+from app.cat_labels import recompute_cat_labels
+from app.catalog_db import get_conn, init_db
+from app.config import RETENTION_DAYS, STORAGE_ROOT
+from app.export_training import EXPORTS_DIR, read_state, start_export_async
+from app.model_review import list_model_dirs, resolve_queue_items, start_model_review_async
+from app.model_review import read_state as read_model_review_state
+from app.train_vastai import read_state as read_training_state
+from app.train_vastai import start_training_async
+
+app = FastAPI(title="Paws Review")
+
+init_db()
+
+
+@app.get("/app-api/cats")
+def list_cats():
+    # Une photo compte pour CHAQUE chat qu'elle contient réellement (boîtes
+    # effectives, voir cat_labels.py) - pas seulement celui identifié par RFID,
+    # pour ne pas perdre une double détection avec deux chats différents.
+    with get_conn() as conn:
+        rows = conn.execute(
+            """SELECT ccl.cat_name AS name, COUNT(*) AS total,
+                      SUM(c.review_status = 'pending') AS pending
+               FROM capture_cat_labels ccl
+               JOIN captures c ON c.id = ccl.capture_id
+               GROUP BY ccl.cat_name
+               ORDER BY ccl.cat_name"""
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+@app.get("/app-api/queue")
+def review_queue(
+    cat_name: str | None = None, source: str | None = None,
+    status_group: str | None = None, prey_only: bool = False, limit: int = 100,
+):
+    query = """SELECT c.* FROM captures c"""
+    params: list = []
+    if cat_name is not None:
+        query += """ JOIN capture_cat_labels ccl
+                        ON ccl.capture_id = c.id AND ccl.cat_name = ?"""
+        params.append(cat_name)
+    # 18.10, Sid ("un onglet où je vois les validées et les écartées, au
+    # cas où je merde... il me faut deux onglets pas un") - filet de
+    # sécurité, deux listes séparées plutôt qu'un seul "déjà revues" -
+    # vérifier ses rejets et vérifier ses validations sont deux
+    # questions différentes. Triées par date de revue la plus récente
+    # (ce qu'elle vient de faire en premier), pas par date de capture.
+    # 18.10, Sid ("fais un archives oui") - une capture exportée (validée
+    # ou écartée) disparaît de "Validées"/"Écartées" (voir leurs
+    # commentaires) mais reste accessible ici si besoin de rouvrir/
+    # corriger après coup, plutôt que de devenir invisible partout.
+    if status_group == "validated":
+        query += " WHERE c.review_status IN ('confirmed', 'corrected') AND c.exported_at IS NULL"
+    elif status_group == "rejected":
+        query += " WHERE c.review_status = 'rejected' AND c.exported_at IS NULL"
+    elif status_group == "archived":
+        query += " WHERE c.exported_at IS NOT NULL"
+    else:
+        query += " WHERE c.review_status = 'pending'"
+    # 18.10, Sid : onglet dédié aux ~4800 captures importées depuis
+    # LabelStudio (voir import_labelstudio.py) - à trier avant le futur
+    # export vers le nouveau conteneur d'entraînement.
+    if source is not None:
+        query += " AND c.source = ?"
+        params.append(source)
+    # 18.10, Sid ("plus logique d'avoir un onglet avec les potentielles
+    # proies") - is_prey_candidate était déjà utilisé pour trier en
+    # priorité DANS chaque onglet, mais rien ne permettait de ne voir QUE
+    # ça, toutes identités/provenances confondues - le cas le plus rare et
+    # le plus critique à réviser.
+    if prey_only:
+        query += " AND c.is_prey_candidate = 1"
+    # 18.10 : LIMIT ? doit être ajouté dans TOUS les cas, pas seulement le
+    # tri par défaut - un bug introduit en ajoutant les tris spécifiques
+    # ci-dessus faisait planter "Validées"/"Écartées"/"Archivées" en 500
+    # (params.append(limit) tournait quand même, sans "?" correspondant
+    # dans la requête, confirmé en testant "Archivées" juste après coup).
+    if status_group == "archived":
+        query += " ORDER BY c.exported_at DESC"
+    elif status_group:
+        query += " ORDER BY c.reviewed_at DESC"
+    else:
+        query += """ ORDER BY c.is_prey_candidate DESC, c.model_disagreement DESC,
+                          c.low_cat_confidence ASC, c.created_at ASC"""
+    query += " LIMIT ?"
+    params.append(limit)
+    with get_conn() as conn:
+        rows = conn.execute(query, params).fetchall()
+        return [dict(r) for r in rows]
+
+
+@app.get("/app-api/captures/{capture_id}")
+def get_capture(capture_id: int):
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM captures WHERE id = ?", (capture_id,)).fetchone()
+        if row is None:
+            raise HTTPException(404, "capture introuvable")
+        capture = dict(row)
+        capture["boxes"] = effective_boxes(conn, capture_id, capture["detected_objects_json"])
+        del capture["detected_objects_json"]
+        return capture
+
+
+@app.post("/app-api/captures/{capture_id}/boxes")
+def upsert_box(capture_id: int, box: dict = Body(...)):
+    required = {"object_index", "label", "x", "y", "width", "height"}
+    if not required.issubset(box):
+        raise HTTPException(400, f"champs manquants, requis : {sorted(required)}")
+    source = box.get("source", "manual")
+    with get_conn() as conn:
+        exists = conn.execute(
+            "SELECT 1 FROM captures WHERE id = ?", (capture_id,)
+        ).fetchone()
+        if not exists:
+            raise HTTPException(404, "capture introuvable")
+        conn.execute(
+            """INSERT INTO box_annotations
+                   (capture_id, object_index, source, label, x, y, width, height, confirmed, ignored)
+               VALUES (?,?,?,?,?,?,?,?,1,0)
+               ON CONFLICT(capture_id, object_index) DO UPDATE SET
+                   label = excluded.label, x = excluded.x, y = excluded.y,
+                   width = excluded.width, height = excluded.height,
+                   source = excluded.source, confirmed = 1, ignored = 0""",
+            (capture_id, box["object_index"], source, box["label"],
+             box["x"], box["y"], box["width"], box["height"]),
+        )
+        recompute_cat_labels(conn, capture_id)
+    return {"ok": True}
+
+
+@app.delete("/app-api/captures/{capture_id}/boxes/{object_index}")
+def discard_box(capture_id: int, object_index: int):
+    """Écarte une boîte (double détection, fausse détection) - elle ne sera
+    plus jamais montrée ni exportée pour l'entraînement. Une boîte ajoutée à la
+    main (jamais proposée par le modèle) est carrément effacée ; une boîte du
+    modèle est marquée ignorée (sa proposition d'origine, dans
+    detected_objects_json, reste immuable - voir catalog_db.py)."""
+    with get_conn() as conn:
+        existing = conn.execute(
+            "SELECT source FROM box_annotations WHERE capture_id = ? AND object_index = ?",
+            (capture_id, object_index),
+        ).fetchone()
+        if existing and existing["source"] == "manual":
+            conn.execute(
+                "DELETE FROM box_annotations WHERE capture_id = ? AND object_index = ?",
+                (capture_id, object_index),
+            )
+        else:
+            capture = conn.execute(
+                "SELECT detected_objects_json FROM captures WHERE id = ?", (capture_id,)
+            ).fetchone()
+            if capture is None:
+                raise HTTPException(404, "capture introuvable")
+            model_boxes = json.loads(capture["detected_objects_json"] or "[]")
+            if object_index >= len(model_boxes):
+                raise HTTPException(404, "boîte introuvable")
+            mb = model_boxes[object_index]
+            conn.execute(
+                """INSERT INTO box_annotations
+                       (capture_id, object_index, source, label, x, y, width, height, confirmed, ignored)
+                   VALUES (?,?,'model',?,?,?,?,?,1,1)
+                   ON CONFLICT(capture_id, object_index) DO UPDATE SET ignored = 1""",
+                (capture_id, object_index, mb["object_name"], mb["x"], mb["y"], mb["width"], mb["height"]),
+            )
+        recompute_cat_labels(conn, capture_id)
+    return {"ok": True}
+
+
+@app.get("/app-api/captures/{capture_id}/image")
+def get_image(capture_id: int, size: str = "thumbnail"):
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT original_path, thumbnail_path FROM captures WHERE id = ?", (capture_id,)
+        ).fetchone()
+    if row is None:
+        raise HTTPException(404, "capture introuvable")
+    path = row["original_path"] if size == "original" else row["thumbnail_path"]
+    if not os.path.isfile(path):
+        raise HTTPException(404, "fichier image manquant sur disque")
+    return FileResponse(path)
+
+
+@app.post("/app-api/captures/{capture_id}/review")
+def review_capture(capture_id: int, status: str, corrected_label: str | None = None):
+    if status not in ("confirmed", "corrected", "rejected"):
+        raise HTTPException(400, "status invalide")
+    with get_conn() as conn:
+        result = conn.execute(
+            """UPDATE captures SET review_status = ?, corrected_label = ?,
+                                    reviewed_at = datetime('now')
+               WHERE id = ?""",
+            (status, corrected_label, capture_id),
+        )
+        if result.rowcount == 0:
+            raise HTTPException(404, "capture introuvable")
+    return {"ok": True}
+
+
+@app.post("/app-api/captures/bulk-review")
+def bulk_review_captures(payload: dict = Body(...)):
+    # 18.10, Sid ("un moyen d'en sélectionner plusieurs d'un coup pour les
+    # écarter en une fois ?") - la grille Reolink en particulier contient
+    # beaucoup de cases vides côte à côte (captures périodiques sans rien
+    # dessus) ; un seul round-trip pour tout le lot plutôt qu'un par photo.
+    ids = payload.get("ids") or []
+    status = payload.get("status")
+    if status not in ("confirmed", "corrected", "rejected"):
+        raise HTTPException(400, "status invalide")
+    if not ids:
+        return {"ok": True, "count": 0}
+    with get_conn() as conn:
+        conn.executemany(
+            "UPDATE captures SET review_status = ?, reviewed_at = datetime('now') WHERE id = ?",
+            [(status, cid) for cid in ids],
+        )
+    return {"ok": True, "count": len(ids)}
+
+
+@app.get("/app-api/stats")
+def stats():
+    with get_conn() as conn:
+        row = conn.execute(
+            """SELECT
+                   COUNT(*) AS total,
+                   SUM(review_status = 'pending') AS pending,
+                   SUM(is_prey_candidate) AS prey_candidates,
+                   SUM(model_disagreement) AS model_disagreements,
+                   SUM(review_status = 'skipped_dedup') AS deduped,
+                   SUM(review_status = 'pending' AND source = 'labelstudio') AS labelstudio_pending,
+                   SUM(review_status = 'pending' AND source = 'reolink') AS reolink_pending,
+                   SUM(review_status = 'pending' AND source = 'manual') AS manual_pending,
+                   SUM(review_status = 'pending' AND is_prey_candidate = 1) AS prey_pending,
+                   SUM(review_status IN ('confirmed', 'corrected') AND exported_at IS NULL) AS validated_total,
+                   SUM(review_status = 'rejected' AND exported_at IS NULL) AS rejected_total,
+                   SUM(exported_at IS NOT NULL) AS archived_total
+               FROM captures"""
+        ).fetchone()
+        return {**dict(row), "retention_days": RETENTION_DAYS}
+
+
+@app.post("/app-api/export/start")
+def export_start():
+    # 18.10, Sid ("un bouton qui lance l'export... je choisis à quel
+    # moment je lance un zip") - en arrière-plan (voir export_training.py
+    # pour pourquoi jamais en synchrone), cette route rend immédiatement.
+    start_export_async()
+    return {"ok": True}
+
+
+@app.get("/app-api/export/status")
+def export_status():
+    return read_state()
+
+
+@app.get("/app-api/export/download")
+def export_download():
+    state = read_state()
+    filename = state.get("zip_filename")
+    if not filename:
+        raise HTTPException(404, "Aucun export prêt")
+    path = os.path.join(EXPORTS_DIR, filename)
+    if not os.path.isfile(path):
+        raise HTTPException(404, "Fichier d'export introuvable sur disque")
+    return FileResponse(path, filename=filename, media_type="application/zip")
+
+
+# 19.10, Sid ("vas-y lance le truc") - l'instance vast.ai (éphémère, moins
+# fiable qu'un hôte à moi) pousse ici le zip du modèle entraîné une fois
+# prêt. Jeton partagé simple en protection - cet endpoint écrit
+# directement dans le dossier de modèles de Kittyhack (voir
+# KITTYHACK_MODELS_DIR), pas question de le laisser ouvert à qui trouve
+# l'URL.
+TRAINED_MODELS_DIR = os.path.join(STORAGE_ROOT, "trained_models")
+KITTYHACK_MODELS_DIR = os.environ.get("KITTYHACK_MODELS_DIR", "/kittyhack_models")
+MODEL_UPLOAD_TOKEN = os.environ.get("MODEL_UPLOAD_TOKEN", "")
+TRAINING_DATA_PATH = os.path.join(STORAGE_ROOT, "vastai_training_data.zip")
+REQUIRED_MODEL_FILES = [
+    "model.pt", "labels.txt", "info.json",
+    "best_ncnn_model/model.ncnn.bin", "best_ncnn_model/model.ncnn.param",
+]
+
+
+@app.get("/app-api/model/training-data")
+def model_training_data(x_upload_token: str = Header(default="")):
+    # 19.10 : même jeton que l'upload - l'instance louée télécharge ses
+    # données d'entraînement par là (voir train_vastai.py).
+    if MODEL_UPLOAD_TOKEN and x_upload_token != MODEL_UPLOAD_TOKEN:
+        raise HTTPException(403, "jeton invalide")
+    if not os.path.isfile(TRAINING_DATA_PATH):
+        raise HTTPException(404, "Pas de zip d'entraînement prêt")
+    return FileResponse(TRAINING_DATA_PATH, filename="training_data.zip", media_type="application/zip")
+
+
+@app.post("/app-api/model/upload")
+async def model_upload(file: UploadFile = File(...), x_upload_token: str = Header(default="")):
+    if MODEL_UPLOAD_TOKEN and x_upload_token != MODEL_UPLOAD_TOKEN:
+        raise HTTPException(403, "jeton invalide")
+
+    os.makedirs(TRAINED_MODELS_DIR, exist_ok=True)
+    ts = time.strftime("%Y%m%d_%H%M%S")
+    zip_path = os.path.join(TRAINED_MODELS_DIR, f"model_{ts}.zip")
+    with open(zip_path, "wb") as f:
+        f.write(await file.read())
+
+    try:
+        with zipfile.ZipFile(zip_path) as zf:
+            names = zf.namelist()
+            missing = [r for r in REQUIRED_MODEL_FILES if r not in names]
+            if missing:
+                raise HTTPException(400, f"fichiers manquants dans le zip : {missing}")
+            os.makedirs(KITTYHACK_MODELS_DIR, exist_ok=True)
+            target_dir = os.path.join(KITTYHACK_MODELS_DIR, ts)
+            os.makedirs(target_dir, exist_ok=True)
+            zf.extractall(target_dir)
+    except zipfile.BadZipFile:
+        raise HTTPException(400, "zip invalide")
+
+    return {"ok": True, "installed_as": ts}
+
+
+# 20.10, Sid ("je peux toujours faire une modif en live sur la vidéo...
+# qu'elle parte dans paws review") - LabelStudio (décommissionné ce soir)
+# était la destination de l'action "send" de la page Parcours (Kittyhack),
+# maintenant cassée (service arrêté). Même jeton que /model/upload (même
+# frontière de confiance - Kittyhack poussant quelque chose chez lui).
+# Dépose simplement dans MANUAL_DROP_DIR, repris tel quel par le cycle de
+# 5 min existant (paws-review-ingest, app/ingest_manual.py) - aucun
+# nouveau montage docker, aucune nouvelle logique d'ingestion.
+MANUAL_DROP_DIR = os.path.join(STORAGE_ROOT, "manual_drop")
+
+
+@app.post("/app-api/manual-drop/upload")
+async def manual_drop_upload(file: UploadFile = File(...), x_upload_token: str = Header(default="")):
+    if MODEL_UPLOAD_TOKEN and x_upload_token != MODEL_UPLOAD_TOKEN:
+        raise HTTPException(403, "jeton invalide")
+    os.makedirs(MANUAL_DROP_DIR, exist_ok=True)
+    safe_name = os.path.basename(file.filename or "")
+    if not safe_name or not safe_name.lower().endswith((".jpg", ".jpeg", ".png")):
+        raise HTTPException(400, "nom de fichier invalide, extension .jpg/.jpeg/.png requise")
+    ts = time.strftime("%Y%m%d_%H%M%S")
+    dst = os.path.join(MANUAL_DROP_DIR, f"journeys_{ts}_{safe_name}")
+    with open(dst, "wb") as f:
+        f.write(await file.read())
+    return {"ok": True}
+
+
+# 19.10, Sid ("crée le bouton et on teste ensuite en live") - la clé API
+# vast.ai vit ici en variable d'env (même frontière de confiance que
+# MODEL_UPLOAD_TOKEN, même conteneur) plutôt que saisie à la main à chaque
+# clic - jamais déposée sur la machine louée (voir train_vastai.py), jamais
+# renvoyée au frontend.
+VAST_API_KEY = os.environ.get("VAST_API_KEY", "")
+
+
+@app.post("/app-api/train/start")
+def train_start():
+    if not VAST_API_KEY:
+        raise HTTPException(500, "VAST_API_KEY non configurée côté serveur")
+    started = start_training_async(VAST_API_KEY)
+    if not started:
+        raise HTTPException(409, "Un entraînement est déjà en cours")
+    return {"ok": True}
+
+
+@app.get("/app-api/train/status")
+def train_status():
+    return read_training_state()
+
+
+# 20.10, Sid ("le module de revérification... je contrôle tout au même
+# endroit") - portage de src/model/retroactive_review.py côté Kittyhack,
+# voir app/model_review.py pour la logique complète (filtrage RFID inclus).
+@app.get("/app-api/model-review/models")
+def model_review_models():
+    return list_model_dirs()
+
+
+@app.post("/app-api/model-review/start")
+def model_review_start(payload: dict = Body(...)):
+    model_version = payload.get("model_version")
+    if not model_version:
+        raise HTTPException(400, "model_version requis")
+    num_captures = int(payload.get("num_captures") or 200)
+    started = start_model_review_async(model_version, num_captures)
+    if not started:
+        raise HTTPException(409, "Une revérification est déjà en cours")
+    return {"ok": True}
+
+
+@app.get("/app-api/model-review/status")
+def model_review_status():
+    return read_model_review_state()
+
+
+@app.get("/app-api/model-review/queue")
+def model_review_queue(limit: int = 200):
+    with get_conn() as conn:
+        rows = conn.execute(
+            """SELECT q.*, c.thumbnail_path, c.cat_name, c.cat_source
+               FROM model_review_queue q
+               JOIN captures c ON c.id = q.capture_id
+               WHERE q.status = 'pending'
+               ORDER BY q.created_at ASC
+               LIMIT ?""",
+            (limit,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+@app.post("/app-api/model-review/resolve")
+def model_review_resolve(payload: dict = Body(...)):
+    ids = payload.get("ids") or []
+    action = payload.get("action")
+    if not ids:
+        return {"ok": True, "count": 0}
+    count = resolve_queue_items(ids, action)
+    return {"ok": True, "count": count}
+
+
+class NoCacheStaticFiles(StaticFiles):
+    # 18.10, Sid ("ça affiche toujours pookie au lieu de proie" - a fix
+    # already live server-side, confirmed via curl, just not what her
+    # browser was showing): StaticFiles sets no Cache-Control at all by
+    # default, so browsers fall back to their own heuristic caching and can
+    # keep serving a stale app.js for a long-lived tab. This is a tool that
+    # gets edited live while she's actively using it - force revalidation
+    # on every request (still cheap: ETag/Last-Modified means an unchanged
+    # file is just a 304, not a full re-download) instead of relying on a
+    # hard refresh every time something changes.
+    async def get_response(self, path: str, scope: Scope):
+        response = await super().get_response(path, scope)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
+# 19.10 : résultats de app/model_compare.py (lancé à la demande, voir sa
+# docstring) - juste une galerie HTML statique pré-générée par le script,
+# rien à exposer côté API, servie telle quelle pour consultation.
+MODEL_COMPARISONS_DIR = os.path.join(STORAGE_ROOT, "model_comparisons")
+os.makedirs(MODEL_COMPARISONS_DIR, exist_ok=True)
+app.mount(
+    "/model-comparisons",
+    NoCacheStaticFiles(directory=MODEL_COMPARISONS_DIR, html=True),
+    name="model_comparisons",
+)
+
+# 20.10 : même principe pour app/event_compare.py (galerie HTML statique
+# ciblée sur des événements réels précis, pas un échantillon aléatoire) -
+# jamais monté jusqu'ici, donc jamais consultable que par accès disque direct.
+EVENT_COMPARISONS_DIR = os.path.join(STORAGE_ROOT, "event_comparisons")
+os.makedirs(EVENT_COMPARISONS_DIR, exist_ok=True)
+app.mount(
+    "/event-comparisons",
+    NoCacheStaticFiles(directory=EVENT_COMPARISONS_DIR, html=True),
+    name="event_comparisons",
+)
+
+app.mount("/", NoCacheStaticFiles(directory="app/static", html=True), name="static")
