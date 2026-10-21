@@ -450,6 +450,44 @@ def _get_or_create_token() -> str:
     return raw
 
 
+# 21.10, Sid ("on teste ça" - partager le GPU entre KH et watchdog, sans
+# garde-fou, et mesurer si la contention reste acceptable) - avant ça,
+# watchdog chargeait TOUJOURS l'export NCNN du modèle actif quand il
+# existait (ci-dessous), un format CPU-only (pas de device= qui y change
+# quoi que ce soit, NCNN n'a aucun backend Intel GPU) - ce n'était donc pas
+# juste "pas de device=intel:gpu passé", le format de modèle chargé lui-
+# même excluait le GPU. Même bascule OpenVINO que src/model/model_handler.py
+# (kittyhack-remote) et model_review.py (Paws Review) - export à la demande
+# vers model_openvino_model/, chargé sans device= explicite (AUTO
+# sélectionne le GPU tout seul, voir le commentaire déjà existant côté
+# model_handler.py sur ce point).
+def _uses_openvino_backend() -> bool:
+    device = str(CONFIG.get("INFERENCE_DEVICE", "cpu") or "cpu").strip().lower()
+    return device in {"gpu", "intel:gpu", "intel:cpu", "intel:npu"}
+
+
+def _ensure_openvino_export(model_dir: str) -> str | None:
+    """Export model_dir/model.pt to OpenVINO IR on demand; returns the IR
+    directory path, or None if no model.pt is available to export from."""
+    ov_dir = os.path.join(model_dir, "model_openvino_model")
+    if os.path.isdir(ov_dir) and any(f.endswith(".xml") for f in os.listdir(ov_dir)):
+        return ov_dir
+    pt_path = os.path.join(model_dir, "model.pt")
+    if not os.path.exists(pt_path):
+        return None
+    try:
+        from ultralytics import YOLO as _YOLO
+        log.info("OpenVINO export missing for '%s'. Exporting now...", pt_path)
+        export_model = _YOLO(pt_path, task="detect", verbose=False)
+        export_result = export_model.export(format="openvino")
+        result_dir = export_result if isinstance(export_result, str) and export_result.strip() else ov_dir
+        if os.path.isdir(result_dir) and any(f.endswith(".xml") for f in os.listdir(result_dir)):
+            return result_dir
+    except Exception as e:
+        log.warning("OpenVINO export failed for '%s': %s", pt_path, e)
+    return None
+
+
 def _resolve_active_model() -> tuple[str, str, int]:
     """Return ("yolo", path, imgsz) for the custom model currently active in
     Kittyhack's own Configuration (Manage models), or ("tflite", path, 0) for
@@ -470,6 +508,11 @@ def _resolve_active_model() -> tuple[str, str, int]:
             model_dir = YoloModel.get_model_path(unique_id)
             if model_dir:
                 imgsz = YoloModel.get_model_image_size(unique_id) or 320
+                if _uses_openvino_backend():
+                    ov_dir = _ensure_openvino_export(model_dir)
+                    if ov_dir:
+                        return "yolo", ov_dir, imgsz
+                    log.warning("GPU inference requested but OpenVINO export unavailable for '%s', falling back to NCNN/CPU.", unique_id)
                 ncnn_dir = os.path.join(model_dir, "best_ncnn_model")
                 if os.path.isdir(ncnn_dir):
                     return "yolo", ncnn_dir, imgsz
@@ -736,52 +779,73 @@ def _save_frame_snapshot(cam_name: str, frame: np.ndarray) -> None:
 
 
 # 11.10 (round 2), Sid ("meilleures photos avec moins de charge CPU et
-# plus de photos aussi" / "regarde pour le GPU et mets en place ce dont on
-# a parlé"): OLDMEDIA's Intel iGPU (J4125, Quick Sync - confirmed present
-# via /dev/dri, passed through in compose.yaml) can hardware-decode
-# chatiere's full main stream (2560x1920, real IR/night-vision quality)
-# for a fraction of the CPU cost of software-decoding it - verified live:
-# a real ffmpeg -hwaccel vaapi decode+downscale of the actual camera
-# produced a clean 640x480 frame with a lower measured CPU peak than the
-# equivalent software path. `scale_vaapi` itself failed ("VAProfile not
-# supported" - this driver/GPU combo has no VPP entrypoint), so the
-# downscale after hwdownload is a cheap CPU resize of an already-decoded
-# frame instead - decode (the expensive part) is still fully offloaded to
-# the GPU. Falls back to the existing software _01_sub cv2.VideoCapture
-# path (CAMERAS["chatiere"]) if the hardware decoder fails to start or
-# produces no frame within HW_DECODE_STARTUP_TIMEOUT_S - never silently
-# stuck without a working camera.
-CHATIERE_MAIN_RTSP_URL = "rtsp://admin:Dorothee79%25@192.168.178.121:554/h264Preview_01_main"
+# plus de photos aussi"): OLDMEDIA's Intel iGPU (J4125, Quick Sync -
+# confirmed present via /dev/dri, passed through in compose.yaml) peut
+# décoder chatière en matériel - tenté une première fois ce soir-là via
+# ffmpeg -hwaccel vaapi sur le flux COMPLET (2560x1920), désactivé le
+# lendemain (voir plus bas) : désync RTSP ("CSeq 6 expected, 0 received")
+# qui faisait planter ffmpeg toutes les 12-17s, cause racine jamais
+# élucidée malgré 3 pistes ffmpeg épuisées (19.10).
+#
+# 21.10, Sid ("on va l'ouvrir maintenant" / "c'est en forgeant..."):
+# reprise avec GStreamer plutôt que ffmpeg - testé en isolé d'abord
+# (hors service réel) avant de toucher ce fichier :
+#   - `vaapih264dec` (l'ancien plugin gstreamer-vaapi) plante
+#     instantanément (SIGSEGV) dans CE conteneur précis, reproduit 2x.
+#   - `vah264dec` (le plugin VA plus récent) tourne proprement : 2m25
+#     sans la moindre erreur ni désync CSeq, arrêt propre sur EOS (la
+#     caméra qui ferme la session, pas un plantage) - bien au-delà des
+#     12-17s où ffmpeg s'effondrait.
+#   - Le flux COMPLET (2560x1920) reste inexploitable même en matériel :
+#     ~0.5 image/s mesuré (décodage+réduction logicielle après, trop
+#     lourd). Le flux `_01_sub` (déjà utilisé aujourd'hui, 640x360) donne
+#     ~8.7 images/s avec exactement le même pipeline matériel - largement
+#     au-dessus du rythme actuel. D'où HW_DECODE_WIDTH/HEIGHT alignés sur
+#     cette résolution native, pas de redimensionnement nécessaire.
+# Toujours un filet de sécurité : repli sur le chemin logiciel existant
+# (cv2.VideoCapture sur self.rtsp_url) si le décodeur matériel ne
+# démarre pas ou ne produit rien dans HW_DECODE_STARTUP_TIMEOUT_S -
+# jamais bloqué sans caméra fonctionnelle.
 HW_DECODE_DEVICE = "/dev/dri/renderD128"
 HW_DECODE_WIDTH = 640
-HW_DECODE_HEIGHT = 480
+HW_DECODE_HEIGHT = 360
 HW_DECODE_FRAME_BYTES = HW_DECODE_WIDTH * HW_DECODE_HEIGHT * 3
 HW_DECODE_STARTUP_TIMEOUT_S = 8.0
+# gst-launch-1.0 a besoin d'un XDG_RUNTIME_DIR valide pour vah264dec
+# (sinon "XDG_RUNTIME_DIR is invalid or not set" au démarrage) - /tmp
+# est déjà monté noexec sur certains hôtes, mais ce dossier n'a besoin
+# que d'être accessible en écriture, pas exécutable.
+_GST_XDG_RUNTIME_DIR = "/tmp/xdg-runtime"
 
 
 def _start_hw_decoder(rtsp_url: str) -> subprocess.Popen | None:
-    """Starts a persistent ffmpeg process that hardware-decodes (VAAPI) the
-    given RTSP stream and writes raw BGR24 frames of HW_DECODE_WIDTH x
-    HW_DECODE_HEIGHT to stdout, back to back, one after another - read one
-    at a time with _read_hw_frame(). Returns None if ffmpeg itself could
-    not even be started (binary missing, bad args) - a stream that opens
-    but fails later is instead caught by _read_hw_frame() returning None."""
+    """Starts a persistent GStreamer process that hardware-decodes (VAAPI,
+    via vah264dec) the given RTSP stream and writes raw BGR24 frames of
+    HW_DECODE_WIDTH x HW_DECODE_HEIGHT to stdout, back to back, one after
+    another - read one at a time with _read_hw_frame(). Returns None if
+    gst-launch-1.0 itself could not even be started (binary missing, bad
+    args) - a stream that opens but fails later is instead caught by
+    _read_hw_frame() returning None."""
     cmd = [
-        "ffmpeg",
-        "-loglevel", "error",
-        "-hwaccel", "vaapi",
-        "-hwaccel_device", HW_DECODE_DEVICE,
-        "-hwaccel_output_format", "vaapi",
-        "-rtsp_transport", "tcp",
-        "-i", rtsp_url,
-        "-vf", f"hwdownload,format=nv12,scale={HW_DECODE_WIDTH}:{HW_DECODE_HEIGHT}",
-        "-f", "rawvideo",
-        "-pix_fmt", "bgr24",
-        "-an",
-        "pipe:1",
+        "gst-launch-1.0", "-q",
+        "rtspsrc", f"location={rtsp_url}", "latency=200", "protocols=tcp",
+        "!", "queue",
+        "!", "rtph264depay",
+        "!", "h264parse",
+        "!", "queue",
+        "!", "vah264dec",
+        "!", "queue",
+        "!", "videoconvert",
+        "!", "video/x-raw,format=BGR",
+        "!", "queue",
+        "!", "fdsink", "fd=1", "sync=false",
     ]
     try:
-        return subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=HW_DECODE_FRAME_BYTES * 2)
+        os.makedirs(_GST_XDG_RUNTIME_DIR, exist_ok=True)
+        os.chmod(_GST_XDG_RUNTIME_DIR, 0o700)
+        env = os.environ.copy()
+        env["XDG_RUNTIME_DIR"] = _GST_XDG_RUNTIME_DIR
+        return subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=HW_DECODE_FRAME_BYTES * 2, env=env)
     except Exception as e:
         log.warning("Could not start hardware decoder: %s", e)
         return None
@@ -933,46 +997,22 @@ class CameraWatcher(threading.Thread):
             self._stop.wait(self._base_poll_interval)
 
     def _run_continuous(self):
-        # 11.10 (round 2): chatiere tries hardware (VAAPI) decode of the
-        # camera's full main stream first - real IR/night-vision quality,
-        # cheap on CPU since the GPU does the decode (see the module-level
-        # comment above _start_hw_decoder). Any other camera, or chatiere
-        # if the hardware path doesn't come up cleanly, uses the existing
-        # software cv2.VideoCapture path on self.rtsp_url (the sub stream)
-        # unchanged - never silently stuck without a working camera.
-        # 11.10, DISABLED pending fix: confirmed live in production (not
-        # just in isolated testing) that the hw path reconnects every
-        # ~12-17s ("Stream opened (hardware decode)" / "Lost frame,
-        # reconnecting" in a tight loop) - real stderr from ffmpeg shows
-        # "CSeq 6 expected, 0 received" (RTSP session desync) followed by
-        # "Failed to sync surface" / "Failed to download frame: -5" (VAAPI
-        # decode error), which kills the whole ffmpeg process. The
-        # reconnect loop below absorbs the crash without ever getting
-        # stuck, but reconnecting this often is real instability, not
-        # occasional noise - falling back to the known-stable sub-stream
-        # path until the RTSP/VAAPI error is root-caused and fixed.
-        #
-        # 19.10, Sid ("on explore toutes les options") - les 3 pistes "pas
-        # encore essayées" ci-dessus ont toutes été testées EN ISOLÉ
-        # (docker exec, ffmpeg à la main, jamais le service réel touché) et
-        # ont toutes échoué :
-        #   - "-reconnect 1/-reconnect_at_eof/-reconnect_streamed" : rejeté
-        #     net par ffmpeg ("Option reconnect not found") - c'est une
-        #     option du protocole http(s), pas rtsp, inapplicable ici.
-        #   - "-err_detect ignore_err" : accepté, mais le crash (CSeq
-        #     désync -> VAAPI surface sync failure) reproduit à l'identique.
-        #   - "-rtsp_transport udp" : encore pire (des centaines de paquets
-        #     RTP perdus en rafale) et plante quand même de la même façon.
-        # Conclusion : pas un réglage ffmpeg à ajuster, le désync RTSP
-        # lui-même (cause racine jamais élucidée) doit être réglé en amont
-        # pour que VAAPI redevienne viable ici. Décodage logiciel reste le
-        # chemin stable.
-        use_hw = False and self.cam_name == "chatiere"
+        # 21.10, Sid ("on va l'ouvrir maintenant") - chatière tente le
+        # décodage matériel (VAAPI via GStreamer/vah264dec, voir le
+        # commentaire au-dessus de _start_hw_decoder pour l'historique
+        # complet : ffmpeg abandonné pour désync RTSP jamais élucidé,
+        # GStreamer confirmé stable en isolé le même soir) sur le MÊME
+        # flux que le chemin logiciel (self.rtsp_url, le sub-stream
+        # 640x360 - le flux complet reste trop lourd même en matériel).
+        # Toute autre caméra, ou chatière si le matériel ne démarre pas
+        # proprement, utilise le chemin logiciel cv2.VideoCapture
+        # existant, inchangé - jamais bloqué sans caméra fonctionnelle.
+        use_hw = self.cam_name == "chatiere"
         while not self._stop.is_set():
             hw_proc = None
             cap = None
             if use_hw:
-                hw_proc = _start_hw_decoder(CHATIERE_MAIN_RTSP_URL)
+                hw_proc = _start_hw_decoder(self.rtsp_url)
                 if hw_proc is not None:
                     deadline = time.monotonic() + HW_DECODE_STARTUP_TIMEOUT_S
                     hw_ok = False
