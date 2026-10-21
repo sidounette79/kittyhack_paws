@@ -895,22 +895,34 @@ def _start_hw_decoder(rtsp_url: str) -> subprocess.Popen | None:
         # Seul CE sous-processus voit la version récente ; le process
         # Python principal (OpenVINO) garde la version système 22.3.0.
         env["LD_LIBRARY_PATH"] = _GST_PRIVATE_GMM_DIR + os.pathsep + env.get("LD_LIBRARY_PATH", "")
-        return subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=HW_DECODE_FRAME_BYTES * 2, env=env)
+        # 21.10, Sid (retard résiduel qui continuait de grossir lentement
+        # même après l'ajout du drain ci-dessous) : bufsize non nul créait
+        # un BufferedReader Python qui pré-charge des données dans son
+        # propre tampon userspace dès qu'il en a l'occasion - invisible à
+        # select() (qui ne voit que l'état du pipe au niveau noyau). Le
+        # drain basé sur select() ratait donc systématiquement tout ce qui
+        # était déjà pré-chargé côté Python, laissant une petite part de
+        # retard s'accumuler en continu. bufsize=0 (non bufferisé) : chaque
+        # read() correspond à un seul appel système, donc select() reflète
+        # fidèlement ce qu'il reste réellement à lire - _read_one_hw_frame
+        # gère déjà les lectures partielles (boucle while + select par
+        # morceau), donc rien d'autre à changer.
+        return subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=0, env=env)
     except Exception as e:
         log.warning("Could not start hardware decoder: %s", e)
         return None
 
 
-def _read_hw_frame(proc: subprocess.Popen, timeout_s: float = 5.0) -> np.ndarray | None:
-    """Reads exactly one BGR24 frame from the decoder's stdout pipe.
-    Returns None on EOF/short read (process died or stream ended) OR if no
-    data arrives within timeout_s - a plain blocking read() here could hang
-    the whole camera thread forever if ffmpeg wedges without closing the
-    pipe, which select() with a timeout avoids (11.10, Sid: "il faut bien
-    evidemment que toutes ces operations ne nuisent jamais a la boucle de
-    detection et au pilotage des aimants" - this runs in the separate
-    watchdog container, never the magnet-control one, but a hung thread is
-    bad practice regardless of which process it's in)."""
+def _read_one_hw_frame(proc: subprocess.Popen, timeout_s: float) -> np.ndarray | None:
+    """Reads exactly one BGR24 frame from the decoder's stdout pipe, no
+    draining. Returns None on EOF/short read (process died or stream ended)
+    OR if no data arrives within timeout_s - a plain blocking read() here
+    could hang the whole camera thread forever if ffmpeg wedges without
+    closing the pipe, which select() with a timeout avoids (11.10, Sid: "il
+    faut bien evidemment que toutes ces operations ne nuisent jamais a la
+    boucle de detection et au pilotage des aimants" - this runs in the
+    separate watchdog container, never the magnet-control one, but a hung
+    thread is bad practice regardless of which process it's in)."""
     buf = bytearray()
     deadline = time.monotonic() + timeout_s
     try:
@@ -928,6 +940,42 @@ def _read_hw_frame(proc: subprocess.Popen, timeout_s: float = 5.0) -> np.ndarray
     except Exception:
         return None
     return np.frombuffer(bytes(buf), dtype=np.uint8).reshape((HW_DECODE_HEIGHT, HW_DECODE_WIDTH, 3))
+
+
+# 21.10, Sid ("Toujours en décalage d'heure avec l'autre reolink" - repère
+# live confirmé : l'horodatage Reolink incrusté dans la frame "chatiere"
+# accusait un retard croissant, +30s de retard pour 60s de temps réel écoulé
+# entre deux prélèvements) : même classe de bug que celui déjà corrigé le
+# 13.10 pour le chemin logiciel (voir _drain_stale_frames ci-dessus) - mais
+# jamais reporté ici. gst-launch-1.0 continue de décoder et d'écrire des
+# frames en arrière-plan même pendant que cette boucle est bloquée ailleurs
+# (poll HTTP Reolink, inférence YOLO en fenêtre boost) ; _read_one_hw_frame
+# seul renvoie alors la frame la plus ANCIENNE encore dans le pipe/les
+# buffers GStreamer (FIFO), pas la plus récente. Purement en lecture/copie
+# mémoire ici (déjà décodé côté sous-processus), donc pas de coût CPU de
+# décodage supplémentaire à vider le retard - contrairement à grab() côté
+# cv2 qui esquive le décodage, ici chaque frame vidée a déjà été payée par
+# gst-launch, on ne fait que la jeter.
+HW_DECODE_MAX_DRAIN = 30
+
+
+def _read_hw_frame(proc: subprocess.Popen, timeout_s: float = 5.0) -> np.ndarray | None:
+    """Reads one BGR24 frame, then drains any extra frames already sitting
+    in the pipe so the frame actually returned is the freshest one
+    available, not the oldest queued one. See HW_DECODE_MAX_DRAIN's comment
+    above for why this is needed."""
+    frame = _read_one_hw_frame(proc, timeout_s)
+    if frame is None:
+        return None
+    for _ in range(HW_DECODE_MAX_DRAIN):
+        ready, _, _ = select.select([proc.stdout], [], [], 0)
+        if not ready:
+            break
+        newer = _read_one_hw_frame(proc, timeout_s=0.5)
+        if newer is None:
+            break
+        frame = newer
+    return frame
 
 
 def _stop_hw_decoder(proc: subprocess.Popen | None) -> None:
