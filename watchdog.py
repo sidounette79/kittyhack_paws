@@ -838,7 +838,16 @@ HW_DECODE_DEVICE = "/dev/dri/renderD128"
 HW_DECODE_WIDTH = 640
 HW_DECODE_HEIGHT = 360
 HW_DECODE_FRAME_BYTES = HW_DECODE_WIDTH * HW_DECODE_HEIGHT * 3
-HW_DECODE_STARTUP_TIMEOUT_S = 8.0
+# 21.10: relevé de 8.0 à 20.0 - reproduit en isolé (hors process réel,
+# rien d'autre sur le GPU) : démarrage propre, 8.5 img/s. Dans le process
+# watchdog réel, le même appel échouait systématiquement dans les 8s -
+# seule différence identifiée : l'inférence OpenVINO de chatière tourne
+# déjà activement sur le même GPU à ce moment-là (contrairement au test
+# isolé), ce qui peut ralentir la négociation initiale VAAPI au-delà de
+# 8s sans empêcher le flux une fois établi. Pas encore reconfirmé en vrai
+# déploiement avec cette valeur - si ça échoue encore, le filet de
+# sécurité (repli logiciel) absorbe quand même, aucun risque.
+HW_DECODE_STARTUP_TIMEOUT_S = 20.0
 # gst-launch-1.0 a besoin d'un XDG_RUNTIME_DIR valide pour vah264dec
 # (sinon "XDG_RUNTIME_DIR is invalid or not set" au démarrage) - /tmp
 # est déjà monté noexec sur certains hôtes, mais ce dossier n'a besoin
