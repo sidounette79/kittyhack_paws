@@ -179,9 +179,20 @@ async function checkExportStatus() {
   }
 }
 
-async function startExport() {
-  await api('/app-api/export/start', { method: 'POST' });
+async function startExport(full = false) {
+  await api(`/app-api/export/start?full=${full ? '1' : '0'}`, { method: 'POST' });
   await checkExportStatus();
+}
+
+// 21.10, Sid ("je voulais... un lot tout neuf qui ne tient plus compte
+// des 1800 premières exportées qui ne sont pas équilibrées") - bouton
+// dédié dans l'onglet Tri 200+200, voir export_training.py (full=True)
+// pour ce que ça change réellement. Confirmation avant de lancer : à la
+// différence du bouton d'export habituel (petit delta), celui-ci
+// réembarque potentiellement des milliers d'images d'un coup.
+async function startFullExport() {
+  if (!confirm("Export complet : reprend TOUTES les captures encore confirmées/corrigées (anciennes du modèle actuel incluses), pas juste les nouvelles. Continuer ?")) return;
+  await startExport(true);
 }
 
 function renderExportBar(state) {
@@ -795,6 +806,9 @@ function renderTrainingBar() {
     </select>
     <label style="margin-left:8px"><input type="checkbox" ${trainingFilters.negative ? 'checked' : ''}
       onchange="trainingSetFilter('negative', this.checked)"> Négatif seulement (ni chat ni proie)</label>
+    <button style="margin-left:8px" onclick="startFullExport()" title="Reprend TOUT ce qui est encore confirmed/corrected, anciennes du modèle actuel comme nouvelles - ignore l'historique d'export, contrairement au bouton d'export habituel plus haut">
+      Export complet (ignore l'historique)
+    </button>
   `;
   let table = '';
   if (trainingCounts) {

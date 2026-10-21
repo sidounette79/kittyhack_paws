@@ -59,20 +59,38 @@ def read_state() -> dict:
         return {"status": "idle"}
 
 
-def start_export_async():
+def start_export_async(full: bool = False):
     """Lance l'export en arrière-plan si aucun n'est déjà en cours ;
     no-op sinon (évite deux exports concurrents qui se marcheraient
-    dessus sur les mêmes captures/exported_at)."""
+    dessus sur les mêmes captures/exported_at).
+
+    21.10, Sid ("je voulais que tu reset les 1800 déjà exportées... on
+    renvoie un lot tout neuf qui ne tient plus compte des 1800 premières
+    exportées qui ne sont pas équilibrées" / "Je veux celles qui sont
+    dans le zip, qui a servi au dernier entraînement" / "faut qu'elles
+    aillent dans cette page spéciale et pas mélangées avec le tout") :
+    elle veut rééquilibrer via l'onglet Tri 200+200 en gardant/écartant
+    à la fois les ~1732 déjà exportées (visibles là via le filtre "Dans
+    le modèle actuel", basé sur _current_model_capture_ids() - PAS sur
+    exported_at, donc déjà visibles sans rien resetter) et les nouvelles
+    jamais exportées - puis exporter TOUT ce qu'elle a gardé en un zip
+    complet. Resetter exported_at aurait aussi fait réapparaître ces
+    ~1732 dans "Validées"/réactivé des milliers de "Écartées" tamponnées
+    par erreur (même champ, partagé) - explicitement pas voulu ("pas
+    mélangées avec le tout"). `full=True` ignore simplement exported_at
+    à la sélection (prend tout review_status IN (confirmed,corrected),
+    qui exclut déjà tout ce qu'elle a Écarté dans ce tri) - zéro reset,
+    zéro effet de bord sur les autres onglets."""
     if not _lock.acquire(blocking=False):
         log.info("Export déjà en cours, requête ignorée")
         return
-    thread = threading.Thread(target=_run_export_locked, daemon=True)
+    thread = threading.Thread(target=_run_export_locked, args=(full,), daemon=True)
     thread.start()
 
 
-def _run_export_locked():
+def _run_export_locked(full: bool = False):
     try:
-        _run_export()
+        _run_export(full)
     except Exception as e:
         log.exception("Export échoué")
         _write_state({"status": "error", "message": str(e)})
@@ -80,19 +98,27 @@ def _run_export_locked():
         _lock.release()
 
 
-def _run_export():
+def _run_export(full: bool = False):
     started_at = datetime.now(timezone.utc).isoformat()
     _write_state({"status": "running", "started_at": started_at, "done": 0})
-    log.info("Export démarré")
+    log.info("Export démarré (%s)", "complet" if full else "incrémental")
 
     os.makedirs(EXPORTS_DIR, exist_ok=True)
     init_db()
 
+    # 21.10 : mode "complet" (voir start_export_async) - ignore
+    # exported_at, reprend TOUT ce qui est encore confirmed/corrected
+    # (donc déjà net de tout ce qui a été Écarté dans le tri), ancien
+    # modèle inclus.
+    select_sql = (
+        """SELECT id, original_path, detected_objects_json FROM captures
+           WHERE review_status IN ('confirmed', 'corrected')"""
+        if full else
+        """SELECT id, original_path, detected_objects_json FROM captures
+           WHERE review_status IN ('confirmed', 'corrected') AND exported_at IS NULL"""
+    )
     with get_conn() as conn:
-        rows = conn.execute(
-            """SELECT id, original_path, detected_objects_json FROM captures
-               WHERE review_status IN ('confirmed', 'corrected') AND exported_at IS NULL"""
-        ).fetchall()
+        rows = conn.execute(select_sql).fetchall()
         # 18.10, Sid ("quand j'exporte, les deux [onglets] se vident") -
         # les écartées ne vont jamais dans le zip (rien à y gagner), mais
         # sortent quand même du filet de sécurité "Écartées" au même

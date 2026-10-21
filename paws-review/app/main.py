@@ -378,11 +378,13 @@ def stats_by_class_source():
 
 
 @app.post("/app-api/export/start")
-def export_start():
+def export_start(full: bool = False):
     # 18.10, Sid ("un bouton qui lance l'export... je choisis à quel
     # moment je lance un zip") - en arrière-plan (voir export_training.py
     # pour pourquoi jamais en synchrone), cette route rend immédiatement.
-    start_export_async()
+    # 21.10 : full=True (bouton dédié dans l'onglet Tri 200+200) - voir
+    # start_export_async pour le détail de ce que ça change.
+    start_export_async(full=full)
     return {"ok": True}
 
 
