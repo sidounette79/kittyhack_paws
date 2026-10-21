@@ -689,27 +689,30 @@ async function loadStatsTab() {
     return;
   }
   const classes = Object.keys(data);
-  // "combien ajouter pour équilibrer" côté Reolink+Manuel spécifiquement
-  // (c'est là qu'il reste des trous, pas côté KH - voir son message) : le
-  // manque de chaque chat par rapport au plus représenté des deux groupes.
-  const maxReolinkManual = Math.max(...classes.map(c => data[c].reolink_manual));
-  const rows = classes.map(c => {
-    const { kittyflap, reolink_manual, other } = data[c];
-    const gap = maxReolinkManual - reolink_manual;
-    return `<tr>
-      <td>${c}</td>
+  // 21.10, Sid ("je dois aussi équilibrer vue reolink vs vue KH non ?") -
+  // le vrai trou n'est pas juste "ce chat a moins de Reolink que le chat
+  // le mieux loti côté Reolink" (un chat déjà massivement couvert côté KH
+  // peut très bien n'avoir presque rien côté Reolink sans que ça saute
+  // aux yeux dans ce classement-là) - l'écart KH−Reolink par chat est le
+  // bon signal : positif = sous-représenté côté Reolink par rapport à son
+  // propre volume KH, c'est lui qu'il faut combler en priorité. Trié du
+  // plus gros écart au plus petit.
+  const withGap = classes.map(c => ({
+    cls: c, ...data[c], gap: data[c].kittyflap - data[c].reolink_manual,
+  })).sort((a, b) => b.gap - a.gap);
+  const rows = withGap.map(({ cls, kittyflap, reolink_manual, other, gap }) => `<tr>
+      <td>${cls}</td>
       <td>${kittyflap}</td>
       <td>${reolink_manual}</td>
       <td>${other}</td>
       <td>${kittyflap + reolink_manual + other}</td>
-      <td class="${gap > 0 ? 'export-error' : ''}">${gap > 0 ? `+${gap}` : '-'}</td>
-    </tr>`;
-  }).join('');
+      <td class="${gap > 0 ? 'export-error' : ''}">${gap > 0 ? `+${gap} à ajouter côté Reolink` : 'déjà équilibré/en avance côté Reolink'}</td>
+    </tr>`).join('');
   bar.innerHTML = `
     <table class="stats-table">
       <thead><tr>
         <th>Classe</th><th>KH</th><th>Reolink+Manuel</th><th>Autre (ancien)</th><th>Total</th>
-        <th>À ajouter (Reolink+Manuel)</th>
+        <th>Écart KH−Reolink</th>
       </tr></thead>
       <tbody>${rows}</tbody>
     </table>
