@@ -174,17 +174,29 @@ export default function PresenceCatPage() {
   );
   const pillStripRef = useRef<HTMLDivElement>(null);
   const todayPillRef = useRef<HTMLButtonElement>(null);
+  const didScrollToToday = useRef(false);
 
   // 21.10, Sid ("il faudrait que le 'Aujourd'hui' soit en gras et au
-  // centre... ça ouvre je sais pas où") - scrollTo(scrollWidth) poussait
-  // aujourd'hui tout au bord droit, pas franchement repérable. scrollIntoView
-  // avec inline:"center" sur le pill d'aujourd'hui spécifiquement (pas juste
-  // le bord de la liste) le centre vraiment, avec du contexte visible des
-  // deux côtés. "auto" plutôt que "smooth" : positionnement direct au
-  // montage, pas une animation à chaque ouverture de page.
+  // centre... ça ouvre je sais pas où" puis, après un hard-refresh sur 2
+  // appareils, "j'ai toujours le calendrier faux") - le vrai bug : cet
+  // effet tournait au montage ([] ), mais la bande de pills n'est rendue
+  // qu'une fois `detail` chargé (fetch async, voir loadDetail) - donc
+  // todayPillRef.current valait encore null quand l'effet se déclenchait,
+  // le scrollIntoView ne faisait rien, et la bande restait à sa position
+  // par défaut : tout à gauche, donc sur le tout premier jour du tableau
+  // (365 jours avant aujourd'hui) plutôt que sur aujourd'hui. D'où le
+  // "21" affiché avec le mauvais jour de semaine - ce n'était pas le 21 de
+  // ce mois mais le 21 d'il y a un an. Dépendance sur `detail` pour
+  // réessayer une fois la bande vraiment montée ; le ref didScrollToToday
+  // empêche de re-centrer à chaque rechargement de detail (ex: après une
+  // correction de statut) si Sid a scrollé ailleurs entre-temps.
   useEffect(() => {
-    todayPillRef.current?.scrollIntoView({ inline: "center", block: "nearest", behavior: "auto" });
-  }, []);
+    if (didScrollToToday.current) return;
+    if (todayPillRef.current) {
+      todayPillRef.current.scrollIntoView({ inline: "center", block: "nearest", behavior: "auto" });
+      didScrollToToday.current = true;
+    }
+  }, [detail]);
 
   useBackButton(
     () => {
