@@ -819,7 +819,15 @@ export default function EventModal({
             <div
               ref={reolinkImgWrapRef}
               className="relative mx-auto w-full touch-none bg-black"
-              style={{ aspectRatio: "16 / 9" }}
+              // 21.10, Sid ("les carrés soient aussi grand l'un que
+              // l'autre") : était "16 / 9" - deviné sur l'ancienne
+              // hypothèse 640x360 du décodage matériel (fausse, voir
+              // HW_DECODE_HEIGHT dans watchdog.py). La vraie résolution
+              // confirmée via gst-launch -v est 640x480 (4/3), comme le
+              // panneau Kittyflap juste à côté - les deux cadres
+              // s'affichent maintenant à une taille comparable au lieu
+              // que celui-ci soit nettement plus bas/large.
+              style={{ aspectRatio: "4 / 3" }}
               onPointerDown={onReolinkPointerDown}
               onPointerMove={onReolinkPointerMove}
               onPointerUp={onReolinkPointerUp}
