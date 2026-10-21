@@ -892,24 +892,39 @@ _GST_XDG_RUNTIME_DIR = "/tmp/xdg-runtime"
 
 def _start_hw_decoder(rtsp_url: str) -> subprocess.Popen | None:
     """Starts a persistent GStreamer process that hardware-decodes (VAAPI,
-    via vah264dec) the given RTSP stream and writes raw NV12 frames of
+    via vah264dec) the given RTSP stream and writes raw BGR24 frames of
     HW_DECODE_WIDTH x HW_DECODE_HEIGHT to stdout, back to back, one after
-    another - read (and converted to BGR) one at a time with
-    _read_hw_frame(). Returns None if gst-launch-1.0 itself could not even
-    be started (binary missing, bad args) - a stream that opens but fails
-    later is instead caught by _read_hw_frame() returning None."""
+    another - read one at a time with _read_hw_frame(). Returns None if
+    gst-launch-1.0 itself could not even be started (binary missing, bad
+    args) - a stream that opens but fails later is instead caught by
+    _read_hw_frame() returning None."""
+    # 21.10, Sid ("une sortie en cours" - vrai passage utilisé comme test
+    # de charge) : le retard a continué à grossir PENDANT le pic
+    # d'inférence YOLO (CPU à 281% sur python3) ET a mis plus d'une minute
+    # à redescendre APRÈS la fin du pic, alors que le CPU était redevenu
+    # calme entre-temps - prouve que les `queue` GStreamer elles-mêmes
+    # accumulent un vrai backlog interne pendant la contention (jusqu'à
+    # ~10 Mo/200 buffers par queue par défaut), que le drain Python ne
+    # peut pas voir (il ne vide que ce qui est déjà écrit sur le pipe) -
+    # une fois le CPU libre, GStreamer doit quand même décoder+convertir
+    # tout ce backlog en ordre avant de revenir "en direct", ce qui prend
+    # un temps réel proportionnel à sa taille. `leaky=downstream` fait
+    # jeter les buffers les plus ANCIENS dès qu'une queue est pleine au
+    # lieu de bloquer en amont - le pipeline reste "en direct" même
+    # pendant un pic de charge, au prix de vraies frames sautées (déjà le
+    # cas de toute façon avec drop implicite ailleurs dans la chaîne).
     cmd = [
         "gst-launch-1.0", "-q",
         "rtspsrc", f"location={rtsp_url}", "latency=200", "protocols=tcp",
-        "!", "queue",
+        "!", "queue", "leaky=downstream", "max-size-buffers=10",
         "!", "rtph264depay",
         "!", "h264parse",
-        "!", "queue",
+        "!", "queue", "leaky=downstream", "max-size-buffers=10",
         "!", "vah264dec",
-        "!", "queue",
+        "!", "queue", "leaky=downstream", "max-size-buffers=3",
         "!", "videoconvert",
         "!", f"video/x-raw,format=BGR,width={HW_DECODE_WIDTH},height={HW_DECODE_HEIGHT}",
-        "!", "queue",
+        "!", "queue", "leaky=downstream", "max-size-buffers=3",
         "!", "fdsink", "fd=1", "sync=false",
     ]
     try:
