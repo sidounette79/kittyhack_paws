@@ -835,8 +835,17 @@ def _save_frame_snapshot(cam_name: str, frame: np.ndarray) -> None:
 # jamais bloqué sans caméra fonctionnelle.
 _GST_PRIVATE_GMM_DIR = "/opt/gmm-new"
 HW_DECODE_DEVICE = "/dev/dri/renderD128"
+# 21.10, Sid ("ça défile verticalement" - capture réelle montrant l'image
+# qui glisse progressivement d'une frame à l'autre) : la vraie résolution
+# négociée par vah264dec/videoconvert est 640x480, pas 640x360 comme
+# supposé au départ (je m'étais basé sur un commentaire décrivant
+# l'ancienne résolution du chemin LOGICIEL, jamais vérifié pour le
+# matériel) - confirmé via `gst-launch -v` (caps réelles sur le pad src
+# de videoconvert0). Chaque frame lue était donc plus grande que prévu,
+# les octets en trop contaminant le début de la frame suivante -
+# glissement progressif, pas une corruption aléatoire.
 HW_DECODE_WIDTH = 640
-HW_DECODE_HEIGHT = 360
+HW_DECODE_HEIGHT = 480
 HW_DECODE_FRAME_BYTES = HW_DECODE_WIDTH * HW_DECODE_HEIGHT * 3
 # 21.10: relevé de 8.0 à 20.0 - reproduit en isolé (hors process réel,
 # rien d'autre sur le GPU) : démarrage propre, 8.5 img/s. Dans le process
@@ -873,7 +882,7 @@ def _start_hw_decoder(rtsp_url: str) -> subprocess.Popen | None:
         "!", "vah264dec",
         "!", "queue",
         "!", "videoconvert",
-        "!", "video/x-raw,format=BGR",
+        "!", f"video/x-raw,format=BGR,width={HW_DECODE_WIDTH},height={HW_DECODE_HEIGHT}",
         "!", "queue",
         "!", "fdsink", "fd=1", "sync=false",
     ]
