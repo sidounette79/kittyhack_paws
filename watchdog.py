@@ -846,6 +846,32 @@ HW_DECODE_DEVICE = "/dev/dri/renderD128"
 # glissement progressif, pas une corruption aléatoire.
 HW_DECODE_WIDTH = 640
 HW_DECODE_HEIGHT = 480
+# 21.10, Sid ("tourne encore verticalement ?") : les frames fraîches sont
+# en fait nettes (le bug de glissement ci-dessus est bien réglé) mais le
+# retard par rapport au temps réel grossit sans fin - confirmé via
+# `gst-launch -v` : la caméra envoie réellement du 15 img/s
+# (framerate=15/1 dans les caps négociées), alors que `videoconvert`
+# (conversion YUV→BGR, LOGICIELLE - aucun équivalent GPU disponible sur
+# ce système, `vapostproc`/`vaapipostproc` absents des deux, vérifié via
+# gst-inspect-1.0) sature un coeur CPU à 100% en continu et ne peut
+# suivre qu'à ~8.8 img/s. Pas un bug de code, un plafond structurel.
+# TENTATIVE le même soir : sortir du NV12 brut (vah264dec le produit
+# nativement) et faire la conversion NV12→BGR côté Python via
+# cv2.cvtColor au lieu de videoconvert - ABANDONNÉE et REVERTÉE : la
+# surface VAAPI a un stride/padding matériel caché (mesuré via
+# `multipartmux` + Content-Length réel : 471040 octets/frame, pas les
+# 460800 attendus pour un NV12 640x480 propre - le rapport Y/UV n'est
+# même pas un multiple entier, donc pas déductible par calcul simple).
+# `videoconvert` ne fait pas QUE de la conversion colorimétrique, il
+# dé-paddingue aussi la surface matérielle vers un buffer compact - sans
+# lui, la lecture par comptage d'octets fixe se désynchronise une fois
+# pour toutes dès la première frame (bande de couleurs parasites en haut
+# de l'image, contenu réel décalé en dessous). Vrai correctif pour le
+# débit : lire via les bindings GStreamer Python (gi/PyGObject +
+# appsink), qui donnent des buffers déjà correctement bornés/dépaddés
+# sans compter d'octets à la main - PAS installé dans l'image actuelle
+# (`ModuleNotFoundError: No module named 'gi'`), nécessite un rebuild
+# Docker. Reste à faire dans une session dédiée, pas un patch rapide.
 HW_DECODE_FRAME_BYTES = HW_DECODE_WIDTH * HW_DECODE_HEIGHT * 3
 # 21.10: relevé de 8.0 à 20.0 - reproduit en isolé (hors process réel,
 # rien d'autre sur le GPU) : démarrage propre, 8.5 img/s. Dans le process
@@ -866,12 +892,12 @@ _GST_XDG_RUNTIME_DIR = "/tmp/xdg-runtime"
 
 def _start_hw_decoder(rtsp_url: str) -> subprocess.Popen | None:
     """Starts a persistent GStreamer process that hardware-decodes (VAAPI,
-    via vah264dec) the given RTSP stream and writes raw BGR24 frames of
+    via vah264dec) the given RTSP stream and writes raw NV12 frames of
     HW_DECODE_WIDTH x HW_DECODE_HEIGHT to stdout, back to back, one after
-    another - read one at a time with _read_hw_frame(). Returns None if
-    gst-launch-1.0 itself could not even be started (binary missing, bad
-    args) - a stream that opens but fails later is instead caught by
-    _read_hw_frame() returning None."""
+    another - read (and converted to BGR) one at a time with
+    _read_hw_frame(). Returns None if gst-launch-1.0 itself could not even
+    be started (binary missing, bad args) - a stream that opens but fails
+    later is instead caught by _read_hw_frame() returning None."""
     cmd = [
         "gst-launch-1.0", "-q",
         "rtspsrc", f"location={rtsp_url}", "latency=200", "protocols=tcp",
