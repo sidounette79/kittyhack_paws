@@ -13,16 +13,19 @@ FROM python:3.11-slim
 # vainfo is just for manual troubleshooting (`docker exec ... vainfo`), not
 # used by the app itself - cheap to keep.
 #
-# gstreamer1.0-tools/plugins-base/plugins-good/plugins-bad: 21.10, Sid
-# ("on va l'ouvrir maintenant") - watchdog.py's _start_hw_decoder() now
-# shells out to gst-launch-1.0 instead of ffmpeg for chatiere's hardware
-# decode (see that function's own comment for the full story: ffmpeg's
-# VAAPI path crashed on a never-elucidated RTSP desync, GStreamer's
-# `vah264dec` element doesn't). -good has rtspsrc (confirmed via `dpkg -L`
-# live on the running container), -bad has vah264dec (the "va" plugin) and
-# h264parse. The OLDER gstreamer1.0-vaapi package (vaapih264dec) is
-# deliberately NOT installed - that element segfaults instantly on this
-# exact container, confirmed twice in isolated testing before this change.
+# 21.10, Sid ("on va l'ouvrir maintenant" puis "note bien dans la roadmap
+# qu'on a explorer de bout en bout") - gstreamer1.0-tools/plugins-base/
+# plugins-good/plugins-bad ont été ajoutés ce soir-là pour faire tourner
+# le décodage matériel chatière via GStreamer (vah264dec) plutôt que
+# ffmpeg - ABANDONNÉ et retiré le même soir après test en déploiement
+# réel : le pilote VA-API dont a besoin vah264dec exige libigdgmm12 >=
+# 22.7.2+ds1, incompatible avec la version EXACTE (22.3.0) dont a besoin
+# OpenVINO sur ce GPU (voir plus bas) - testé les deux versions en direct,
+# aucune ne satisfait les deux à la fois sur ce matériel. Voir le
+# commentaire complet de watchdog.py (_start_hw_decoder) et
+# KITTYHACK_ROADMAP.md pour le détail de l'exploration. OpenVINO GPU
+# (déjà validé sur 5 vrais passages) gardé prioritaire, décodage matériel
+# chatière abandonné - repli logiciel inchangé.
 #
 # The dpkg-divert line right before the install is a real, confirmed fix
 # (not precautionary): a first build attempt hung for 18+ minutes with
@@ -41,10 +44,6 @@ RUN dpkg-divert --local --rename --add /usr/bin/update-mime-database \
     intel-media-va-driver \
     vainfo \
     wget \
-    gstreamer1.0-tools \
-    gstreamer1.0-plugins-base \
-    gstreamer1.0-plugins-good \
-    gstreamer1.0-plugins-bad \
     && rm -rf /var/lib/apt/lists/*
 
 # 20.10, Sid ("je veux le GPU partout où c'est possible") - the OpenCL/
