@@ -76,6 +76,18 @@ const COMPARE_TAB = '__compare__';
 // GET /app-api/stats/by-class-source.
 const STATS_TAB = '__stats__';
 
+// 21.10, Sid ("je repars encore une fois à zéro... 200 tag reolink et 200
+// tag HK par chat... trier reo vs HK pour pouvoir faire du différent de
+// tous les côtés possibles") - vraie file parcourable (pas juste un
+// tableau comme Stats) avec des filtres combinables (chat + source +
+// modèle actuel/nouveau + négatif), pour trier/supprimer l'excédent vers
+// une cible de 200+200 par chat. Réutilise currentQueue/renderQueue/les
+// actions existantes (Valider/Écarter) - seul loadTrainingQueue() change
+// par rapport à loadQueue().
+const TRAINING_TAB = '__training__';
+let trainingFilters = { cat: null, source: null, group: 'new', negative: false };
+let trainingCounts = null;
+
 async function api(path, opts) {
   const res = await fetch(path, opts);
   if (!res.ok) throw new Error(`${path}: ${res.status}`);
@@ -252,7 +264,12 @@ function renderTabs() {
          style="${currentTab === STATS_TAB ? 'background:var(--accent)' : 'border-color:var(--accent)'}"
          onclick="selectTab('${STATS_TAB}')">
       Stats</div>`;
-  tabsEl.innerHTML = allTab + catTabs + sourceTabs + preyTab + reviewedTabs + modelReviewTab + compareTab + statsTab;
+  const trainingTab = `
+    <div class="tab ${currentTab === TRAINING_TAB ? 'active' : ''}"
+         style="${currentTab === TRAINING_TAB ? 'background:var(--accent)' : 'border-color:var(--accent)'}"
+         onclick="selectTab('${TRAINING_TAB}')">
+      Tri 200+200</div>`;
+  tabsEl.innerHTML = allTab + catTabs + sourceTabs + preyTab + reviewedTabs + modelReviewTab + compareTab + statsTab + trainingTab;
 }
 
 function selectTab(name) {
@@ -262,6 +279,7 @@ function selectTab(name) {
   document.getElementById('model-review-bar').hidden = currentTab !== MODEL_REVIEW_TAB;
   document.getElementById('compare-bar').hidden = currentTab !== COMPARE_TAB;
   document.getElementById('stats-bar').hidden = currentTab !== STATS_TAB;
+  document.getElementById('training-bar').hidden = currentTab !== TRAINING_TAB;
   if (currentTab === MODEL_REVIEW_TAB) {
     checkModelReviewStatus();
     loadModelReviewQueue();
@@ -275,6 +293,9 @@ function selectTab(name) {
     document.getElementById('queue').innerHTML = '';
     document.getElementById('empty').hidden = true;
     loadStatsTab();
+  } else if (currentTab === TRAINING_TAB) {
+    loadTrainingCounts();
+    loadTrainingQueue();
   } else {
     loadQueue();
   }
@@ -732,6 +753,77 @@ async function loadStatsTab() {
       <tbody>${rows}</tbody>
     </table>
     <div class="hint" style="margin-top:8px">"Autre (ancien)" (import LabelStudio, angle caméra jamais enregistré) réparti 70% KH / 30% Reolink et ajouté dans les deux colonnes ci-dessus - ce sont des estimations, pas des comptes exacts.</div>`;
+}
+
+// 21.10, Sid ("je repars encore une fois à zéro... 200 tag reolink et 200
+// tag HK par chat") - onglet "Tri 200+200" : filtres combinables (chat,
+// source, modèle actuel/nouveau, négatif) au-dessus de la même grille de
+// vignettes que les autres onglets (currentQueue/renderQueue réutilisés
+// tels quels), avec un tableau de progression vers la cible 200+200 par
+// chat au-dessus.
+const TRAINING_TARGET_PER_SOURCE = 200;
+
+async function loadTrainingCounts() {
+  trainingCounts = await api('/app-api/training-targets/counts');
+  renderTrainingBar();
+}
+
+function trainingSetFilter(key, value) {
+  trainingFilters[key] = value;
+  loadTrainingQueue();
+  renderTrainingBar();
+}
+
+function renderTrainingBar() {
+  const bar = document.getElementById('training-bar');
+  const catOptions = ['', ...cats.map(c => c.name)].map(n =>
+    `<option value="${n}" ${trainingFilters.cat === (n || null) ? 'selected' : ''}>${n || 'Tous les chats'}</option>`
+  ).join('');
+  const controls = `
+    <select onchange="trainingSetFilter('cat', this.value || null)">${catOptions}</select>
+    <select onchange="trainingSetFilter('source', this.value || null)">
+      <option value="" ${!trainingFilters.source ? 'selected' : ''}>Toute source</option>
+      <option value="kittyflap" ${trainingFilters.source === 'kittyflap' ? 'selected' : ''}>HK</option>
+      <option value="reolink" ${trainingFilters.source === 'reolink' ? 'selected' : ''}>Reolink</option>
+      <option value="manual" ${trainingFilters.source === 'manual' ? 'selected' : ''}>Manuel</option>
+    </select>
+    <select onchange="trainingSetFilter('group', this.value)">
+      <option value="new" ${trainingFilters.group === 'new' ? 'selected' : ''}>Nouveau depuis le modèle actuel</option>
+      <option value="current" ${trainingFilters.group === 'current' ? 'selected' : ''}>Dans le modèle actuel</option>
+      <option value="" ${trainingFilters.group === '' ? 'selected' : ''}>Les deux</option>
+    </select>
+    <label style="margin-left:8px"><input type="checkbox" ${trainingFilters.negative ? 'checked' : ''}
+      onchange="trainingSetFilter('negative', this.checked)"> Négatif seulement (ni chat ni proie)</label>
+  `;
+  let table = '';
+  if (trainingCounts) {
+    const rows = Object.entries(trainingCounts).map(([cls, g]) => {
+      const kh = g.current.kittyflap + g.new.kittyflap;
+      const reo = g.current.reolink_manual + g.new.reolink_manual;
+      return `<tr>
+        <td>${cls}</td>
+        <td class="${kh >= TRAINING_TARGET_PER_SOURCE ? '' : 'export-error'}">${kh} / ${TRAINING_TARGET_PER_SOURCE}</td>
+        <td class="${reo >= TRAINING_TARGET_PER_SOURCE ? '' : 'export-error'}">${reo} / ${TRAINING_TARGET_PER_SOURCE}</td>
+        <td>${kh + reo}</td>
+      </tr>`;
+    }).join('');
+    table = `
+      <table class="stats-table" style="margin-top:8px">
+        <thead><tr><th>Classe</th><th>HK</th><th>Reolink+Manuel</th><th>Total</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>`;
+  }
+  bar.innerHTML = controls + table;
+}
+
+async function loadTrainingQueue() {
+  const params = new URLSearchParams({ limit: 200, training_mode: '1' });
+  if (trainingFilters.cat) params.set('cat_name', trainingFilters.cat);
+  if (trainingFilters.source) params.set('source', trainingFilters.source);
+  if (trainingFilters.group) params.set('in_model', trainingFilters.group);
+  if (trainingFilters.negative) params.set('negative_only', '1');
+  currentQueue = await api(`/app-api/queue?${params}`);
+  renderQueue();
 }
 
 async function openDetail(index) {

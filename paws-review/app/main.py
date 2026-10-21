@@ -42,10 +42,64 @@ def list_cats():
         return [dict(r) for r in rows]
 
 
+# 21.10, Sid ("je repars encore une fois à zéro... 200 tag reolink et 200
+# tag HK par chat... trier reo vs HK pour pouvoir faire du différent de
+# tous les côtés possibles") - les 1819 captures réellement utilisées pour
+# entraîner le modèle actuellement actif (pas 1874 : ce chiffre inclut 55
+# doublons volontaires "_dupkittyflapN" pour suréchantillonner certaines
+# images HK à l'entraînement - jamais de nouvelles images). Lu directement
+# depuis le zip envoyé à vast.ai à chaque appel plutôt que figé en base -
+# reste juste tout seul si un nouvel entraînement écrase ce même fichier.
+def _current_model_capture_ids() -> set[int]:
+    import re
+    if not os.path.isfile(TRAINING_DATA_PATH):
+        return set()
+    try:
+        with zipfile.ZipFile(TRAINING_DATA_PATH) as z:
+            ids = set()
+            for name in z.namelist():
+                m = re.match(r"images/capture_(\d+)", name)
+                if m:
+                    ids.add(int(m.group(1)))
+            return ids
+    except Exception as e:
+        logging.warning(f"Impossible de lire {TRAINING_DATA_PATH}: {e}")
+        return set()
+
+
+@app.get("/app-api/training-targets/counts")
+def training_targets_counts():
+    """Pour chaque chat (+ Prey, + Negatif), le compte HK/Reolink+Manuel,
+    séparément pour le modèle actuel (1819) et le nouveau depuis (pas
+    encore exporté) - alimente la page de tri 200+200 par chat."""
+    current_ids = _current_model_capture_ids()
+    with get_conn() as conn:
+        rows = conn.execute(
+            """SELECT c.id, c.source, c.detected_objects_json
+               FROM captures c
+               WHERE c.review_status IN ('confirmed', 'corrected')"""
+        ).fetchall()
+        groups = {c: {"current": {"kittyflap": 0, "reolink_manual": 0}, "new": {"kittyflap": 0, "reolink_manual": 0}}
+                  for c in list(CLASSES) + ["Negatif"]}
+        for row in rows:
+            boxes = effective_boxes(conn, row["id"], row["detected_objects_json"])
+            classes_here = {canonicalize(b.get("label")) for b in boxes} - {None}
+            if not classes_here:
+                classes_here = {"Negatif"}
+            bucket = "kittyflap" if row["source"] == "kittyflap" else "reolink_manual"
+            group = "current" if row["id"] in current_ids else "new"
+            for cls in classes_here:
+                if cls in groups:
+                    groups[cls][group][bucket] += 1
+    return groups
+
+
 @app.get("/app-api/queue")
 def review_queue(
     cat_name: str | None = None, source: str | None = None,
-    status_group: str | None = None, prey_only: bool = False, limit: int = 100,
+    status_group: str | None = None, prey_only: bool = False,
+    negative_only: bool = False, in_model: str | None = None,
+    training_mode: bool = False, limit: int = 100,
 ):
     query = """SELECT c.* FROM captures c"""
     params: list = []
@@ -69,8 +123,24 @@ def review_queue(
         query += " WHERE c.review_status = 'rejected' AND c.exported_at IS NULL"
     elif status_group == "archived":
         query += " WHERE c.exported_at IS NOT NULL"
+    elif training_mode:
+        # 21.10, Sid ("je repars encore une fois à zéro... trier reo vs
+        # HK") - l'onglet "Tri 200+200" porte toujours sur des captures
+        # déjà confirmées/corrigées, même avec in_model vide ("les deux"
+        # groupes à la fois) - peu importe si elles ont déjà été
+        # exportées ou pas (contrairement à "validated"/"archived"
+        # ci-dessus, qui restent des filets de sécurité séparés).
+        query += " WHERE c.review_status IN ('confirmed', 'corrected')"
     else:
         query += " WHERE c.review_status = 'pending'"
+    if in_model is not None:
+        current_ids = _current_model_capture_ids()
+        if current_ids:
+            placeholders = ",".join("?" * len(current_ids))
+            query += f" AND c.id {'IN' if in_model == 'current' else 'NOT IN'} ({placeholders})"
+            params.extend(sorted(current_ids))
+        elif in_model == "current":
+            query += " AND 0"
     # 18.10, Sid : onglet dédié aux ~4800 captures importées depuis
     # LabelStudio (voir import_labelstudio.py) - à trier avant le futur
     # export vers le nouveau conteneur d'entraînement.
@@ -84,23 +154,38 @@ def review_queue(
     # le plus critique à réviser.
     if prey_only:
         query += " AND c.is_prey_candidate = 1"
+    # 21.10 : "négatif" (ni chat ni proie après revue) ne se calcule pas
+    # en SQL pur - les corrections vivent dans box_annotations, pas
+    # directement sur c.detected_objects_json (voir effective_boxes). Pas
+    # de LIMIT SQL dans ce cas, filtré puis tronqué côté Python plus bas.
+    if status_group == "archived":
+        query += " ORDER BY c.exported_at DESC"
+    elif status_group or training_mode:
+        query += " ORDER BY c.reviewed_at DESC"
+    else:
+        query += """ ORDER BY c.is_prey_candidate DESC, c.model_disagreement DESC,
+                          c.low_cat_confidence ASC, c.created_at ASC"""
     # 18.10 : LIMIT ? doit être ajouté dans TOUS les cas, pas seulement le
     # tri par défaut - un bug introduit en ajoutant les tris spécifiques
     # ci-dessus faisait planter "Validées"/"Écartées"/"Archivées" en 500
     # (params.append(limit) tournait quand même, sans "?" correspondant
     # dans la requête, confirmé en testant "Archivées" juste après coup).
-    if status_group == "archived":
-        query += " ORDER BY c.exported_at DESC"
-    elif status_group:
-        query += " ORDER BY c.reviewed_at DESC"
-    else:
-        query += """ ORDER BY c.is_prey_candidate DESC, c.model_disagreement DESC,
-                          c.low_cat_confidence ASC, c.created_at ASC"""
-    query += " LIMIT ?"
-    params.append(limit)
+    if not negative_only:
+        query += " LIMIT ?"
+        params.append(limit)
     with get_conn() as conn:
         rows = conn.execute(query, params).fetchall()
-        return [dict(r) for r in rows]
+        if not negative_only:
+            return [dict(r) for r in rows]
+        result = []
+        for row in rows:
+            boxes = effective_boxes(conn, row["id"], row["detected_objects_json"])
+            classes_here = {canonicalize(b.get("label")) for b in boxes} - {None}
+            if not classes_here:
+                result.append(dict(row))
+                if len(result) >= limit:
+                    break
+        return result
 
 
 @app.get("/app-api/captures/{capture_id}")
