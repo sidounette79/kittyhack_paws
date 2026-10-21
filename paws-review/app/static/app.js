@@ -689,27 +689,36 @@ async function loadStatsTab() {
     return;
   }
   const classes = Object.keys(data);
-  // 21.10, Sid ("je dois aussi équilibrer vue reolink vs vue KH non ?" /
-  // "il me faut les deux" / "par chat sur KH, par chat sur reo+manuel,
-  // entre KH et reo") - trois dimensions distinctes, aucune ne remplace
-  // les autres : équilibre entre chats CÔTÉ KH seul, équilibre entre
-  // chats CÔTÉ Reolink+Manuel seul, et l'écart KH−Reolink par chat (les
-  // deux vues l'une contre l'autre). Trié sur ce dernier, le plus parlant
-  // pour prioriser l'ajout de nouvelles images.
-  const maxKittyflap = Math.max(...classes.map(c => data[c].kittyflap));
-  const maxReolinkManual = Math.max(...classes.map(c => data[c].reolink_manual));
-  const withGap = classes.map(c => ({
-    cls: c, ...data[c],
-    gapVsBestKh: maxKittyflap - data[c].kittyflap,
-    gapVsBestReolink: maxReolinkManual - data[c].reolink_manual,
-    gapKhReolink: data[c].kittyflap - data[c].reolink_manual,
+  // 21.10, Sid ("autre ancien = principalement du KH. Considère 70% KH et
+  // 30% reolink. Splitter autre sur cette base et rajoute la proportion à
+  // chaque colonne") - "Autre (ancien)" (import LabelStudio, angle caméra
+  // jamais enregistré) n'est plus montré à part : réparti 70/30 et ajouté
+  // directement dans KH et Reolink+Manuel, qui deviennent des estimations
+  // plutôt que des comptes bruts exacts - toutes les comparaisons
+  // (3 dimensions, voir plus haut) tournent maintenant sur ces totaux
+  // estimés, cohérent partout plutôt que de mélanger brut et estimé.
+  const OTHER_KH_SHARE = 0.7;
+  const withEstimate = classes.map(c => {
+    const { kittyflap, reolink_manual, other } = data[c];
+    return {
+      cls: c,
+      khEst: kittyflap + Math.round(other * OTHER_KH_SHARE),
+      reolinkEst: reolink_manual + Math.round(other * (1 - OTHER_KH_SHARE)),
+    };
+  });
+  const maxKittyflap = Math.max(...withEstimate.map(c => c.khEst));
+  const maxReolinkManual = Math.max(...withEstimate.map(c => c.reolinkEst));
+  const withGap = withEstimate.map(c => ({
+    ...c,
+    gapVsBestKh: maxKittyflap - c.khEst,
+    gapVsBestReolink: maxReolinkManual - c.reolinkEst,
+    gapKhReolink: c.khEst - c.reolinkEst,
   })).sort((a, b) => b.gapKhReolink - a.gapKhReolink);
-  const rows = withGap.map(({ cls, kittyflap, reolink_manual, other, gapVsBestKh, gapVsBestReolink, gapKhReolink }) => `<tr>
+  const rows = withGap.map(({ cls, khEst, reolinkEst, gapVsBestKh, gapVsBestReolink, gapKhReolink }) => `<tr>
       <td>${cls}</td>
-      <td>${kittyflap}</td>
-      <td>${reolink_manual}</td>
-      <td>${other}</td>
-      <td>${kittyflap + reolink_manual + other}</td>
+      <td>${khEst}</td>
+      <td>${reolinkEst}</td>
+      <td>${khEst + reolinkEst}</td>
       <td class="${gapVsBestKh > 0 ? 'export-error' : ''}">${gapVsBestKh > 0 ? `+${gapVsBestKh}` : '-'}</td>
       <td class="${gapVsBestReolink > 0 ? 'export-error' : ''}">${gapVsBestReolink > 0 ? `+${gapVsBestReolink}` : '-'}</td>
       <td class="${gapKhReolink > 0 ? 'export-error' : ''}">${gapKhReolink > 0 ? `+${gapKhReolink}` : 'équilibré/en avance'}</td>
@@ -717,12 +726,12 @@ async function loadStatsTab() {
   bar.innerHTML = `
     <table class="stats-table">
       <thead><tr>
-        <th>Classe</th><th>KH</th><th>Reolink+Manuel</th><th>Autre (ancien)</th><th>Total</th>
+        <th>Classe</th><th>KH (estimé)</th><th>Reolink+Manuel (estimé)</th><th>Total</th>
         <th>vs meilleur KH</th><th>vs meilleur Reolink</th><th>Écart KH−Reolink</th>
       </tr></thead>
       <tbody>${rows}</tbody>
     </table>
-    <div class="hint" style="margin-top:8px">"Autre (ancien)" = import LabelStudio historique, angle caméra inconnu, ni KH ni Reolink identifié.</div>`;
+    <div class="hint" style="margin-top:8px">"Autre (ancien)" (import LabelStudio, angle caméra jamais enregistré) réparti 70% KH / 30% Reolink et ajouté dans les deux colonnes ci-dessus - ce sont des estimations, pas des comptes exacts.</div>`;
 }
 
 async function openDetail(index) {
