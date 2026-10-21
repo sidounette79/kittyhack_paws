@@ -70,9 +70,6 @@ function StatusPill({
 // qui est en dessous?"): "chatiere" moved up into its own big panel next
 // to the flap's own camera (below) - removed here so it isn't duplicated.
 const OUTDOOR_CAMS: { name: string; label: string }[] = [
-  // 09.10, Sid ("il faut rajouter l'ancienne chatière... devenue chatière
-  // Int"): original flap camera, now facing the flap from indoors.
-  { name: "chatiere_int", label: "Chatière int" },
   { name: "terrasse", label: "Terrasse" },
   { name: "jardin_japonais", label: "Jardin japonais" },
   { name: "entree", label: "Entrée" },
@@ -320,6 +317,24 @@ export default function LivePage() {
               panel above, instead of the old full-width bottom bar. */}
           <div className="absolute left-2 top-2 rounded-full bg-black/60 px-2 py-1 text-xs text-white/80">
             Chatière ext (Reolink)
+          </div>
+        </div>
+
+        {/* 21.10, Sid ("comme ça en une page j'ai dedans et 2x dehors...
+            juste que je puisse voir de quel côté ils sont quand j'entends
+            taper sur la porte") - existait déjà mais noyée sous le titre
+            "Caméras extérieures" plus bas, donc jamais remarquée pour cet
+            usage précis. Remontée ici, juste à côté de la chatière
+            extérieure, pour comparer dedans/dehors d'un coup d'œil - pas
+            de détection sur cette caméra, aperçu seul comme les autres. */}
+        <div className="relative h-64 flex-1 overflow-hidden rounded-xl bg-black">
+          <img
+            src={`/watchdog-frame/chatiere_int.jpg?t=${wdTick}`}
+            alt="Chatière int"
+            className="h-full w-full object-cover"
+          />
+          <div className="absolute left-2 top-2 rounded-full bg-black/60 px-2 py-1 text-xs text-white/80">
+            Chatière int (Reolink)
           </div>
         </div>
         </div>
