@@ -41,6 +41,31 @@ FROM python:3.11-slim
 # transitively by this driver package) can wedge in a container. This app
 # never needs the system MIME database rebuilt, so the real binary is
 # diverted and replaced with a no-op before anything can trigger it.
+# 21.10 (plus tard la même nuit), Sid ("Gst prend 25% maintenant" / "Et
+# creuse le vrai fixe" / "Celui qui imposait un build") : videoconvert
+# (conversion colorimétrique logicielle, seule option trouvée côté
+# GStreamer - vapostproc ET vaapipostproc confirmés absents des paquets
+# Debian trixie disponibles, testé en direct) n'arrive pas à suivre le
+# vrai débit caméra (15 img/s) et sature un coeur CPU en continu. Vrai
+# correctif : lire via les bindings GStreamer Python (gi/PyGObject +
+# appsink), qui donnent des buffers déjà correctement bornés/dépaddés
+# par GstVideo.VideoFrame (stride matériel réel, plus de devinette
+# d'octets comme la tentative NV12 ratée plus tôt ce soir), et convertir
+# en BGR via cv2.cvtColor (plus rapide que videoconvert). Paquets apt
+# pour PyGObject compilés pour le python3 DE DEBIAN (3.13) - incompatible
+# ABI avec le python3.11 de cette image (python:3.11-slim) - testé en
+# direct, confirmé. D'où pip install pygobject plus bas (compile contre
+# le vrai python3.11 de l'image) : seuls les paquets ci-dessous (headers/
+# libs de build, pas de binding Python) sont nécessaires ici -
+# libgirepository-2.0-dev (PyGObject récent veut l'API 2.0, pas 1.0),
+# gir1.2-gstreamer-1.0/gir1.2-gst-plugins-base-1.0 (typelib, pour
+# gi.repository.Gst/GstApp/GstVideo), gcc/pkg-config (compilation),
+# libcairo2-dev (dépendance de build de pycairo, tirée par PyGObject).
+# Dans ce même bloc apt, AVANT le downgrade GmmLib plus bas, comme pour
+# gstreamer1.0-plugins-bad déjà présent ici - testé : APRÈS ce point,
+# n'importe quel nouvel apt-get install échoue en dépendances cassées
+# (intel-media-va-driver veut libigdgmm12 >= 22.7.2, le downgrade en
+# fixe une plus vieille), confirmé dans un conteneur jetable.
 RUN dpkg-divert --local --rename --add /usr/bin/update-mime-database \
     && ln -s /bin/true /usr/bin/update-mime-database \
     && apt-get update && apt-get install -y --no-install-recommends \
@@ -55,6 +80,12 @@ RUN dpkg-divert --local --rename --add /usr/bin/update-mime-database \
     gstreamer1.0-plugins-base \
     gstreamer1.0-plugins-good \
     gstreamer1.0-plugins-bad \
+    gcc \
+    pkg-config \
+    libgirepository-2.0-dev \
+    gir1.2-gstreamer-1.0 \
+    gir1.2-gst-plugins-base-1.0 \
+    libcairo2-dev \
     && mkdir -p /opt/gmm-new \
     && cp /usr/lib/x86_64-linux-gnu/libigdgmm.so.12* /opt/gmm-new/ \
     && rm -rf /var/lib/apt/lists/*

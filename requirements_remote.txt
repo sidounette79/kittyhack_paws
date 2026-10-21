@@ -53,6 +53,15 @@ opencv-python-headless==4.11.0.86
 openvino==2023.3.0
 orjson==3.10.11
 packaging==24.2
+# 21.10, Sid ("creuse le vrai fixe" - videoconvert sature le CPU à 15
+# img/s) - compile contre le vrai python3.11 de cette image, pas les
+# paquets apt python3-gi/python3-gst-1.0 (compilés pour le python3.13 de
+# Debian trixie, incompatibilité ABI confirmée en direct). Les paquets
+# apt installés dans le Dockerfile (libgirepository-2.0-dev, gir1.2-*,
+# gcc, libcairo2-dev) ne sont que les headers/libs de build + les
+# typelib - zéro binding Python fourni par apt ici.
+pycairo==1.29.2
+pygobject==3.58.1
 paho-mqtt==2.1.0
 pandas==2.2.3
 pillow==11.1.0

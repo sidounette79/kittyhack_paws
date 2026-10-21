@@ -31,6 +31,7 @@ import os
 import select
 import smtplib
 import subprocess
+import sys
 import threading
 import time
 from email.mime.text import MIMEText
@@ -890,42 +891,36 @@ HW_DECODE_STARTUP_TIMEOUT_S = 20.0
 _GST_XDG_RUNTIME_DIR = "/tmp/xdg-runtime"
 
 
+_HW_DECODER_HELPER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hw_decoder_helper.py")
+
+
 def _start_hw_decoder(rtsp_url: str) -> subprocess.Popen | None:
-    """Starts a persistent GStreamer process that hardware-decodes (VAAPI,
-    via vah264dec) the given RTSP stream and writes raw BGR24 frames of
+    """Starts a persistent hardware-decode process (VAAPI, via vah264dec)
+    for the given RTSP stream that writes raw BGR24 frames of
     HW_DECODE_WIDTH x HW_DECODE_HEIGHT to stdout, back to back, one after
     another - read one at a time with _read_hw_frame(). Returns None if
-    gst-launch-1.0 itself could not even be started (binary missing, bad
-    args) - a stream that opens but fails later is instead caught by
-    _read_hw_frame() returning None."""
-    # 21.10, Sid ("une sortie en cours" - vrai passage utilisé comme test
-    # de charge) : le retard a continué à grossir PENDANT le pic
-    # d'inférence YOLO (CPU à 281% sur python3) ET a mis plus d'une minute
-    # à redescendre APRÈS la fin du pic, alors que le CPU était redevenu
-    # calme entre-temps - prouve que les `queue` GStreamer elles-mêmes
-    # accumulent un vrai backlog interne pendant la contention (jusqu'à
-    # ~10 Mo/200 buffers par queue par défaut), que le drain Python ne
-    # peut pas voir (il ne vide que ce qui est déjà écrit sur le pipe) -
-    # une fois le CPU libre, GStreamer doit quand même décoder+convertir
-    # tout ce backlog en ordre avant de revenir "en direct", ce qui prend
-    # un temps réel proportionnel à sa taille. `leaky=downstream` fait
-    # jeter les buffers les plus ANCIENS dès qu'une queue est pleine au
-    # lieu de bloquer en amont - le pipeline reste "en direct" même
-    # pendant un pic de charge, au prix de vraies frames sautées (déjà le
-    # cas de toute façon avec drop implicite ailleurs dans la chaîne).
+    the helper process itself could not even be started (binary missing,
+    bad args) - a stream that opens but fails later is instead caught by
+    _read_hw_frame() returning None.
+
+    21.10, Sid ("Gst prend 25% maintenant" / "Et creuse le vrai fixe") :
+    plus de `gst-launch-1.0`+`videoconvert` ici - videoconvert (seule
+    option de conversion colorimétrique côté GStreamer sur ce système,
+    vapostproc/vaapipostproc confirmés absents des paquets Debian trixie
+    disponibles, testé en direct) ne tenait pas le vrai débit caméra
+    (15 img/s), saturant un coeur CPU en continu. hw_decoder_helper.py
+    (sous-processus Python séparé, MÊME isolation LD_LIBRARY_PATH
+    qu'avant) décode sur GPU (vah264dec, inchangé) puis convertit
+    NV12->BGR via OpenCV (cv2.cvtColor) au lieu de videoconvert - et lit
+    le NV12 via GstVideo.VideoInfo (stride matériel réel donné par
+    l'API GStreamer elle-même), pas en devinant la taille d'octets comme
+    la tentative NV12 ratée plus tôt ce soir (qui avait cassé la prod -
+    voir l'historique dans KITTYHACK_ROADMAP.md). appsink (max-buffers=1,
+    drop=True) garde nativement la frame la plus récente, réglant aussi
+    le retard sans dépendre des leaky queues."""
     cmd = [
-        "gst-launch-1.0", "-q",
-        "rtspsrc", f"location={rtsp_url}", "latency=200", "protocols=tcp",
-        "!", "queue", "leaky=downstream", "max-size-buffers=10",
-        "!", "rtph264depay",
-        "!", "h264parse",
-        "!", "queue", "leaky=downstream", "max-size-buffers=10",
-        "!", "vah264dec",
-        "!", "queue", "leaky=downstream", "max-size-buffers=3",
-        "!", "videoconvert",
-        "!", f"video/x-raw,format=BGR,width={HW_DECODE_WIDTH},height={HW_DECODE_HEIGHT}",
-        "!", "queue", "leaky=downstream", "max-size-buffers=3",
-        "!", "fdsink", "fd=1", "sync=false",
+        sys.executable, _HW_DECODER_HELPER,
+        rtsp_url, str(HW_DECODE_WIDTH), str(HW_DECODE_HEIGHT),
     ]
     try:
         os.makedirs(_GST_XDG_RUNTIME_DIR, exist_ok=True)
