@@ -689,30 +689,34 @@ async function loadStatsTab() {
     return;
   }
   const classes = Object.keys(data);
-  // 21.10, Sid ("je dois aussi équilibrer vue reolink vs vue KH non ?") -
-  // le vrai trou n'est pas juste "ce chat a moins de Reolink que le chat
-  // le mieux loti côté Reolink" (un chat déjà massivement couvert côté KH
-  // peut très bien n'avoir presque rien côté Reolink sans que ça saute
-  // aux yeux dans ce classement-là) - l'écart KH−Reolink par chat est le
-  // bon signal : positif = sous-représenté côté Reolink par rapport à son
-  // propre volume KH, c'est lui qu'il faut combler en priorité. Trié du
-  // plus gros écart au plus petit.
+  // 21.10, Sid ("je dois aussi équilibrer vue reolink vs vue KH non ?"
+  // puis "il me faut les deux") - deux angles différents, gardés tous les
+  // deux plutôt que l'un remplaçant l'autre : "écart KH−Reolink" (positif
+  // = ce chat a moins de Reolink que son propre volume KH, le vrai signal
+  // de déséquilibre entre les deux vues) ET "vs meilleur Reolink" (où ce
+  // chat se situe par rapport au chat le mieux loti côté Reolink
+  // seulement, utile pour viser un volume absolu cible côté Reolink).
+  // Trié sur le premier, le plus parlant des deux pour prioriser.
+  const maxReolinkManual = Math.max(...classes.map(c => data[c].reolink_manual));
   const withGap = classes.map(c => ({
-    cls: c, ...data[c], gap: data[c].kittyflap - data[c].reolink_manual,
-  })).sort((a, b) => b.gap - a.gap);
-  const rows = withGap.map(({ cls, kittyflap, reolink_manual, other, gap }) => `<tr>
+    cls: c, ...data[c],
+    gapKhReolink: data[c].kittyflap - data[c].reolink_manual,
+    gapVsBestReolink: maxReolinkManual - data[c].reolink_manual,
+  })).sort((a, b) => b.gapKhReolink - a.gapKhReolink);
+  const rows = withGap.map(({ cls, kittyflap, reolink_manual, other, gapKhReolink, gapVsBestReolink }) => `<tr>
       <td>${cls}</td>
       <td>${kittyflap}</td>
       <td>${reolink_manual}</td>
       <td>${other}</td>
       <td>${kittyflap + reolink_manual + other}</td>
-      <td class="${gap > 0 ? 'export-error' : ''}">${gap > 0 ? `+${gap} à ajouter côté Reolink` : 'déjà équilibré/en avance côté Reolink'}</td>
+      <td class="${gapKhReolink > 0 ? 'export-error' : ''}">${gapKhReolink > 0 ? `+${gapKhReolink}` : 'équilibré/en avance'}</td>
+      <td class="${gapVsBestReolink > 0 ? 'export-error' : ''}">${gapVsBestReolink > 0 ? `+${gapVsBestReolink}` : '-'}</td>
     </tr>`).join('');
   bar.innerHTML = `
     <table class="stats-table">
       <thead><tr>
         <th>Classe</th><th>KH</th><th>Reolink+Manuel</th><th>Autre (ancien)</th><th>Total</th>
-        <th>Écart KH−Reolink</th>
+        <th>Écart KH−Reolink</th><th>vs meilleur Reolink</th>
       </tr></thead>
       <tbody>${rows}</tbody>
     </table>
