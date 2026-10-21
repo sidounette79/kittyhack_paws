@@ -254,7 +254,15 @@ class DatabaseCore:
             "CREATE INDEX IF NOT EXISTS idx_id ON events (id)",
             "CREATE INDEX IF NOT EXISTS idx_block_id_created_at ON events (block_id, created_at)",
             "CREATE INDEX IF NOT EXISTS idx_events_block_id_deleted_created_at ON events (block_id, deleted, created_at)",
-            "CREATE INDEX IF NOT EXISTS idx_cats_rfid ON cats (rfid)"
+            "CREATE INDEX IF NOT EXISTS idx_cats_rfid ON cats (rfid)",
+            # 21.10, Sid ("rendre ça pérenne" - rétention à la hausse, 1 an
+            # visé) - _presence_events_for_rfid (presence.py) filtre par
+            # rfid+deleted sur toute la table à chaque chargement de la page
+            # Présence, sans aucun index sur rfid jusqu'ici (full table scan
+            # confirmé, 190k lignes déjà, bien pire une fois la rétention
+            # réellement portée à l'année). created_at en dernier colonne
+            # couvre aussi le ORDER BY de cette même requête.
+            "CREATE INDEX IF NOT EXISTS idx_events_rfid_deleted_created_at ON events (rfid, deleted, created_at)",
         ]
 
         for stmt in indexes:
