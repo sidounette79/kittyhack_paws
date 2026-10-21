@@ -397,7 +397,7 @@ async function bulkReview(status) {
     body: JSON.stringify({ ids, status }),
   });
   selectedIds.clear();
-  await loadQueue();
+  await reloadCurrentTab();
   const statsResp = await api('/app-api/stats');
   lastStats = statsResp;
   renderStats(statsResp);
@@ -816,6 +816,23 @@ function renderTrainingBar() {
   bar.innerHTML = controls + table;
 }
 
+// 21.10, Sid ("j'ai sélectionné pookie + manuel, j'en ai écarté 7 et ça
+// a tout vidé ? Quand je les valide à nouveau elles vont où ? J'arrive
+// pas à voir le suivi") - bulkReview()/submitReview() rafraîchissaient
+// après action via loadQueue() (générique), qui ne connaît pas l'onglet
+// "Tri 200+200" et traitait son nom comme un nom de chat
+// (cat_name=__training__), donc zéro résultat - la liste semblait "tout
+// vidée" après une action, pas juste les 7 écartées. Les compteurs de
+// progression n'étaient non plus jamais réactualisés après une action.
+async function reloadCurrentTab() {
+  if (currentTab === TRAINING_TAB) {
+    await loadTrainingQueue();
+    await loadTrainingCounts();
+  } else {
+    await loadQueue();
+  }
+}
+
 async function loadTrainingQueue() {
   const params = new URLSearchParams({ limit: 200, training_mode: '1' });
   if (trainingFilters.cat) params.set('cat_name', trainingFilters.cat);
@@ -1151,7 +1168,7 @@ async function submitReview(status) {
       // attente, sans jamais recharger le lot suivant - il fallait recliquer
       // l'onglet à la main pour continuer. On retente un chargement avant de
       // conclure que c'est vraiment vide.
-      await loadQueue();
+      await reloadCurrentTab();
       if (currentQueue.length === 0) {
         closeDetail();
         return;
