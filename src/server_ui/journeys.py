@@ -45,11 +45,47 @@ PAWS_REVIEW_URL = os.environ.get("PAWS_REVIEW_URL", "http://192.168.178.127:8082
 PAWS_REVIEW_UPLOAD_TOKEN = os.environ.get("PAWS_REVIEW_UPLOAD_TOKEN", "")
 
 
-def _upload_to_paws_review(image_bytes: bytes, filename: str) -> bool:
+def _detections_sidecar_for_paws_review(sample_path: str) -> str | None:
+    """21.10, Sid ("dans paws review n'arrivent que les boîtes de reo
+    chatière [...] mais sans les boîtes") - chatière's own local model
+    already ran on this exact frame (see watchdog.py's CameraWatcher,
+    visible in Parcours as "boubou 70%") and its result is saved as a
+    sidecar next to the sample (see _save_training_sample). Translates
+    watchdog's own key ("name") to the key Paws Review's model_review.py
+    actually writes ("label") - the rest of the schema (probability/x/y/
+    width/height, percent, top-left-anchored) already matches exactly.
+    Returns None (no field sent at all) for a peripheral-camera sample
+    with no sidecar - manual_drop_upload below then falls back to its
+    original behaviour (empty boxes, drawn by hand)."""
+    sidecar_path = sample_path[:-4] + ".json" if sample_path.lower().endswith((".jpg", ".jpeg")) else None
+    if not sidecar_path or not os.path.isfile(sidecar_path):
+        return None
     try:
+        import json as _json
+        with open(sidecar_path, "r", encoding="utf-8") as f:
+            raw = _json.load(f)
+        boxes = [
+            {
+                "label": d.get("name"),
+                "probability": d.get("probability"),
+                "x": d.get("x"), "y": d.get("y"),
+                "width": d.get("width"), "height": d.get("height"),
+            }
+            for d in raw if d.get("name")
+        ]
+        return _json.dumps(boxes) if boxes else None
+    except Exception as e:
+        logging.warning(f"[JOURNEY] Could not read detections sidecar for {sample_path}: {e}")
+        return None
+
+
+def _upload_to_paws_review(image_bytes: bytes, filename: str, detections_json: str | None = None) -> bool:
+    try:
+        data = {"detections": detections_json} if detections_json else {}
         resp = requests.post(
             f"{PAWS_REVIEW_URL}/app-api/manual-drop/upload",
             files={"file": (filename, image_bytes, "image/jpeg")},
+            data=data,
             headers={"x-upload-token": PAWS_REVIEW_UPLOAD_TOKEN},
             timeout=15,
         )
@@ -764,7 +800,10 @@ def register_journeys(input, output, session, ctx: SessionContext):
                     type="message",
                     duration=None,
                 )
-                success = await asyncio.to_thread(_upload_to_paws_review, img_bytes, filename)
+                detections_json = _detections_sidecar_for_paws_review(path)
+                success = await asyncio.to_thread(
+                    _upload_to_paws_review, img_bytes, filename, detections_json
+                )
                 ui.notification_remove("journey_ls_upload_progress")
                 if success:
                     ui.notification_show(

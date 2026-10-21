@@ -1,9 +1,10 @@
 import json
+import logging
 import os
 import time
 import zipfile
 
-from fastapi import Body, FastAPI, File, Header, HTTPException, UploadFile
+from fastapi import Body, FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.types import Scope
@@ -373,7 +374,11 @@ MANUAL_DROP_DIR = os.path.join(STORAGE_ROOT, "manual_drop")
 
 
 @app.post("/app-api/manual-drop/upload")
-async def manual_drop_upload(file: UploadFile = File(...), x_upload_token: str = Header(default="")):
+async def manual_drop_upload(
+    file: UploadFile = File(...),
+    detections: str = Form(default=""),
+    x_upload_token: str = Header(default=""),
+):
     if MODEL_UPLOAD_TOKEN and x_upload_token != MODEL_UPLOAD_TOKEN:
         raise HTTPException(403, "jeton invalide")
     os.makedirs(MANUAL_DROP_DIR, exist_ok=True)
@@ -384,6 +389,19 @@ async def manual_drop_upload(file: UploadFile = File(...), x_upload_token: str =
     dst = os.path.join(MANUAL_DROP_DIR, f"journeys_{ts}_{safe_name}")
     with open(dst, "wb") as f:
         f.write(await file.read())
+    # 21.10, Sid ("j'ai des tags dans 'video parcours' et celles-là je les
+    # ai pas") - quand Parcours a déjà fait tourner son modèle sur cette
+    # image (chatière only, voir journeys.py's _detections_sidecar_for_
+    # paws_review), le sidecar suit le même nom de base que l'image, repris
+    # tel quel par ingest_manual_batch au prochain cycle - jamais écrasé par
+    # un drop manuel normal (celui-ci n'envoie jamais ce champ).
+    if detections:
+        try:
+            parsed = json.loads(detections)
+            with open(dst[:-4] + ".json", "w", encoding="utf-8") as f:
+                json.dump(parsed, f)
+        except Exception as e:
+            logging.warning(f"Detections sidecar invalide pour {dst}: {e}")
     return {"ok": True}
 
 

@@ -12,7 +12,11 @@ souris) : les photos Reolink avec la souris visible existent dans son
 NVR/appli, mais n'arrivaient nulle part automatiquement. Ce dossier est le
 pont manuel.
 
-Aucune boîte pré-remplie (comme Reolink) - Sid les dessine à la main.
+Aucune boîte pré-remplie pour un vrai dépôt manuel (Sid les dessine à la
+main) - sauf si un sidecar JSON du même nom de base accompagne l'image
+(21.10 : le bouton "envoyer" de Parcours en dépose un quand chatière a
+déjà fait tourner son propre modèle sur ce frame, voir journeys.py's
+_detections_sidecar_for_paws_review / manual_drop_upload côté main.py).
 Dossier déjà monté (STORAGE_ROOT/manual_drop, sur le même volume partagé
 que originals/thumbnails/paws_review.db) - aucun nouveau montage docker
 nécessaire, elle y dépose des fichiers directement via scp/un gestionnaire
@@ -20,6 +24,7 @@ de fichiers sur le NAS.
 """
 
 import io
+import json
 import logging
 import os
 import zlib
@@ -85,6 +90,9 @@ def ingest_manual_batch() -> int:
             # dossier de dépôt reste cohérent avec ce qui est réellement en
             # attente.
             os.replace(src_path, os.path.join(imported_dir, filename))
+            sidecar_leftover = src_path[:-4] + ".json" if src_path.lower().endswith((".jpg", ".jpeg")) else None
+            if sidecar_leftover and os.path.isfile(sidecar_leftover):
+                os.replace(sidecar_leftover, os.path.join(imported_dir, os.path.basename(sidecar_leftover)))
             continue
 
         try:
@@ -94,6 +102,19 @@ def ingest_manual_batch() -> int:
         except Exception as e:
             log.warning("Image illisible pour %s: %s", filename, e)
             continue
+
+        # 21.10: sidecar optionnel déposé par manual_drop_upload quand la
+        # source avait déjà des boîtes (Parcours/chatière) - sinon '[]'
+        # inchangé, Sid les dessine à la main comme avant.
+        detected_objects_json = "[]"
+        sidecar_path = src_path[:-4] + ".json" if src_path.lower().endswith((".jpg", ".jpeg")) else None
+        if sidecar_path and os.path.isfile(sidecar_path):
+            try:
+                with open(sidecar_path, "r", encoding="utf-8") as f:
+                    boxes = json.load(f)
+                detected_objects_json = json.dumps(boxes)
+            except Exception as e:
+                log.warning("Sidecar de détections illisible pour %s: %s", filename, e)
 
         dst_original = os.path.join(ORIGINALS_DIR, f"manual_{source_event_id}.jpg")
         dst_thumb = os.path.join(THUMBNAILS_DIR, f"manual_{source_event_id}.jpg")
@@ -116,12 +137,14 @@ def ingest_manual_batch() -> int:
                        source, source_event_id, created_at,
                        detected_objects_json, original_path, thumbnail_path,
                        review_status
-                   ) VALUES ('manual', ?, ?, '[]', ?, ?, 'pending')""",
-                (source_event_id, created_at, dst_original, dst_thumb),
+                   ) VALUES ('manual', ?, ?, ?, ?, ?, 'pending')""",
+                (source_event_id, created_at, detected_objects_json, dst_original, dst_thumb),
             )
             recompute_cat_labels(conn, cursor.lastrowid)
 
         os.replace(src_path, os.path.join(imported_dir, filename))
+        if sidecar_path and os.path.isfile(sidecar_path):
+            os.replace(sidecar_path, os.path.join(imported_dir, os.path.basename(sidecar_path)))
         ingested += 1
 
     if ingested:

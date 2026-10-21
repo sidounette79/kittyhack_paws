@@ -132,6 +132,11 @@ CHATIERE_BOOST_DURATION_S = 20.0
 # cameras, not necessarily right at the flap), so it gets a longer window
 # to still catch the cat by the time it actually reaches the flap.
 CHATIERE_REOLINK_TRIGGER_DURATION_S = 180.0
+# 21.10, Sid: cadence du poll Reolink lui-même (voir le commentaire sur
+# CameraWatcher._last_reolink_poll) - 2s plutôt que l'ancien 8s hérité du
+# cycle idle, sans toucher à ce dernier (toujours utile pour
+# snapshot/inférence locale, plus coûteux).
+CHATIERE_REOLINK_POLL_INTERVAL_S = 2.0
 # Written by MqttStatus's on_message handler AND by a peripheral camera's
 # own thread (via _extend_chatiere_trigger below), read by chatiere's
 # CameraWatcher thread - a single float assignment/read is atomic enough in
@@ -631,8 +636,19 @@ def _is_frame_usable(frame: np.ndarray) -> bool:
         return True
 
 
-def _save_training_sample(cam_name: str, frame: np.ndarray) -> None:
-    """Append a full-resolution timestamped JPEG for later labeling."""
+def _save_training_sample(cam_name: str, frame: np.ndarray, detections: list[dict] | None = None) -> None:
+    """Append a full-resolution timestamped JPEG for later labeling.
+
+    21.10, Sid ("dans paws review n'arrivent que les boîtes de reo chatière
+    [...] mais sans les boîtes [...] j'ai des tags dans 'video parcours' et
+    celles-là je les ai pas") - chatière a déjà un modèle local qui tourne
+    sur ce même frame (self.detector.run(), voir CameraWatcher) et dont le
+    résultat s'affiche bien dans Parcours ("boubou 70%") via
+    _save_event_frame's sidecar - mais ce résultat-ci n'était jamais
+    sauvegardé, donc la même image arrivait vierge dans Paws Review. Même
+    convention de sidecar que _save_event_frame (json brut, clé "name" -
+    la traduction vers le schéma de Paws Review, clé "label", se fait côté
+    journeys.py au moment de l'upload, pas ici)."""
     try:
         os.makedirs(TRAINING_SAMPLES_DIR, exist_ok=True)
         ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 90])
@@ -641,6 +657,9 @@ def _save_training_sample(cam_name: str, frame: np.ndarray) -> None:
         filename = f"{cam_name}_{time.strftime('%Y%m%d_%H%M%S')}.jpg"
         with open(os.path.join(TRAINING_SAMPLES_DIR, filename), "wb") as f:
             f.write(buf.tobytes())
+        if detections:
+            with open(os.path.join(TRAINING_SAMPLES_DIR, filename[:-4] + ".json"), "w", encoding="utf-8") as f:
+                json.dump(detections, f)
     except Exception as e:
         log.warning("[%s] Could not save training sample: %s", cam_name, e)
 
@@ -841,6 +860,18 @@ class CameraWatcher(threading.Thread):
         # on a weak-signal camera - doesn't reset the sampling cadence.
         self._last_sample_at = 0.0
         self._base_poll_interval = CAMERA_POLL_INTERVAL_S.get(name, DEFAULT_POLL_INTERVAL_S)
+        # 21.10, Sid ("l'événement réel enregistré dans reolink commence à
+        # 8h20:14 - j'ai donc l'entrée de pookie... alors que paws review ne
+        # commence qu'à 08:20:20"): ce check (_reolink_dog_cat_detected)
+        # tournait au même rythme que le snapshot/inférence (_poll_interval,
+        # 8s à l'idle pour chatiere) - un passage vu par Reolink avant que le
+        # PIR ne se déclenche pouvait donc rester invisible jusqu'à 8s,
+        # coupant pile le début de l'événement (l'entrée avec la proie).
+        # C'est un simple GET HTTP sur l'API de la caméra, sans decode vidéo
+        # (voir _reolink_dog_cat_detected) - son propre timer, découplé de
+        # _poll_interval, pour tourner bien plus vite sans alourdir
+        # l'inférence locale.
+        self._last_reolink_poll = 0.0
 
     def stop(self):
         self._stop.set()
@@ -992,6 +1023,25 @@ class CameraWatcher(threading.Thread):
                     # own comment for why this matters.
                     frame_captured_wall = time.time()
                     now = time.monotonic()
+                    # 21.10, Sid ("l'événement réel... commence à 8h20:14 -
+                    # paws review ne commence qu'à 08:20:20"): ce poll
+                    # tournait auparavant à l'intérieur du gate
+                    # _poll_interval() ci-dessous (8s à l'idle) - un passage
+                    # vu par Reolink avant le PIR restait invisible jusqu'à
+                    # 8s, coupant le tout début de l'événement. Pur GET HTTP
+                    # sur l'API caméra (pas de decode vidéo), sorti de ce
+                    # gate avec son propre timer (CHATIERE_REOLINK_POLL_
+                    # INTERVAL_S, 2s) pour ne plus dépendre de la cadence
+                    # snapshot/inférence.
+                    if self.cam_name in REOLINK_HTTP and now - self._last_reolink_poll >= CHATIERE_REOLINK_POLL_INTERVAL_S:
+                        self._last_reolink_poll = now
+                        if _reolink_dog_cat_detected(REOLINK_HTTP[self.cam_name]):
+                            _extend_chatiere_trigger(CHATIERE_REOLINK_TRIGGER_DURATION_S)
+                            # 08.10, Sid ("potentiellement cette de camera KF
+                            # pour les cas ou PIR a un angle mort"): this
+                            # camera's own Reolink AI backs up the internal
+                            # flap camera too, not just its own local model.
+                            _wake_kittyflap_camera(self.api_token, CHATIERE_REOLINK_TRIGGER_DURATION_S)
                     if now - last_poll < self._poll_interval():
                         continue
                     last_poll = now
@@ -999,19 +1049,6 @@ class CameraWatcher(threading.Thread):
                         log.warning("[%s] Corrupted/blank frame (decode error concealment), skipping.", self.cam_name)
                         continue
                     _save_frame_snapshot(self.cam_name, frame)
-                    # 08.10, Sid ("comme ça elle est prête en cas de
-                    # défaillance du PIR"): chatiere's own Reolink AI (new
-                    # camera, see REOLINK_HTTP above) is a third trigger
-                    # source alongside the PIR and the 3 peripheral
-                    # cameras - a plain HTTP poll, no extra video decode, so
-                    # it rides the same cadence as the snapshot above.
-                    if self.cam_name in REOLINK_HTTP and _reolink_dog_cat_detected(REOLINK_HTTP[self.cam_name]):
-                        _extend_chatiere_trigger(CHATIERE_REOLINK_TRIGGER_DURATION_S)
-                        # 08.10, Sid ("potentiellement cette de camera KF
-                        # pour les cas ou PIR a un angle mort"): this
-                        # camera's own Reolink AI backs up the internal
-                        # flap camera too, not just its own local model.
-                        _wake_kittyflap_camera(self.api_token, CHATIERE_REOLINK_TRIGGER_DURATION_S)
                     # 08.10, Sid ("elle s'active au PIR..."): chatiere's own
                     # model only actually runs within a trigger window (PIR
                     # or, as a backup, a peripheral Reolink detection) - CPU
@@ -1038,7 +1075,7 @@ class CameraWatcher(threading.Thread):
                         continue
                     if any_detection and now - self._last_sample_at >= TRAINING_SAMPLE_COOLDOWN_S:
                         self._last_sample_at = now
-                        _save_training_sample(self.cam_name, frame)
+                        _save_training_sample(self.cam_name, frame, detections)
                     # 10.10, Sid ("deux vidéos côte à côte"): we're already
                     # past the `_chatiere_boost_until` gate above, so every
                     # poll reaching here is within a real trigger window -
