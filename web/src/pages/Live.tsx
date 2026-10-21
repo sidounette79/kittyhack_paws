@@ -219,7 +219,14 @@ export default function LivePage() {
             often here doesn't trigger any extra capture or inference,
             just serves bytes that already exist. Stacked on mobile (her
             primary device), side by side from sm: up. */}
-        <div className="mb-4 flex flex-col gap-2 sm:flex-row">
+        {/* 21.10, Sid ("les caméras se bouffent l'espace, KH sur une ligne
+            tout seul et les deux autres dessous") - 3 panneaux serrés sur
+            une seule ligne (surtout en sm:flex-row) les rendait trop
+            petits pour être utiles. KH (la vraie caméra de détection) sur
+            sa propre ligne pleine largeur, les deux chatières Reolink
+            (ext/int, simple aperçu sans détection) groupées sur la ligne
+            du dessous. */}
+        <div className="mb-4 flex flex-col gap-2">
         <div className="relative h-64 flex-1 overflow-hidden rounded-xl bg-black">
           <img
             ref={imgRef}
@@ -308,6 +315,13 @@ export default function LivePage() {
           )}
         </div>
 
+        {/* 21.10, Sid ("sur mobile ça s'affiche bien (empilé), c'est juste
+            sur tablette que ça se bouffe la place") - ce sous-groupe reste
+            empilé sur mobile (comme avant, ça marchait déjà) et ne passe
+            côte à côte qu'à partir de sm: - juste 2 panneaux à cet endroit
+            maintenant (KH est sorti plus haut sur sa propre ligne), donc
+            plus de place pour chacun même sur tablette. */}
+        <div className="flex flex-col gap-2 sm:flex-row">
         <div className="relative h-64 flex-1 overflow-hidden rounded-xl bg-black">
           {chatiereUrl && (
             <img src={chatiereUrl} alt="Chatière ext" className="h-full w-full object-cover" />
@@ -336,6 +350,7 @@ export default function LivePage() {
           <div className="absolute left-2 top-2 rounded-full bg-black/60 px-2 py-1 text-xs text-white/80">
             Chatière int (Reolink)
           </div>
+        </div>
         </div>
         </div>
 

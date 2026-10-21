@@ -3,7 +3,7 @@ import { useNavigate, useParams } from "react-router";
 import BottomNav from "../components/BottomNav";
 import EventModal from "../components/EventModal";
 import { SessionExpiredError, fetchJson } from "../lib/api";
-import { shiftDate, todayLocalIso, weekdayAbbr } from "../lib/date";
+import { monthYearLabel, shiftDate, todayLocalIso, weekdayAbbr } from "../lib/date";
 import { useBackButton } from "../lib/useBackButton";
 import { usePageTitle } from "../lib/usePageTitle";
 
@@ -173,15 +173,17 @@ export default function PresenceCatPage() {
     null
   );
   const pillStripRef = useRef<HTMLDivElement>(null);
+  const todayPillRef = useRef<HTMLButtonElement>(null);
 
-  // 21.10: la bande de dates s'ouvre toujours sur aujourd'hui à droite -
-  // le rendu initial est identique à l'ancienne bande fixe de 8 jours,
-  // même si 365 jours sont en fait chargés derrière (scroll vers la
-  // gauche pour les atteindre). "auto" plutôt que "smooth" : un vrai
-  // positionnement au montage, pas une animation visible à chaque
-  // ouverture de la page.
+  // 21.10, Sid ("il faudrait que le 'Aujourd'hui' soit en gras et au
+  // centre... ça ouvre je sais pas où") - scrollTo(scrollWidth) poussait
+  // aujourd'hui tout au bord droit, pas franchement repérable. scrollIntoView
+  // avec inline:"center" sur le pill d'aujourd'hui spécifiquement (pas juste
+  // le bord de la liste) le centre vraiment, avec du contexte visible des
+  // deux côtés. "auto" plutôt que "smooth" : positionnement direct au
+  // montage, pas une animation à chaque ouverture de page.
   useEffect(() => {
-    pillStripRef.current?.scrollTo({ left: pillStripRef.current.scrollWidth, behavior: "auto" });
+    todayPillRef.current?.scrollIntoView({ inline: "center", block: "nearest", behavior: "auto" });
   }, []);
 
   useBackButton(
@@ -286,6 +288,7 @@ export default function PresenceCatPage() {
   // aujourd'hui au chargement) - swipe/scroll vers la gauche pour
   // remonter, le rendu par défaut reste identique à avant.
   const pillDates = Array.from({ length: 366 }, (_, i) => shiftDate(todayLocalIso(), -(365 - i)));
+  const todayIso = todayLocalIso();
 
   return (
     <>
@@ -485,19 +488,33 @@ export default function PresenceCatPage() {
                   </div>
                 </div>
 
-                <div ref={pillStripRef} className="mt-4 flex gap-1 overflow-x-auto scroll-smooth">
-                  {pillDates.map((d) => (
-                    <button
-                      key={d}
-                      onClick={() => setDate(d)}
-                      className={`flex min-w-[2.6rem] flex-shrink-0 flex-col items-center rounded-lg px-1.5 py-2 text-xs ${
-                        d === date ? "bg-white text-black" : "bg-black/30 text-white/80"
-                      }`}
-                    >
-                      <span className="text-sm font-semibold">{Number(d.slice(8, 10))}</span>
-                      <span>{weekdayAbbr(d)}</span>
-                    </button>
-                  ))}
+                {/* 21.10, Sid ("je sais pas quel mois on est") - suit la
+                    date SÉLECTIONNÉE (pas juste aujourd'hui), donc reste
+                    juste même après avoir tapé un pill ailleurs dans le
+                    mois précédent/suivant. */}
+                <div className="mt-3 text-center text-xs font-medium capitalize text-white/70">
+                  {monthYearLabel(date)}
+                </div>
+                <div ref={pillStripRef} className="mt-1 flex gap-1 overflow-x-auto scroll-smooth">
+                  {pillDates.map((d) => {
+                    const isToday = d === todayIso;
+                    const isSelected = d === date;
+                    return (
+                      <button
+                        key={d}
+                        ref={isToday ? todayPillRef : undefined}
+                        onClick={() => setDate(d)}
+                        className={`flex min-w-[2.6rem] flex-shrink-0 flex-col items-center rounded-lg px-1.5 py-2 text-xs ${
+                          isSelected ? "bg-white text-black" : "bg-black/30 text-white/80"
+                        } ${isToday ? "ring-2 ring-white" : ""}`}
+                      >
+                        <span className={`text-sm ${isToday ? "font-extrabold" : "font-semibold"}`}>
+                          {Number(d.slice(8, 10))}
+                        </span>
+                        <span>{weekdayAbbr(d)}</span>
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
             </div>

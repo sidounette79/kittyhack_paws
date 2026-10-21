@@ -24,3 +24,15 @@ export function weekdayAbbr(iso: string): string {
   const abbr = ["di", "lu", "ma", "me", "je", "ve", "sa"];
   return abbr[new Date(iso + "T00:00:00").getDay()];
 }
+
+// 21.10, Sid ("je sais pas quel mois on est") - la bande de dates pérenne
+// (365 jours, voir PresenceCat.tsx) n'affichait que le jour du mois,
+// ambigu dès qu'on scrolle loin ou qu'un mois change.
+export function monthYearLabel(iso: string): string {
+  const months = [
+    "janvier", "février", "mars", "avril", "mai", "juin",
+    "juillet", "août", "septembre", "octobre", "novembre", "décembre",
+  ];
+  const d = new Date(iso + "T00:00:00");
+  return `${months[d.getMonth()]} ${d.getFullYear()}`;
+}
