@@ -464,6 +464,69 @@ def _list_event_frames(local_start: datetime, local_end: datetime) -> list[dict]
     return results
 
 
+# 21.10, Sid ("j'ai que 8 images dans la video reolink, alors qu'il a duré
+# autant du point de vue reolink que du point de vue HK") - un vrai
+# passage avait des frames chatière denses (~1/s) bien après la fin du
+# bloc HK (vérifié sur disque: capture continue jusqu'à +1min20 au-delà de
+# la fenêtre ±15s), mais _EVENT_FRAME_PAD_S coupait net à un pad fixe,
+# jetant du contenu pourtant réellement capturé. Remplace le pad fixe par
+# une extension "tant que les frames restent proches les unes des autres"
+# (coupe seulement sur un vrai trou de capture, pas sur un délai
+# arbitraire) - _MAX_EVENT_FRAME_GAP_S borne l'écart maximal toléré entre
+# deux frames consécutives pour continuer l'extension, _MAX_EVENT_FRAME_
+# EXTRA_S plafonne l'extension totale par sécurité (évite une fenêtre qui
+# s'étend sans fin sur du bruit occasionnel).
+_MAX_EVENT_FRAME_GAP_S = 10.0
+_MAX_EVENT_FRAME_EXTRA_S = 300.0
+
+
+def _chatiere_frame_timestamps() -> list[datetime]:
+    """All chatiere frame timestamps on disk, sorted ascending."""
+    out = []
+    for filepath in glob.glob(os.path.join(EVENT_FRAMES_DIR, "chatiere_*.jpg")):
+        m = _EVENT_FRAME_RE.match(os.path.basename(filepath))
+        if not m:
+            continue
+        try:
+            out.append(datetime.strptime(m.group("date") + m.group("time"), "%Y%m%d%H%M%S"))
+        except ValueError:
+            continue
+    out.sort()
+    return out
+
+
+def _extended_event_frame_window(base_start: datetime, base_end: datetime) -> tuple[datetime, datetime]:
+    """Widen [base_start, base_end] (the flap event's own span + the small
+    fixed _EVENT_FRAME_PAD_S) outward through any chatière frames that keep
+    arriving close together, so real continued capture past that pad isn't
+    silently dropped. Stops at the first real gap (or the safety ceiling)."""
+    timestamps = _chatiere_frame_timestamps()
+    if not timestamps:
+        return base_start, base_end
+
+    end = base_end
+    for ts in timestamps:
+        if ts <= end:
+            continue
+        if ts - end > timedelta(seconds=_MAX_EVENT_FRAME_GAP_S):
+            break
+        if ts - base_end > timedelta(seconds=_MAX_EVENT_FRAME_EXTRA_S):
+            break
+        end = ts
+
+    start = base_start
+    for ts in reversed(timestamps):
+        if ts >= start:
+            continue
+        if start - ts > timedelta(seconds=_MAX_EVENT_FRAME_GAP_S):
+            break
+        if base_start - ts > timedelta(seconds=_MAX_EVENT_FRAME_EXTRA_S):
+            break
+        start = ts
+
+    return start, end
+
+
 @webui_app.get("/watchdog-event-frame/{filename}")
 async def get_watchdog_event_frame(filename: str, _user: str = Depends(require_session)):
     path = _safe_event_frame_path(filename)
@@ -1389,10 +1452,11 @@ async def get_event(block_id: int, _user: str = Depends(require_session)):
         if len(created_ats) > 0:
             first_local = pd.to_datetime(DateTimeUtil.get_local_date_from_utc_date(str(created_ats.min())))
             last_local = pd.to_datetime(DateTimeUtil.get_local_date_from_utc_date(str(created_ats.max())))
-            reolink_frames = _list_event_frames(
+            window_start, window_end = _extended_event_frame_window(
                 first_local.to_pydatetime() - timedelta(seconds=_EVENT_FRAME_PAD_S),
                 last_local.to_pydatetime() + timedelta(seconds=_EVENT_FRAME_PAD_S),
             )
+            reolink_frames = _list_event_frames(window_start, window_end)
     except Exception as e:
         logging.warning(f"[WEBUI] Could not list Reolink event frames for block {block_id}: {e}")
 
@@ -1566,10 +1630,11 @@ async def post_reolink_correction_bulk(block_id: int, request: Request, _user: s
             raise HTTPException(status_code=404, detail="event not found")
         first_local = pd.to_datetime(DateTimeUtil.get_local_date_from_utc_date(str(created_ats.min())))
         last_local = pd.to_datetime(DateTimeUtil.get_local_date_from_utc_date(str(created_ats.max())))
-        reolink_frames = _list_event_frames(
+        window_start, window_end = _extended_event_frame_window(
             first_local.to_pydatetime() - timedelta(seconds=_EVENT_FRAME_PAD_S),
             last_local.to_pydatetime() + timedelta(seconds=_EVENT_FRAME_PAD_S),
         )
+        reolink_frames = _list_event_frames(window_start, window_end)
     except HTTPException:
         raise
     except Exception as e:
