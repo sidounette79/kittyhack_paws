@@ -13,6 +13,7 @@ from app.cat_labels import recompute_cat_labels
 from app.catalog_db import get_conn, init_db
 from app.config import RETENTION_DAYS, STORAGE_ROOT
 from app.export_training import EXPORTS_DIR, read_state, start_export_async
+from app.labels import CLASSES, canonicalize
 from app.model_review import list_model_dirs, resolve_queue_items, start_model_review_async
 from app.model_review import read_state as read_model_review_state
 from app.train_vastai import read_state as read_training_state
@@ -248,6 +249,36 @@ def stats():
                FROM captures"""
         ).fetchone()
         return {**dict(row), "retention_days": RETENTION_DAYS}
+
+
+# 21.10, Sid ("au lieu que je te demande tout le temps... un compteur du
+# nombre de photos par chaque dans le modèle... la différence entre
+# provient de KH vs provient de reolink et manuel") - les chats de face
+# (KH) sont déjà bien couverts, l'angle Reolink (reolink + manuel, elle
+# ajoute "manuel" en tirant depuis l'appli Reolink elle-même, même angle)
+# a encore des trous - ce compteur lui dit directement combien ajouter
+# pour chacun, par source, sans avoir à me redemander. labelstudio = vieil
+# import historique, angle caméra inconnu, montré à part plutôt que
+# mélangé à tort dans l'un des deux autres groupes.
+@app.get("/app-api/stats/by-class-source")
+def stats_by_class_source():
+    buckets = {c: {"kittyflap": 0, "reolink_manual": 0, "other": 0} for c in CLASSES}
+    with get_conn() as conn:
+        rows = conn.execute(
+            """SELECT id, source, detected_objects_json FROM captures
+               WHERE review_status IN ('confirmed', 'corrected')"""
+        ).fetchall()
+        for row in rows:
+            boxes = effective_boxes(conn, row["id"], row["detected_objects_json"])
+            classes_here = {canonicalize(b.get("label")) for b in boxes} - {None}
+            source = row["source"]
+            bucket = "kittyflap" if source == "kittyflap" else (
+                "reolink_manual" if source in ("reolink", "manual") else "other"
+            )
+            for cls in classes_here:
+                if cls in buckets:
+                    buckets[cls][bucket] += 1
+    return buckets
 
 
 @app.post("/app-api/export/start")

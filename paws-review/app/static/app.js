@@ -69,6 +69,13 @@ const MODEL_REVIEW_TAB = '__model_review__';
 // vers elle - voir startCompareRecent()/compareRecentMore().
 const COMPARE_TAB = '__compare__';
 
+// 21.10, Sid ("au lieu que je te demande tout le temps... un compteur du
+// nombre de photos par chaque dans le modèle... la différence entre
+// provient de KH vs provient de reolink et manuel") - lecture seule,
+// aucune file, juste le tableau renvoyé par
+// GET /app-api/stats/by-class-source.
+const STATS_TAB = '__stats__';
+
 async function api(path, opts) {
   const res = await fetch(path, opts);
   if (!res.ok) throw new Error(`${path}: ${res.status}`);
@@ -240,7 +247,12 @@ function renderTabs() {
          style="${currentTab === COMPARE_TAB ? 'background:var(--accent)' : 'border-color:var(--accent)'}"
          onclick="selectTab('${COMPARE_TAB}')">
       Comparaison</div>`;
-  tabsEl.innerHTML = allTab + catTabs + sourceTabs + preyTab + reviewedTabs + modelReviewTab + compareTab;
+  const statsTab = `
+    <div class="tab ${currentTab === STATS_TAB ? 'active' : ''}"
+         style="${currentTab === STATS_TAB ? 'background:var(--accent)' : 'border-color:var(--accent)'}"
+         onclick="selectTab('${STATS_TAB}')">
+      Stats</div>`;
+  tabsEl.innerHTML = allTab + catTabs + sourceTabs + preyTab + reviewedTabs + modelReviewTab + compareTab + statsTab;
 }
 
 function selectTab(name) {
@@ -249,11 +261,20 @@ function selectTab(name) {
   renderTabs();
   document.getElementById('model-review-bar').hidden = currentTab !== MODEL_REVIEW_TAB;
   document.getElementById('compare-bar').hidden = currentTab !== COMPARE_TAB;
+  document.getElementById('stats-bar').hidden = currentTab !== STATS_TAB;
   if (currentTab === MODEL_REVIEW_TAB) {
     checkModelReviewStatus();
     loadModelReviewQueue();
   } else if (currentTab === COMPARE_TAB) {
+    // 21.10 : ces deux onglets n'ont pas de file - sans ça, #queue garde
+    // les vignettes du dernier onglet visité en dessous de la barre.
+    document.getElementById('queue').innerHTML = '';
+    document.getElementById('empty').hidden = true;
     checkCompareStatus();
+  } else if (currentTab === STATS_TAB) {
+    document.getElementById('queue').innerHTML = '';
+    document.getElementById('empty').hidden = true;
+    loadStatsTab();
   } else {
     loadQueue();
   }
@@ -649,6 +670,50 @@ async function compareRecentMore() {
     });
   } catch (e) { /* 409 = déjà en cours - pas une vraie erreur */ }
   await checkCompareStatus();
+}
+
+// 21.10, Sid ("un compteur du nombre de photos par chaque dans le
+// modèle... la différence entre provient de KH vs provient de reolink et
+// manuel... combien en rajouter pour chacun pour garder un équilibre chat
+// par chat et KH vs reolink") - lecture seule, un seul appel au chargement
+// de l'onglet (pas de polling, les comptes ne bougent pas pendant qu'on
+// regarde).
+async function loadStatsTab() {
+  const bar = document.getElementById('stats-bar');
+  bar.innerHTML = `<span class="export-msg">Chargement...</span>`;
+  let data;
+  try {
+    data = await api('/app-api/stats/by-class-source');
+  } catch (e) {
+    bar.innerHTML = `<span class="export-msg export-error">Échec du chargement des stats.</span>`;
+    return;
+  }
+  const classes = Object.keys(data);
+  // "combien ajouter pour équilibrer" côté Reolink+Manuel spécifiquement
+  // (c'est là qu'il reste des trous, pas côté KH - voir son message) : le
+  // manque de chaque chat par rapport au plus représenté des deux groupes.
+  const maxReolinkManual = Math.max(...classes.map(c => data[c].reolink_manual));
+  const rows = classes.map(c => {
+    const { kittyflap, reolink_manual, other } = data[c];
+    const gap = maxReolinkManual - reolink_manual;
+    return `<tr>
+      <td>${c}</td>
+      <td>${kittyflap}</td>
+      <td>${reolink_manual}</td>
+      <td>${other}</td>
+      <td>${kittyflap + reolink_manual + other}</td>
+      <td class="${gap > 0 ? 'export-error' : ''}">${gap > 0 ? `+${gap}` : '-'}</td>
+    </tr>`;
+  }).join('');
+  bar.innerHTML = `
+    <table class="stats-table">
+      <thead><tr>
+        <th>Classe</th><th>KH</th><th>Reolink+Manuel</th><th>Autre (ancien)</th><th>Total</th>
+        <th>À ajouter (Reolink+Manuel)</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+    <div class="hint" style="margin-top:8px">"Autre (ancien)" = import LabelStudio historique, angle caméra inconnu, ni KH ni Reolink identifié.</div>`;
 }
 
 async function openDetail(index) {

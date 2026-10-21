@@ -86,6 +86,15 @@ header h1 { font-size: 16px; margin: 0 0 8px; }
 .export-msg { color: var(--text-dim); }
 .export-error { color: var(--danger); }
 
+/* 21.10, Sid ("un compteur du nombre de photos par chaque... KH vs
+   reolink et manuel") */
+.stats-table { border-collapse: collapse; font-size: 13px; width: 100%; }
+.stats-table th, .stats-table td {
+  padding: 6px 10px; border: 1px solid var(--border); text-align: center;
+}
+.stats-table th { color: var(--text-dim); font-weight: 600; }
+.stats-table td:first-child { text-align: left; font-weight: 600; }
+
 .queue-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
