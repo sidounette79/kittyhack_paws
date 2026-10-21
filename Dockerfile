@@ -13,19 +13,26 @@ FROM python:3.11-slim
 # vainfo is just for manual troubleshooting (`docker exec ... vainfo`), not
 # used by the app itself - cheap to keep.
 #
-# 21.10, Sid ("on va l'ouvrir maintenant" puis "note bien dans la roadmap
-# qu'on a explorer de bout en bout") - gstreamer1.0-tools/plugins-base/
-# plugins-good/plugins-bad ont été ajoutés ce soir-là pour faire tourner
-# le décodage matériel chatière via GStreamer (vah264dec) plutôt que
-# ffmpeg - ABANDONNÉ et retiré le même soir après test en déploiement
-# réel : le pilote VA-API dont a besoin vah264dec exige libigdgmm12 >=
-# 22.7.2+ds1, incompatible avec la version EXACTE (22.3.0) dont a besoin
-# OpenVINO sur ce GPU (voir plus bas) - testé les deux versions en direct,
-# aucune ne satisfait les deux à la fois sur ce matériel. Voir le
-# commentaire complet de watchdog.py (_start_hw_decoder) et
-# KITTYHACK_ROADMAP.md pour le détail de l'exploration. OpenVINO GPU
-# (déjà validé sur 5 vrais passages) gardé prioritaire, décodage matériel
-# chatière abandonné - repli logiciel inchangé.
+# 21.10, Sid ("on va l'ouvrir maintenant" puis, après avoir trouvé que
+# vah264dec a besoin de libigdgmm12 >= 22.7.2+ds1 alors qu'OpenVINO sur ce
+# GPU a besoin de 22.3.0 EXACT (voir plus bas) - testé les deux en direct,
+# aucune ne satisfait les deux à la fois : "Tu peux reproduire le souci de
+# base dans ton container éphémère ?" puis "Y avait pas d'autres options
+# que ça ?") - gstreamer1.0-tools/plugins-base/plugins-good/plugins-bad
+# pour le décodage matériel chatière via GStreamer (vah264dec), AVEC
+# isolation : `apt-get install` ci-dessous, sans conflit à ce stade
+# (libigdgmm12 pas encore épinglé), tire naturellement la version récente
+# de GmmLib pour satisfaire intel-media-va-driver - une copie est gardée
+# dans /opt/gmm-new AVANT que le bloc OpenVINO plus bas ne force le
+# système entier sur 22.3.0. `watchdog.py` (_start_hw_decoder) pointe
+# `LD_LIBRARY_PATH` sur cette copie privée pour le SEUL sous-processus
+# gst-launch-1.0 - le process Python principal (OpenVINO) ne voit jamais
+# cette variable, garde la version système 22.3.0. Testé dans un
+# conteneur jetable avant d'écrire ça ici : décodage matériel ET
+# inférence GPU OpenVINO fonctionnent simultanément, chacun avec sa
+# propre version. Voir KITTYHACK_ROADMAP.md pour le détail complet de
+# l'exploration (tentative sans isolation d'abord, abandonnée, puis
+# cette solution trouvée).
 #
 # The dpkg-divert line right before the install is a real, confirmed fix
 # (not precautionary): a first build attempt hung for 18+ minutes with
@@ -44,6 +51,12 @@ RUN dpkg-divert --local --rename --add /usr/bin/update-mime-database \
     intel-media-va-driver \
     vainfo \
     wget \
+    gstreamer1.0-tools \
+    gstreamer1.0-plugins-base \
+    gstreamer1.0-plugins-good \
+    gstreamer1.0-plugins-bad \
+    && mkdir -p /opt/gmm-new \
+    && cp /usr/lib/x86_64-linux-gnu/libigdgmm.so.12* /opt/gmm-new/ \
     && rm -rf /var/lib/apt/lists/*
 
 # 20.10, Sid ("je veux le GPU partout où c'est possible") - the OpenCL/
@@ -63,6 +76,14 @@ RUN dpkg-divert --local --rename --add /usr/bin/update-mime-database \
 # Previously live-installed by hand and lost on a later container
 # recreate (privileged/devices added to compose.yaml) - baked in for real
 # this time so that never happens again.
+#
+# 21.10: ce dpkg -i de libigdgmm12 22.3.0 a maintenant un second rôle,
+# intentionnel - il force le système ENTIER à revenir sur 22.3.0 après
+# que l'install de GStreamer ci-dessus a naturellement tiré une version
+# plus récente pour satisfaire intel-media-va-driver (déjà copiée à part
+# dans /opt/gmm-new avant ce downgrade). Ne pas réordonner ces deux
+# blocs - l'ordre (gstreamer+copie, PUIS ce downgrade) est ce qui fait
+# marcher les deux versions en même temps.
 RUN wget -q -P /tmp/intel-gpu \
     https://github.com/intel/intel-graphics-compiler/releases/download/igc-1.0.13230.7/intel-igc-core_1.0.13230.7_amd64.deb \
     https://github.com/intel/intel-graphics-compiler/releases/download/igc-1.0.13230.7/intel-igc-opencl_1.0.13230.7_amd64.deb \

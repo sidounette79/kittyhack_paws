@@ -803,34 +803,37 @@ def _save_frame_snapshot(cam_name: str, frame: np.ndarray) -> None:
 #     au-dessus du rythme actuel. D'où HW_DECODE_WIDTH/HEIGHT alignés sur
 #     cette résolution native, pas de redimensionnement nécessaire.
 #
-# DÉSACTIVÉ LE SOIR MÊME, cause racine trouvée et vérifiée EN DIRECT
-# (pas une supposition) : `vah264dec` plantait en vrai déploiement avec
-# "undefined symbol: GmmGetAIL" - le pilote intel-media-va-driver
+# D'ABORD DÉSACTIVÉ LE SOIR MÊME, cause racine trouvée et vérifiée EN
+# DIRECT (pas une supposition) : `vah264dec` plantait en vrai déploiement
+# avec "undefined symbol: GmmGetAIL" - le pilote intel-media-va-driver
 # (25.2.3) a besoin de libigdgmm12 >= 22.7.2+ds1, alors que le GPU
-# compute (OpenVINO, voir le Dockerfile) est épinglé sur 22.3.0 EXACT -
-# "la dernière combinaison confirmée fonctionner sur ce matériel"
-# (Gemini Lake/UHD 600, trop vieux pour les compute-runtime récents).
-# Testé les DEUX versions en direct sur ce conteneur, une par une :
-# 22.7.2+ds1 fait marcher le décodage matériel MAIS fait retomber
-# l'inférence OpenVINO de chatière sur CPU ("Using OpenVINO LATENCY
-# mode... (CPU)", confirmé dans les logs) - 22.3.0 restaure l'inférence
-# GPU mais le décodage replante. Les deux ne coexistent pas sur CE GPU
-# précis. Pas de solution tierce trouvée - GmmLib ne publie aucun .deb
-# pré-compilé (juste des tags source, dernière version 22.10.2), une
-# vraie compilation locale resterait à tenter si on revient dessus un
-# jour, mais rien ne garantit qu'une version plus récente règle ça sans
-# casser autre chose. Arbitrage : l'inférence GPU OpenVINO est le gain
-# déjà validé sur 5 vrais passages ce jour-là (CPU divisé par 2-3), le
-# décodage matériel n'avait aucun gain mesuré en conditions réelles -
-# gardé désactivé, OpenVINO GPU prioritaire. Voir KITTYHACK_ROADMAP.md
-# pour le résumé complet de cette exploration.
+# compute (OpenVINO) est épinglé sur 22.3.0 EXACT - "la dernière
+# combinaison confirmée fonctionner sur ce matériel" (Gemini Lake/UHD
+# 600, trop vieux pour les compute-runtime récents). Testé les DEUX
+# versions système en direct, une par une : 22.7.2+ds1 fait marcher le
+# décodage mais fait retomber OpenVINO sur CPU ; 22.3.0 restaure
+# OpenVINO mais recasse le décodage.
+#
+# 21.10, Sid ("Y avait pas d'autres options que ça ?" / "Tu peux
+# reproduire le souci de base dans ton container éphémère ?") - RÉACTIVÉ
+# le même soir avec la vraie solution : isoler les deux versions au lieu
+# de choisir. `vah264dec` tourne dans un sous-processus séparé
+# (gst-launch-1.0, pas le process Python principal) - lui seul reçoit
+# `LD_LIBRARY_PATH` pointant vers une copie de la version récente
+# (voir le Dockerfile, /opt/gmm-new) ; le process watchdog principal
+# (et donc OpenVINO) ne voit jamais cette variable et continue d'utiliser
+# la version système 22.3.0. Testé dans un conteneur jetable avant
+# d'écrire ça ici : décodage matériel (~8.8 img/s, confirmé) ET
+# inférence GPU OpenVINO fonctionnent en même temps, chacun avec sa
+# propre version de GmmLib. Voir KITTYHACK_ROADMAP.md pour le détail
+# complet de l'exploration (les deux tentatives, celle qui a échoué et
+# celle-ci).
 #
 # Toujours un filet de sécurité : repli sur le chemin logiciel existant
 # (cv2.VideoCapture sur self.rtsp_url) si le décodeur matériel ne
 # démarre pas ou ne produit rien dans HW_DECODE_STARTUP_TIMEOUT_S -
-# jamais bloqué sans caméra fonctionnelle. C'est d'ailleurs ce filet qui
-# a absorbé ce plantage en direct ce soir sans aucune interruption de
-# capture.
+# jamais bloqué sans caméra fonctionnelle.
+_GST_PRIVATE_GMM_DIR = "/opt/gmm-new"
 HW_DECODE_DEVICE = "/dev/dri/renderD128"
 HW_DECODE_WIDTH = 640
 HW_DECODE_HEIGHT = 360
@@ -870,6 +873,10 @@ def _start_hw_decoder(rtsp_url: str) -> subprocess.Popen | None:
         os.chmod(_GST_XDG_RUNTIME_DIR, 0o700)
         env = os.environ.copy()
         env["XDG_RUNTIME_DIR"] = _GST_XDG_RUNTIME_DIR
+        # Isolation GmmLib - voir le commentaire du module ci-dessus.
+        # Seul CE sous-processus voit la version récente ; le process
+        # Python principal (OpenVINO) garde la version système 22.3.0.
+        env["LD_LIBRARY_PATH"] = _GST_PRIVATE_GMM_DIR + os.pathsep + env.get("LD_LIBRARY_PATH", "")
         return subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=HW_DECODE_FRAME_BYTES * 2, env=env)
     except Exception as e:
         log.warning("Could not start hardware decoder: %s", e)
@@ -1022,16 +1029,14 @@ class CameraWatcher(threading.Thread):
             self._stop.wait(self._base_poll_interval)
 
     def _run_continuous(self):
-        # 21.10, Sid ("on va l'ouvrir maintenant" puis, après avoir trouvé
-        # le conflit GmmLib/OpenVINO en déploiement réel, "note bien dans
-        # la roadmap qu'on a explorer de bout en bout") - DÉSACTIVÉ : voir
-        # le commentaire complet au-dessus de _start_hw_decoder pour la
-        # cause exacte (conflit de version GmmLib avec OpenVINO, testé
-        # dans les deux sens, aucune combinaison ne satisfait les deux en
-        # même temps sur ce GPU). Toute caméra (chatière y compris)
-        # utilise donc le chemin logiciel cv2.VideoCapture existant,
-        # inchangé.
-        use_hw = False and self.cam_name == "chatiere"
+        # 21.10, Sid ("Y avait pas d'autres options que ça ?") - RÉACTIVÉ
+        # avec l'isolation LD_LIBRARY_PATH (voir le commentaire complet
+        # au-dessus de _start_hw_decoder pour le détail du conflit GmmLib/
+        # OpenVINO et de sa résolution). Toute autre caméra, ou chatière
+        # si le matériel ne démarre pas proprement, utilise le chemin
+        # logiciel cv2.VideoCapture existant, inchangé - jamais bloqué
+        # sans caméra fonctionnelle.
+        use_hw = self.cam_name == "chatiere"
         while not self._stop.is_set():
             hw_proc = None
             cap = None
