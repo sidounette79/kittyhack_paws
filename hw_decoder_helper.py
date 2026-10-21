@@ -39,6 +39,16 @@ def main() -> int:
     rtsp_url, width, height = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
 
     Gst.init(None)
+    # 21.10, Sid - sur un conteneur fraîchement démarré (jamais de
+    # ~/.cache/gstreamer-1.0/registry.x86_64.bin construit avec succès
+    # auparavant), Gst.init(None) seul ne trouve PAS vah264dec par nom
+    # (confirmé en direct : "no element vah264dec", y compris via
+    # gst-launch-1.0 en CLI, pas spécifique à Python/gi) - mais inspecter
+    # le .so directement, OU rescanner explicitement son dossier comme
+    # ci-dessous, le trouve à coup sûr. Pas de dépendance à un cache
+    # construit "par chance" lors d'essais précédents (c'était le cas en
+    # prod ce soir, mais pas garanti sur un déploiement propre).
+    Gst.Registry.get().scan_path("/usr/lib/x86_64-linux-gnu/gstreamer-1.0")
 
     pipeline_str = (
         f'rtspsrc location="{rtsp_url}" latency=200 protocols=tcp '
@@ -62,6 +72,7 @@ def main() -> int:
     out = sys.stdout.buffer
     frame_bytes = width * height * 3
     rc = 0
+    first_frame = True
     try:
         while True:
             # Surfaces real pipeline errors (RTSP drop, decode failure) fast
@@ -76,15 +87,23 @@ def main() -> int:
                     print("pipeline EOS", file=sys.stderr)
                 break
 
-            sample = appsink.try_pull_sample(2 * Gst.SECOND)
+            # 21.10, Sid - testé en direct : la toute première frame a mis
+            # 3.75s à arriver (RTSP+VAAPI pas encore chauds), largement
+            # au-dessus d'un timeout de 2s qui faisait abandonner le script
+            # avant même d'avoir essayé. Même budget que
+            # HW_DECODE_STARTUP_TIMEOUT_S côté watchdog.py pour la première
+            # frame ; 2s ensuite suffit largement (le flux tourne déjà).
+            pull_timeout = (20 if first_frame else 2) * Gst.SECOND
+            sample = appsink.try_pull_sample(pull_timeout)
+            first_frame = False
             if sample is None:
                 print("no sample within timeout", file=sys.stderr)
                 break
 
             buf = sample.get_buffer()
             caps = sample.get_caps()
-            ok, vinfo = GstVideo.VideoInfo.new_from_caps(caps)
-            if not ok:
+            vinfo = GstVideo.VideoInfo.new_from_caps(caps)
+            if vinfo is None:
                 print("could not parse caps", file=sys.stderr)
                 break
 
