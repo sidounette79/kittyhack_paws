@@ -144,7 +144,17 @@ def review_queue(
     # 18.10, Sid : onglet dédié aux ~4800 captures importées depuis
     # LabelStudio (voir import_labelstudio.py) - à trier avant le futur
     # export vers le nouveau conteneur d'entraînement.
-    if source is not None:
+    # 21.10, Sid ("j'en vois 68 alors qu'il y en a 230") : le tableau de
+    # comptage (training_targets_counts ci-dessus) regroupe tout ce qui
+    # n'est pas "kittyflap" sous une seule colonne "Reolink+Manuel" - un
+    # filtre strict source='reolink' ne matchait donc jamais les captures
+    # 'manual', créant un écart entre le chiffre affiché et ce qui
+    # s'affichait réellement. "reolink_manual" reproduit exactement le
+    # même regroupement que le tableau ; "reolink"/"manual" restent
+    # disponibles séparément pour qui veut les distinguer.
+    if source == "reolink_manual":
+        query += " AND c.source != 'kittyflap'"
+    elif source is not None:
         query += " AND c.source = ?"
         params.append(source)
     # 18.10, Sid ("plus logique d'avoir un onglet avec les potentielles

@@ -784,8 +784,9 @@ function renderTrainingBar() {
     <select onchange="trainingSetFilter('source', this.value || null)">
       <option value="" ${!trainingFilters.source ? 'selected' : ''}>Toute source</option>
       <option value="kittyflap" ${trainingFilters.source === 'kittyflap' ? 'selected' : ''}>HK</option>
-      <option value="reolink" ${trainingFilters.source === 'reolink' ? 'selected' : ''}>Reolink</option>
-      <option value="manual" ${trainingFilters.source === 'manual' ? 'selected' : ''}>Manuel</option>
+      <option value="reolink_manual" ${trainingFilters.source === 'reolink_manual' ? 'selected' : ''}>Reolink+Manuel</option>
+      <option value="reolink" ${trainingFilters.source === 'reolink' ? 'selected' : ''}>Reolink seulement</option>
+      <option value="manual" ${trainingFilters.source === 'manual' ? 'selected' : ''}>Manuel seulement</option>
     </select>
     <select onchange="trainingSetFilter('group', this.value)">
       <option value="new" ${trainingFilters.group === 'new' ? 'selected' : ''}>Nouveau depuis le modèle actuel</option>
@@ -834,7 +835,16 @@ async function reloadCurrentTab() {
 }
 
 async function loadTrainingQueue() {
-  const params = new URLSearchParams({ limit: 200, training_mode: '1' });
+  // 21.10, Sid ("quand je filtre, il faut que je puisse voir toutes les
+  // images, sinon je peux pas trier les quasi identiques" / "j'en vois
+  // 68 alors qu'il y en a 230") - limite à 200 tronquait silencieusement
+  // dès qu'une combinaison chat/source dépassait ce chiffre (vérifié :
+  // Boubou+HK a 215 résultats réels). Le but de cet onglet est de voir
+  // le lot COMPLET pour éliminer les quasi-doublons à l'oeil - une vue
+  // partielle rend ça impossible. Limite relevée largement au-dessus de
+  // n'importe quelle combinaison réaliste plutôt que supprimée (filet de
+  // sécurité si jamais une requête sans aucun filtre était lancée).
+  const params = new URLSearchParams({ limit: 10000, training_mode: '1' });
   if (trainingFilters.cat) params.set('cat_name', trainingFilters.cat);
   if (trainingFilters.source) params.set('source', trainingFilters.source);
   if (trainingFilters.group) params.set('in_model', trainingFilters.group);
