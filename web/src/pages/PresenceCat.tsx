@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router";
 import BottomNav from "../components/BottomNav";
 import EventModal from "../components/EventModal";
@@ -172,6 +172,17 @@ export default function PresenceCatPage() {
   const [eventModal, setEventModal] = useState<{ blockId: number; mode: "video" | "photo" } | null>(
     null
   );
+  const pillStripRef = useRef<HTMLDivElement>(null);
+
+  // 21.10: la bande de dates s'ouvre toujours sur aujourd'hui à droite -
+  // le rendu initial est identique à l'ancienne bande fixe de 8 jours,
+  // même si 365 jours sont en fait chargés derrière (scroll vers la
+  // gauche pour les atteindre). "auto" plutôt que "smooth" : un vrai
+  // positionnement au montage, pas une animation visible à chaque
+  // ouverture de la page.
+  useEffect(() => {
+    pillStripRef.current?.scrollTo({ left: pillStripRef.current.scrollWidth, behavior: "auto" });
+  }, []);
 
   useBackButton(
     () => {
@@ -267,8 +278,14 @@ export default function PresenceCatPage() {
 
   if (!rfid) return null;
 
-  // Last 8 days (7 days ago .. today), same strip as the Shiny version.
-  const pillDates = Array.from({ length: 8 }, (_, i) => shiftDate(todayLocalIso(), -(7 - i)));
+  // 21.10, Sid ("rendre la ligne de calendrier scrollable") - les stats
+  // sont maintenant gardées pour toujours (voir media_purged côté
+  // database.py), donc figer la bande à 8 jours fixes empêchait d'accéder
+  // à tout cet historique pérenne. 365 jours en arrière, vraiment
+  // scrollable (overflow-x + un seul ref pour la positionner sur
+  // aujourd'hui au chargement) - swipe/scroll vers la gauche pour
+  // remonter, le rendu par défaut reste identique à avant.
+  const pillDates = Array.from({ length: 366 }, (_, i) => shiftDate(todayLocalIso(), -(365 - i)));
 
   return (
     <>
@@ -468,12 +485,12 @@ export default function PresenceCatPage() {
                   </div>
                 </div>
 
-                <div className="mt-4 flex justify-between gap-1 overflow-x-auto">
+                <div ref={pillStripRef} className="mt-4 flex gap-1 overflow-x-auto scroll-smooth">
                   {pillDates.map((d) => (
                     <button
                       key={d}
                       onClick={() => setDate(d)}
-                      className={`flex min-w-[2.6rem] flex-col items-center rounded-lg px-1.5 py-2 text-xs ${
+                      className={`flex min-w-[2.6rem] flex-shrink-0 flex-col items-center rounded-lg px-1.5 py-2 text-xs ${
                         d === date ? "bg-white text-black" : "bg-black/30 text-white/80"
                       }`}
                     >

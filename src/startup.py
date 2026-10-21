@@ -638,6 +638,32 @@ def run() -> None:
         logging.warning("Column 'rfid_is_real' not found in the 'events' table. Adding it...")
         DatabaseCore.add_column_to_table(CONFIG['KITTYHACK_DATABASE_PATH'], "events", "rfid_is_real", "INTEGER")
 
+    # 21.10, Sid ("rendre ça pérenne" / "ça peut pas juste être un calcul ?
+    # ... il faudrait les deux") - sépare la rétention des médias (lourd,
+    # photos/vidéos) de celle de la ligne d'événement elle-même (légère,
+    # compte dans les stats ET alimente la liste détaillée au clic). Avant :
+    # _purge_excess_photos_with_cursor mettait deleted=1 (invisible PARTOUT,
+    # y compris stats et listes) en même temps qu'elle effaçait les fichiers.
+    # Maintenant : purge_media_only marque juste media_purged=1 en effaçant
+    # les fichiers, deleted reste à 0 - la ligne ne disparaît jamais nulle
+    # part, seule la vignette/l'image devient indisponible. deleted=1 garde
+    # son sens d'origine (suppression manuelle explicite), inchangé.
+    if not DatabaseCore.check_if_column_exists(CONFIG['KITTYHACK_DATABASE_PATH'], "events", "media_purged"):
+        logging.warning("Column 'media_purged' not found in the 'events' table. Adding it...")
+        DatabaseCore.add_column_to_table(
+            CONFIG['KITTYHACK_DATABASE_PATH'], "events", "media_purged", "INTEGER NOT NULL DEFAULT 0"
+        )
+        # Backfill, une seule fois : les lignes déjà deleted=1 ont DEJA perdu
+        # leurs fichiers (l'ancienne purge effaçait les deux ensemble) -
+        # sans ce backfill, la nouvelle logique de purge les croirait
+        # encore pourvues de média (media_purged=0 par défaut sur toute
+        # colonne neuve) et fausserait le compte par rapport à
+        # MAX_PHOTOS_COUNT.
+        logging.warning("Backfilling 'media_purged' for already-deleted events...")
+        DatabaseCore.write_stmt_to_database(
+            CONFIG['KITTYHACK_DATABASE_PATH'], "UPDATE events SET media_purged = 1 WHERE deleted = 1"
+        )
+
     if not DatabaseCore.check_if_table_exists(CONFIG['KITTYHACK_DATABASE_PATH'], "motion_timeline"):
         logging.warning("Table 'motion_timeline' not found in the kittyhack database. Creating it...")
         DbMigrations.create_motion_timeline_table(CONFIG['KITTYHACK_DATABASE_PATH'])

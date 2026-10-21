@@ -263,6 +263,12 @@ class DatabaseCore:
             # réellement portée à l'année). created_at en dernier colonne
             # couvre aussi le ORDER BY de cette même requête.
             "CREATE INDEX IF NOT EXISTS idx_events_rfid_deleted_created_at ON events (rfid, deleted, created_at)",
+            # 21.10: _purge_excess_photos_with_cursor compte/sélectionne
+            # maintenant par media_purged (plus par deleted) - sans index,
+            # ce COUNT(*)/SELECT redevient un scan complet à chaque
+            # écriture d'événement une fois la table à plusieurs millions
+            # de lignes (MAX_PHOTOS_COUNT=2 500 000 visé).
+            "CREATE INDEX IF NOT EXISTS idx_events_media_purged_created_at ON events (media_purged, created_at)",
         ]
 
         for stmt in indexes:
@@ -1267,22 +1273,37 @@ class EventsRepo:
     def _purge_excess_photos_with_cursor(
         cursor, max_count: int, *, has_motion_timeline: bool | None = None
     ) -> int:
-        """Soft-delete oldest active events until count <= max_count. Returns purged count."""
+        """Purge the MEDIA (image/thumbnail blobs + files on disk, plus the
+        motion timeline) of the oldest events once more than ``max_count``
+        still have their media, keeping the event ROW itself untouched
+        (``deleted`` stays 0).
+
+        21.10, Sid ("rendre ça pérenne" / "ça peut pas juste être un
+        calcul ? ... il faudrait les deux") - avant, ceci mettait
+        deleted=1 en même temps, ce qui rendait l'événement invisible
+        PARTOUT (stats, liste détaillée au clic) dès que son média était
+        purgé - les deux dépendaient du même budget, impossible de garder
+        l'un sans l'autre. Maintenant, seul ``media_purged`` change : la
+        ligne continue de compter dans les stats et d'apparaître dans la
+        liste (Parcours/Chronologie), juste sans vignette/image - voir
+        PresenceCat.tsx/journeys.py pour l'affichage "média non
+        disponible" correspondant."""
         if max_count <= 0:
             return 0
 
-        cursor.execute("SELECT COUNT(*) FROM events WHERE deleted != 1")
+        cursor.execute("SELECT COUNT(*) FROM events WHERE media_purged = 0")
         total_photos = int(cursor.fetchone()[0] or 0)
         if total_photos <= max_count:
             return 0
 
         excess_photos = total_photos - max_count
         logging.info(
-            f"[DATABASE] Number of photos exceeds limit. Deleting {excess_photos} oldest photos."
+            f"[DATABASE] Number of photos exceeds limit. Purging media for {excess_photos} oldest events "
+            f"(event rows themselves are kept)."
         )
         cursor.execute(
             "SELECT id, created_at, block_id FROM events "
-            "WHERE deleted != 1 ORDER BY created_at ASC LIMIT ?",
+            "WHERE media_purged = 0 ORDER BY created_at ASC LIMIT ?",
             (excess_photos,),
         )
         photos_to_delete = cursor.fetchall()
@@ -1291,14 +1312,14 @@ class EventsRepo:
         for photo in photos_to_delete:
             photo_id = photo[0]
             logging.debug(
-                f"[DATABASE] Deleting photo ID: {photo_id}, created_at: {photo[1]}"
+                f"[DATABASE] Purging media for event ID: {photo_id}, created_at: {photo[1]}"
             )
             try:
                 blocks_to_invalidate.append(int(photo[2]))
             except Exception:
                 pass
             cursor.execute(
-                "UPDATE events SET deleted = 1, original_image = NULL, "
+                "UPDATE events SET media_purged = 1, original_image = NULL, "
                 "modified_image = NULL, thumbnail = NULL WHERE id = ?",
                 (photo_id,),
             )
