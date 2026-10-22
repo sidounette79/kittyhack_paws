@@ -94,12 +94,68 @@ def training_targets_counts():
     return groups
 
 
+@app.get("/app-api/rebalance/counts")
+def rebalance_counts():
+    """Pour chaque chat (+ Prey, + Negatif), le compte de captures déjà
+    'kept' dans le chantier de rééquilibrage en cours, HK vs Reolink+Manuel
+    séparément - alimente la barre de progression de l'onglet dédié."""
+    with get_conn() as conn:
+        rows = conn.execute(
+            """SELECT c.id, c.source, c.detected_objects_json
+               FROM captures c
+               WHERE c.review_status = 'pending' AND c.rebalance_bucket = 'kept'"""
+        ).fetchall()
+        groups = {c: {"kittyflap": 0, "reolink_manual": 0} for c in list(CLASSES) + ["Negatif"]}
+        for row in rows:
+            boxes = effective_boxes(conn, row["id"], row["detected_objects_json"])
+            classes_here = {canonicalize(b.get("label")) for b in boxes} - {None}
+            if not classes_here:
+                classes_here = {"Negatif"}
+            bucket = "kittyflap" if row["source"] == "kittyflap" else "reolink_manual"
+            for cls in classes_here:
+                if cls in groups:
+                    groups[cls][bucket] += 1
+    return groups
+
+
+@app.post("/app-api/rebalance/keep")
+def rebalance_keep(payload: dict = Body(...)):
+    """Marque une sélection comme 'gardée' dans le lot de rééquilibrage
+    en cours - review_status reste 'pending' (pas encore export-éligible),
+    voir /rebalance/promote pour l'envoi final."""
+    ids = payload.get("ids") or []
+    if not ids:
+        return {"ok": True, "count": 0}
+    with get_conn() as conn:
+        conn.executemany(
+            "UPDATE captures SET rebalance_bucket = 'kept' WHERE id = ? AND review_status = 'pending'",
+            [(cid,) for cid in ids],
+        )
+    return {"ok": True, "count": len(ids)}
+
+
+@app.post("/app-api/rebalance/promote")
+def rebalance_promote():
+    """Envoie tout le lot 'kept' vers le vrai statut validé (confirmed,
+    export-éligible) et vide rebalance_bucket - elles redeviennent des
+    captures normales, visibles dans "Validées" comme n'importe quelle
+    autre, prêtes pour le bouton d'export habituel (exported_at déjà NULL
+    depuis la remise en jeu initiale)."""
+    with get_conn() as conn:
+        result = conn.execute(
+            """UPDATE captures SET review_status = 'confirmed', rebalance_bucket = NULL,
+                                    reviewed_at = datetime('now')
+               WHERE review_status = 'pending' AND rebalance_bucket = 'kept'"""
+        )
+    return {"ok": True, "count": result.rowcount}
+
+
 @app.get("/app-api/queue")
 def review_queue(
     cat_name: str | None = None, source: str | None = None,
     status_group: str | None = None, prey_only: bool = False,
     negative_only: bool = False, in_model: str | None = None,
-    training_mode: bool = False, limit: int = 100,
+    training_mode: bool = False, rebalance: bool = False, limit: int = 100,
 ):
     query = """SELECT c.* FROM captures c"""
     params: list = []
@@ -131,8 +187,19 @@ def review_queue(
         # exportées ou pas (contrairement à "validated"/"archived"
         # ci-dessus, qui restent des filets de sécurité séparés).
         query += " WHERE c.review_status IN ('confirmed', 'corrected')"
+    elif rebalance:
+        # 22.10, Sid ("la page 200+200 c'est pas ce que je veux... il me
+        # faut un onglet spécifique que je puisse savoir lesquels c'est")
+        # - ne reprend QUE les captures explicitement remises en jeu pour
+        # ce chantier (rebalance_bucket IS NOT NULL), jamais mélangé avec
+        # la vraie file "pending" (nouvelles captures jamais revues) -
+        # c'est précisément ce qui manquait à l'onglet Tri 200+200.
+        # review_status='pending' exclut naturellement celles déjà
+        # Écartées (passées à 'rejected' par bulk-review, sans toucher
+        # rebalance_bucket) ou déjà promues (voir /rebalance/promote).
+        query += " WHERE c.review_status = 'pending' AND c.rebalance_bucket IS NOT NULL"
     else:
-        query += " WHERE c.review_status = 'pending'"
+        query += " WHERE c.review_status = 'pending' AND c.rebalance_bucket IS NULL"
     if in_model is not None:
         current_ids = _current_model_capture_ids()
         if current_ids:

@@ -88,6 +88,17 @@ const TRAINING_TAB = '__training__';
 let trainingFilters = { cat: null, source: null, group: 'new', negative: false };
 let trainingCounts = null;
 
+// 22.10, Sid ("la page 200+200 c'est pas ce que je veux... il me faut un
+// onglet spécifique") - remplace le chantier 200+200 par un flux plus
+// simple : des captures explicitement remises en jeu (rebalance_bucket
+// IS NOT NULL côté serveur, jamais mélangées à la vraie file "pending")
+// qu'elle garde ('kept') ou écarte (bulkReview('rejected') existant,
+// inchangé) au fil de l'eau, avec un bouton final qui envoie tout ce
+// qui est 'kept' vers le vrai statut validé (voir rebalancePromote).
+const REBALANCE_TAB = '__rebalance__';
+let rebalanceFilters = { cat: null, source: null, prey: false, negative: false };
+let rebalanceCounts = null;
+
 async function api(path, opts) {
   const res = await fetch(path, opts);
   if (!res.ok) throw new Error(`${path}: ${res.status}`);
@@ -280,7 +291,12 @@ function renderTabs() {
          style="${currentTab === TRAINING_TAB ? 'background:var(--accent)' : 'border-color:var(--accent)'}"
          onclick="selectTab('${TRAINING_TAB}')">
       Tri 200+200</div>`;
-  tabsEl.innerHTML = allTab + catTabs + sourceTabs + preyTab + reviewedTabs + modelReviewTab + compareTab + statsTab + trainingTab;
+  const rebalanceTab = `
+    <div class="tab ${currentTab === REBALANCE_TAB ? 'active' : ''}"
+         style="${currentTab === REBALANCE_TAB ? 'background:var(--accent)' : 'border-color:var(--accent)'}"
+         onclick="selectTab('${REBALANCE_TAB}')">
+      Rééquilibrage</div>`;
+  tabsEl.innerHTML = allTab + catTabs + sourceTabs + preyTab + reviewedTabs + modelReviewTab + compareTab + statsTab + trainingTab + rebalanceTab;
 }
 
 function selectTab(name) {
@@ -291,6 +307,7 @@ function selectTab(name) {
   document.getElementById('compare-bar').hidden = currentTab !== COMPARE_TAB;
   document.getElementById('stats-bar').hidden = currentTab !== STATS_TAB;
   document.getElementById('training-bar').hidden = currentTab !== TRAINING_TAB;
+  document.getElementById('rebalance-bar').hidden = currentTab !== REBALANCE_TAB;
   if (currentTab === MODEL_REVIEW_TAB) {
     checkModelReviewStatus();
     loadModelReviewQueue();
@@ -307,6 +324,9 @@ function selectTab(name) {
   } else if (currentTab === TRAINING_TAB) {
     loadTrainingCounts();
     loadTrainingQueue();
+  } else if (currentTab === REBALANCE_TAB) {
+    loadRebalanceCounts();
+    loadRebalanceQueue();
   } else {
     loadQueue();
   }
@@ -390,6 +410,13 @@ function renderBulkBar() {
       <button onclick="clearSelection()">Annuler</button>
       <button class="btn-reject" onclick="bulkResolveMr('dismiss')">Garder l'ancien (sélection)</button>
       <button class="btn-confirm" onclick="bulkResolveMr('apply')">Appliquer le nouveau (sélection)</button>`;
+  } else if (currentTab === REBALANCE_TAB) {
+    bar.innerHTML = `
+      <span>${label}</span>
+      <button onclick="selectAllVisible()">Tout sélectionner</button>
+      <button onclick="clearSelection()">Annuler</button>
+      <button class="btn-reject" onclick="bulkReview('rejected')">Écarter la sélection</button>
+      <button class="btn-confirm" onclick="rebalanceKeepSelection()">Garder la sélection</button>`;
   } else {
     bar.innerHTML = `
       <span>${label}</span>
@@ -843,6 +870,9 @@ async function reloadCurrentTab() {
   if (currentTab === TRAINING_TAB) {
     await loadTrainingQueue();
     await loadTrainingCounts();
+  } else if (currentTab === REBALANCE_TAB) {
+    await loadRebalanceQueue();
+    await loadRebalanceCounts();
   } else {
     await loadQueue();
   }
@@ -863,6 +893,87 @@ async function loadTrainingQueue() {
   if (trainingFilters.source) params.set('source', trainingFilters.source);
   if (trainingFilters.group) params.set('in_model', trainingFilters.group);
   if (trainingFilters.negative) params.set('negative_only', '1');
+  currentQueue = await api(`/app-api/queue?${params}`);
+  renderQueue();
+}
+
+const REBALANCE_TARGET_PER_SOURCE = 200;
+
+async function loadRebalanceCounts() {
+  rebalanceCounts = await api('/app-api/rebalance/counts');
+  renderRebalanceBar();
+}
+
+function rebalanceSetFilter(key, value) {
+  rebalanceFilters[key] = value;
+  loadRebalanceQueue();
+  renderRebalanceBar();
+}
+
+async function rebalanceKeepSelection() {
+  const ids = [...selectedIds];
+  if (ids.length === 0) return;
+  await api('/app-api/rebalance/keep', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ids }),
+  });
+  selectedIds.clear();
+  await reloadCurrentTab();
+}
+
+async function rebalancePromote() {
+  if (!confirm("Envoyer tout le lot 'gardé' vers le vrai statut validé (export-éligible) ? Elles sortiront de cet onglet et redeviendront des captures normales.")) return;
+  const result = await api('/app-api/rebalance/promote', { method: 'POST' });
+  alert(`${result.count} capture(s) envoyée(s) vers le statut validé.`);
+  await reloadCurrentTab();
+}
+
+function renderRebalanceBar() {
+  const bar = document.getElementById('rebalance-bar');
+  const catOptions = ['', ...cats.map(c => c.name)].map(n =>
+    `<option value="${n}" ${rebalanceFilters.cat === (n || null) ? 'selected' : ''}>${n || 'Tous les chats'}</option>`
+  ).join('');
+  const controls = `
+    <select onchange="rebalanceSetFilter('cat', this.value || null)">${catOptions}</select>
+    <select onchange="rebalanceSetFilter('source', this.value || null)">
+      <option value="" ${!rebalanceFilters.source ? 'selected' : ''}>Toute source</option>
+      <option value="kittyflap" ${rebalanceFilters.source === 'kittyflap' ? 'selected' : ''}>HK</option>
+      <option value="reolink_manual" ${rebalanceFilters.source === 'reolink_manual' ? 'selected' : ''}>Reolink+Manuel</option>
+    </select>
+    <label style="margin-left:8px"><input type="checkbox" ${rebalanceFilters.prey ? 'checked' : ''}
+      onchange="rebalanceSetFilter('prey', this.checked)"> Proies suspectées seulement</label>
+    <label style="margin-left:8px"><input type="checkbox" ${rebalanceFilters.negative ? 'checked' : ''}
+      onchange="rebalanceSetFilter('negative', this.checked)"> Négatif seulement (ni chat ni proie)</label>
+    <button style="margin-left:8px" class="btn-confirm" onclick="rebalancePromote()" title="Envoie tout ce qui a été gardé ('Garder la sélection') vers le vrai statut validé, export-éligible">
+      Envoyer le lot gardé vers Validé
+    </button>
+  `;
+  let table = '';
+  if (rebalanceCounts) {
+    const rows = Object.entries(rebalanceCounts).map(([cls, g]) => `<tr>
+        <td>${cls}</td>
+        <td class="${g.kittyflap >= REBALANCE_TARGET_PER_SOURCE ? '' : 'export-error'}">${g.kittyflap} / ${REBALANCE_TARGET_PER_SOURCE}</td>
+        <td class="${g.reolink_manual >= REBALANCE_TARGET_PER_SOURCE ? '' : 'export-error'}">${g.reolink_manual} / ${REBALANCE_TARGET_PER_SOURCE}</td>
+        <td>${g.kittyflap + g.reolink_manual}</td>
+      </tr>`).join('');
+    table = `
+      <table class="stats-table" style="margin-top:8px">
+        <thead><tr><th>Classe</th><th>HK gardées</th><th>Reolink+Manuel gardées</th><th>Total</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>`;
+  }
+  bar.innerHTML = controls + table;
+}
+
+async function loadRebalanceQueue() {
+  // Même filet de sécurité que Tri 200+200 (voir 21.10 ci-dessus) - voir
+  // tout le lot remis en jeu sur une seule page, pas tronqué.
+  const params = new URLSearchParams({ limit: 10000, rebalance: '1' });
+  if (rebalanceFilters.cat) params.set('cat_name', rebalanceFilters.cat);
+  if (rebalanceFilters.source) params.set('source', rebalanceFilters.source);
+  if (rebalanceFilters.prey) params.set('prey_only', '1');
+  if (rebalanceFilters.negative) params.set('negative_only', '1');
   currentQueue = await api(`/app-api/queue?${params}`);
   renderQueue();
 }

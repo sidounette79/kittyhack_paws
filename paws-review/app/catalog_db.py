@@ -202,3 +202,11 @@ def _migrate(conn: sqlite3.Connection):
     existing = {row["name"] for row in conn.execute("PRAGMA table_info(captures)")}
     if "exported_at" not in existing:
         conn.execute("ALTER TABLE captures ADD COLUMN exported_at DATETIME")
+    # 22.10, Sid ("la page 200+200 c'est pas ce que je veux... il me faut
+    # des dossiers de validation intermédiaire") - NULL = capture normale,
+    # hors de ce chantier de rééquilibrage ; 'queued' = remise en jeu pour
+    # retrier (review_status repassé à 'pending' au même moment) ; 'kept' =
+    # gardée dans le lot final une fois revue, en attendant l'envoi groupé
+    # vers review_status='confirmed' (app-api/rebalance/promote).
+    if "rebalance_bucket" not in existing:
+        conn.execute("ALTER TABLE captures ADD COLUMN rebalance_bucket TEXT")
