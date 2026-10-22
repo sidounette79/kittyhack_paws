@@ -191,13 +191,17 @@ def review_queue(
         # 22.10, Sid ("la page 200+200 c'est pas ce que je veux... il me
         # faut un onglet spécifique que je puisse savoir lesquels c'est")
         # - ne reprend QUE les captures explicitement remises en jeu pour
-        # ce chantier (rebalance_bucket IS NOT NULL), jamais mélangé avec
-        # la vraie file "pending" (nouvelles captures jamais revues) -
-        # c'est précisément ce qui manquait à l'onglet Tri 200+200.
-        # review_status='pending' exclut naturellement celles déjà
-        # Écartées (passées à 'rejected' par bulk-review, sans toucher
-        # rebalance_bucket) ou déjà promues (voir /rebalance/promote).
-        query += " WHERE c.review_status = 'pending' AND c.rebalance_bucket IS NOT NULL"
+        # ce chantier, jamais mélangé avec la vraie file "pending"
+        # (nouvelles captures jamais revues) - c'est précisément ce qui
+        # manquait à l'onglet Tri 200+200.
+        # 22.10 (même soir) : filtré sur 'queued' seulement, pas "IS NOT
+        # NULL" (donc PAS 'kept') - Sid ("j'en ai validé 3 de boubou...
+        # comment faire pour qu'elles apparaissent dans la colonne de
+        # boubou") voulait qu'une capture gardée disparaisse de la file
+        # de travail comme partout ailleurs dans l'appli (une fois
+        # décidée, plus la peine de la revoir) - le compte, lui, vient de
+        # /app-api/rebalance/counts (scope 'kept'), pas de cette file.
+        query += " WHERE c.review_status = 'pending' AND c.rebalance_bucket = 'queued'"
     else:
         query += " WHERE c.review_status = 'pending' AND c.rebalance_bucket IS NULL"
     if in_model is not None:

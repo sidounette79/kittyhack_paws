@@ -1280,9 +1280,29 @@ async function submitReview(status) {
   actionButtons.forEach(b => b.disabled = true);
   try {
     const capture = currentQueue[currentIndex];
-    await api(`/app-api/captures/${capture.id}/review?status=${status}`, { method: 'POST' });
+    // 22.10, Sid ("j'en ai validé 3 de boubou... les trois se sont mises
+    // automatiquement dans validé, le validé habituel") - le bouton
+    // "Valider" de cette vue détail appelait toujours l'endpoint de
+    // revue normal (review_status='confirmed' direct), qui ignore
+    // complètement rebalance_bucket - les photos filaient tout droit
+    // dans "Validées" au lieu de rester dans le lot 'kept' en cours de
+    // constitution. Dans l'onglet Rééquilibrage, "Valider" doit passer
+    // par le même mécanisme que "Garder la sélection" (bulk), pas
+    // confirmer directement.
+    if (currentTab === REBALANCE_TAB && status === 'confirmed') {
+      await api('/app-api/rebalance/keep', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: [capture.id] }),
+      });
+    } else {
+      await api(`/app-api/captures/${capture.id}/review?status=${status}`, { method: 'POST' });
+    }
     currentQueue.splice(currentIndex, 1);
     renderQueue();
+    if (currentTab === REBALANCE_TAB) {
+      await loadRebalanceCounts();
+    }
     const statsResp = await api('/app-api/stats');
     lastStats = statsResp;
     renderStats(statsResp);
