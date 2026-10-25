@@ -26,7 +26,6 @@ from src.helper import (
     Versioning,
 )
 from src.system import (
-    LabelStudioInstall,
     ServiceOps,
 )
 from src.database import last_imgblock_ts
@@ -302,11 +301,6 @@ def register_session_setup(input, output, session, ctx: SessionContext):
                         "remote_sync_on_first_connect",
                         _("Sync on first connect"),
                         values["remote_sync_on_first_connect"],
-                    ),
-                    ui.input_switch(
-                        "remote_sync_labelstudio",
-                        _("Sync Label Studio user data"),
-                        values.get("remote_sync_labelstudio", True),
                     ),
                 ),
                 title=_("Remote-mode setup"),
@@ -758,7 +752,6 @@ def register_session_setup(input, output, session, ctx: SessionContext):
             timeout = 30.0
 
         sync_first = bool(input.remote_sync_on_first_connect())
-        sync_labelstudio = bool(input.remote_sync_labelstudio())
         remote_cfg_path = os.path.join(kittyhack_root(), "config.remote.ini")
         parser = configparser.ConfigParser()
         parser["Settings"] = {
@@ -766,7 +759,6 @@ def register_session_setup(input, output, session, ctx: SessionContext):
             "remote_control_port": str(port),
             "remote_control_timeout": str(timeout),
             "remote_sync_on_first_connect": str(sync_first),
-            "remote_sync_labelstudio": str(sync_labelstudio),
         }
         try:
             with open(remote_cfg_path, "w", encoding="utf-8") as f:
@@ -783,7 +775,6 @@ def register_session_setup(input, output, session, ctx: SessionContext):
         CONFIG["REMOTE_CONTROL_PORT"] = port
         CONFIG["REMOTE_CONTROL_TIMEOUT"] = timeout
         CONFIG["REMOTE_SYNC_ON_FIRST_CONNECT"] = sync_first
-        CONFIG["REMOTE_SYNC_LABELSTUDIO"] = sync_labelstudio
 
         if sync_first:
             # Start sync (non-blocking). Progress is shown in a non-closable modal and
@@ -1016,12 +1007,7 @@ def register_session_setup(input, output, session, ctx: SessionContext):
         total_ram_space = SystemInfo.get_total_ram_space()
         ram_usage_percentage = (used_ram_space / total_ram_space) * 100
         if ram_usage_percentage >= 90:
-            if LabelStudioInstall.get_labelstudio_status() == True:
-                additional_text = " " + _(
-                    "LabelStudio is running. If you do not need it anymore to label images, please stop it in the [AI TRAINING] section."
-                )
-            else:
-                additional_text = ""
+            additional_text = ""
             ui.notification_show(
                 _("Warning: RAM usage is at {:.1f}%!{}").format(
                     ram_usage_percentage, additional_text

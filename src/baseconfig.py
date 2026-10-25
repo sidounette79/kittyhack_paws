@@ -158,6 +158,17 @@ SETTINGS_SCHEMA: list[Setting] = [
     _S("LOGLEVEL", "INFO"),
     _S("PERIODIC_JOBS_INTERVAL", 900, "int"),
     _S("ALLOWED_TO_ENTER", "all", "enum", enum_cls=AllowedToEnter),
+    # 24.10, Sid ("j'aimerais garder la détection mais que ce soit que le
+    # RFID qui ouvre") - les puces sont implantées entre les omoplates,
+    # donc contrairement à une puce sur collier, une mauvaise orientation
+    # au passage est quasi impossible : le fallback vidéo (identifier le
+    # chat par la caméra quand aucune puce n'a été lue) n'a plus la même
+    # justification, et laissait un chat juste couché dans le catio, à 1m
+    # de la chatière, suffire à déclencher une ouverture - elle entendait
+    # les aimants se déclencher en continu. Défaut à True (nouveau
+    # comportement) ; repasser à False restaure l'ancien fallback vidéo si
+    # besoin, réversible sans toucher au code.
+    _S("ENTRY_REQUIRE_RFID_READ", True, "bool"),
     _S("MOUSE_CHECK_ENABLED", True, "bool", save_as_str=True),
     # 05.10, Sid ("liste des notifications... pouvoir choisir lesquels"):
     # per-type push-notification toggles. The first four match existing
@@ -209,11 +220,6 @@ SETTINGS_SCHEMA: list[Setting] = [
     _S("ALLOWED_TO_EXIT_RANGE3", False, "bool"),
     _S("ALLOWED_TO_EXIT_RANGE3_FROM", "00:00"),
     _S("ALLOWED_TO_EXIT_RANGE3_TO", "23:59"),
-    # Not written by save_config (managed separately / migration flags)
-    _S("LABELSTUDIO_VERSION", None, persist=False),
-    _S("LABELSTUDIO_API_TOKEN", "", persist=False),
-    _S("LABELSTUDIO_PROJECT", ""),
-    _S("LABELSTUDIO_PROJECT_TITLE", ""),
     _S("EMAIL", ""),
     _S("USER_NAME", ""),
     _S("MODEL_TRAINING", ""),
@@ -273,7 +279,6 @@ SETTINGS_SCHEMA: list[Setting] = [
     # Target-mode boot: wait for remote reconnect after remote-triggered reboot
     _S("REMOTE_WAIT_AFTER_REBOOT_TIMEOUT", 30.0, "float"),
     _S("REMOTE_SYNC_ON_FIRST_CONNECT", True, "bool", remote_only=True),
-    _S("REMOTE_SYNC_LABELSTUDIO", True, "bool", remote_only=True),
     _S("REMOTE_INFERENCE_MAX_FPS", 10.0, "float", remote_only=True),
     # Update repository: standard | beta | custom (custom uses UPDATE_REPOSITORY)
     _S("UPDATE_REPOSITORY_MODE", "standard"),
@@ -314,7 +319,7 @@ def _load_default_for_setting(setting: Setting) -> Any:
         return int(setting.default)
     if setting.kind == "float":
         return float(setting.default)
-    # Match historical load: MQTT None defaults coerce to ""; LABELSTUDIO_VERSION stays None.
+    # Match historical load: MQTT None defaults coerce to "".
     if setting.key in {"MQTT_USERNAME", "MQTT_PASSWORD"} and setting.default is None:
         return ""
     return setting.default
@@ -408,7 +413,6 @@ def read_remote_config_values() -> dict:
         "remote_control_port": int(CONFIG.get("REMOTE_CONTROL_PORT", 8888) or 8888),
         "remote_control_timeout": float(CONFIG.get("REMOTE_CONTROL_TIMEOUT", 30.0) or 30.0),
         "remote_sync_on_first_connect": bool(CONFIG.get("REMOTE_SYNC_ON_FIRST_CONNECT", True)),
-        "remote_sync_labelstudio": bool(CONFIG.get("REMOTE_SYNC_LABELSTUDIO", True)),
     }
     remote_cfg_path = _remote_configfile_path()
     if not os.path.exists(remote_cfg_path):
@@ -426,9 +430,6 @@ def read_remote_config_values() -> dict:
             "remote_control_timeout": section.getfloat("remote_control_timeout", fallback=defaults["remote_control_timeout"]),
             "remote_sync_on_first_connect": section.getboolean(
                 "remote_sync_on_first_connect", fallback=defaults["remote_sync_on_first_connect"]
-            ),
-            "remote_sync_labelstudio": section.getboolean(
-                "remote_sync_labelstudio", fallback=defaults["remote_sync_labelstudio"]
             ),
         }
     except Exception as e:
@@ -480,7 +481,6 @@ SENSITIVE_CONFIG_KEYS = {
     'MQTT_USERNAME',
     'EMAIL',
     'IP_CAMERA_URL',  # May contain embedded credentials
-    'LABELSTUDIO_API_TOKEN'
 }
 
 # Legacy config defaults (kept for migration only; not written to new configs)
@@ -835,7 +835,7 @@ def update_single_config_parameter(parameter: str):
         return
 
     # Note: persist=False only affects save_config() (bulk write). update_single may still
-    # persist keys like LABELSTUDIO_API_TOKEN that are omitted from full saves.
+    # persist keys like EVENT_IMAGES_FS_MIGRATED that are omitted from full saves.
 
     value = _value_for_ini(setting, CONFIG[key])
     try:

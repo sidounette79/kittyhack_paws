@@ -599,20 +599,6 @@ export default function EventModal({
     }
   };
 
-  const sendToLabelStudio = async () => {
-    if (!frame) return;
-    setBusy(true);
-    setMessage(null);
-    try {
-      await fetchJson(`/app-api/v1/events/${blockId}/send/${frame.pid}`, { method: "POST" });
-      setMessage("Envoyé à Label Studio.");
-    } catch (err) {
-      setMessage(err instanceof Error ? err.message : "Échec de l'envoi.");
-    } finally {
-      setBusy(false);
-    }
-  };
-
   return (
     <div
       className="kh-photo-lightbox-backdrop fixed inset-0 z-50 flex items-center justify-center bg-black/90 p-2"
@@ -1190,9 +1176,6 @@ export default function EventModal({
             >
               💾
             </a>
-            <button onClick={sendToLabelStudio} disabled={busy} className="rounded-md bg-white/10 px-3 py-2 disabled:opacity-30" title="Envoyer à Label Studio">
-              ⬆️
-            </button>
             <a
               href={`/app-api/v1/events/${blockId}/download-zip`}
               className="rounded-md bg-white/10 px-3 py-2"

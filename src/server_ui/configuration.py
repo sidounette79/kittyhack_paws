@@ -1342,6 +1342,38 @@ def register_configuration(input, output, session, ctx: SessionContext):
                         ui.row(
                             ui.column(
                                 12,
+                                ui.input_switch(
+                                    "btnEntryRequireRfidRead",
+                                    _("Require an actual RFID chip read to unlock (ignore camera-only identification)"),
+                                    CONFIG["ENTRY_REQUIRE_RFID_READ"],
+                                ),
+                            ),
+                            ui.column(
+                                12,
+                                info_toggle(
+                                    "entry_require_rfid_read_info",
+                                    _("Explain this setting"),
+                                    _(
+                                        "The camera can identify a cat it merely *sees* (anywhere in view), while "
+                                        "the RFID reader only detects a chip that actually passes close to the "
+                                        "flap. When a known cat is detected by camera only (chip not read), the "
+                                        "flap normally still unlocks for it - useful if a chip sometimes fails to "
+                                        "read during a genuine passage."
+                                    )
+                                    + "\n\n"
+                                    + _(
+                                        "Enable this if cats lounging or passing nearby (without actually trying "
+                                        "to enter) keep triggering the inside lock - for example in an enclosed "
+                                        "catio right next to the flap. Camera identification keeps working "
+                                        "everywhere else (logs, journeys, photos), it just stops being able to "
+                                        "unlock on its own."
+                                    ),
+                                ),
+                            ),
+                        ),
+                        ui.row(
+                            ui.column(
+                                12,
                                 ui.div(
                                     # Precompute translations to avoid _() inside f-strings
                                     ui.HTML(
@@ -3029,6 +3061,7 @@ def register_configuration(input, output, session, ctx: SessionContext):
         CONFIG["NOTIFY_MOTION_OUTSIDE"] = input.btnNotifyMotionOutside()
         CONFIG["NOTIFY_MOTION_INSIDE"] = input.btnNotifyMotionInside()
         CONFIG["ALLOWED_TO_ENTER"] = AllowedToEnter(input.txtAllowedToEnter())
+        CONFIG["ENTRY_REQUIRE_RFID_READ"] = input.btnEntryRequireRfidRead()
         CONFIG["LIVE_VIEW_REFRESH_INTERVAL"] = float(input.numLiveViewUpdateInterval())
         from src.baseconfig import AllowedToExit as ATE
 

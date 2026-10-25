@@ -6,38 +6,11 @@ import { fetchJson } from "../lib/api";
 import { useBackButton } from "../lib/useBackButton";
 import { usePageTitle } from "../lib/usePageTitle";
 
-interface LabelStudioState {
-  running: boolean;
-  version: string | null;
-  url: string;
-  api_token: string;
-  project: string;
-}
-
-interface LabelStudioProject {
-  id: string;
-  title: string;
-}
-
 interface TrainingState {
   in_progress: boolean;
   job_id?: string;
   status_label?: string;
   server_status?: { maintenance: boolean; message: string } | null;
-}
-
-// 13.10, Sid (real 502 confirmed live - the submit request used to block
-// on the server for the whole Label Studio export, several minutes for
-// 6584+ tasks, and the reverse proxy would cut it before it finished):
-// the submit endpoint now starts a background worker and returns right
-// away; this is what /ai-training/labelstudio/export-status reports while
-// it runs.
-interface LsExportState {
-  status: "idle" | "exporting" | "submitting" | "done" | "error";
-  written: number;
-  total: number;
-  error: string;
-  job_id: string;
 }
 
 interface ModelOptions {
@@ -130,14 +103,6 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
-// 08.10, Sid: AiTraining.tsx is the React replacement for ai_training.py
-// (1996 lines) - built section by section like Configuration.tsx, same
-// reasoning (stays unreachable until done, no cutover mid-build). Label
-// Studio's own install/start/stop/update/remove buttons are NOT replicated
-// here - they're all systemd-only in the old page and would just error out
-// in this Docker-based remote-mode deployment (see webui_api.py's
-// get_ai_training_labelstudio comment) - only the parts that actually work
-// here (status, API token, project picker) are built.
 export default function AiTrainingPage() {
   usePageTitle("Entraînement de l'IA");
   const navigate = useNavigate();
@@ -147,79 +112,9 @@ export default function AiTrainingPage() {
     () => navigate("/presence")
   );
 
-  const [labelstudio, setLabelstudio] = useState<LabelStudioState | null>(null);
-  const [tokenInput, setTokenInput] = useState("");
-  const [savingToken, setSavingToken] = useState(false);
-  const [tokenMsg, setTokenMsg] = useState<string | null>(null);
-  const [projects, setProjects] = useState<LabelStudioProject[] | null>(null);
-  const [projectsReason, setProjectsReason] = useState<string | null>(null);
-  const [selectedProject, setSelectedProject] = useState("");
-  const [savingProject, setSavingProject] = useState(false);
-
-  const loadLabelstudio = () => {
-    fetchJson<LabelStudioState>("/app-api/v1/ai-training/labelstudio")
-      .then((d) => {
-        setLabelstudio(d);
-        setTokenInput(d.api_token);
-        setSelectedProject(d.project);
-      })
-      .catch(() => {});
-  };
-
-  useEffect(loadLabelstudio, []);
-
-  const loadProjects = () => {
-    fetchJson<{ projects: LabelStudioProject[] | null; reason?: string }>(
-      "/app-api/v1/ai-training/labelstudio/projects"
-    )
-      .then((d) => {
-        setProjects(d.projects);
-        setProjectsReason(d.reason ?? null);
-      })
-      .catch(() => {});
-  };
-
-  useEffect(() => {
-    if (labelstudio?.api_token && labelstudio.running) loadProjects();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [labelstudio?.api_token, labelstudio?.running]);
-
-  const saveToken = async () => {
-    setSavingToken(true);
-    setTokenMsg(null);
-    try {
-      await fetchJson("/app-api/v1/ai-training/labelstudio/token", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token: tokenInput }),
-      });
-      setTokenMsg("Token enregistré.");
-      loadLabelstudio();
-    } catch (err) {
-      setTokenMsg(err instanceof Error ? err.message : "Échec.");
-    } finally {
-      setSavingToken(false);
-    }
-  };
-
-  const saveProject = async (projectId: string) => {
-    setSelectedProject(projectId);
-    setSavingProject(true);
-    try {
-      await fetchJson("/app-api/v1/ai-training/labelstudio/project", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ project: projectId }),
-      });
-    } finally {
-      setSavingProject(false);
-    }
-  };
-
   // ---- Model Training ----
   const [training, setTraining] = useState<TrainingState | null>(null);
   const [modelOptions, setModelOptions] = useState<ModelOptions | null>(null);
-  const [source, setSource] = useState<"labelstudio" | "manual">("labelstudio");
   const [modelName, setModelName] = useState("");
   const [userName, setUserName] = useState("");
   const [email, setEmail] = useState("");
@@ -231,74 +126,14 @@ export default function AiTrainingPage() {
   const [trainingMsg, setTrainingMsg] = useState<string | null>(null);
   const trainingFileRef = useRef<HTMLInputElement | null>(null);
 
-  // 09.10, Sid ("j'ai pas eu le texte comme quoi il y a x nouvelles photos
-  // dans LS"): live readiness status for the selected Label Studio project
-  // - ported from the old Shiny tab, never carried over in this page's
-  // React port.
-  const [lsSummary, setLsSummary] = useState<{
-    status: "no_project" | "not_running" | "fetch_failed" | "empty" | "incomplete" | "ready";
-    annotated?: number;
-    total?: number;
-    unannotated?: number;
-  } | null>(null);
-
-  const loadLsSummary = () => {
-    fetchJson<typeof lsSummary>("/app-api/v1/ai-training/labelstudio/project-summary")
-      .then(setLsSummary)
-      .catch(() => {});
-  };
-
-  useEffect(() => {
-    if (source !== "labelstudio") return;
-    loadLsSummary();
-    const interval = setInterval(loadLsSummary, 15000);
-    return () => clearInterval(interval);
-  }, [source]);
-
   const loadTraining = () => {
     fetchJson<TrainingState>("/app-api/v1/ai-training/model-training/state")
       .then(setTraining)
       .catch(() => {});
   };
 
-  const [lsExport, setLsExport] = useState<LsExportState | null>(null);
-
-  const loadLsExport = useCallback(() => {
-    fetchJson<LsExportState>("/app-api/v1/ai-training/labelstudio/export-status")
-      .then((state) => {
-        setLsExport(state);
-        if (state.status === "exporting" || state.status === "submitting") {
-          // Also reached on mount/refresh while a worker started in an
-          // earlier page load is still running - picks the UI back up
-          // mid-export instead of showing an idle button over a live job.
-          setSubmitting(true);
-          setTrainingMsg(
-            "Export depuis Label Studio en cours… ça peut prendre plusieurs minutes pour beaucoup de photos."
-          );
-        } else if (state.status === "done" && state.job_id) {
-          setTrainingMsg("Entraînement soumis.");
-          setSubmitting(false);
-          loadTraining();
-        } else if (state.status === "error") {
-          setTrainingMsg(state.error || "Échec de l'export Label Studio.");
-          setSubmitting(false);
-        }
-      })
-      .catch(() => {});
-  }, []);
-
-  // Poll the background export worker every 3s while it's running - fast
-  // enough to feel responsive on the progress count, light enough not to
-  // matter at this interval (one small JSON read off disk server-side).
-  useEffect(() => {
-    if (lsExport?.status !== "exporting" && lsExport?.status !== "submitting") return;
-    const interval = setInterval(loadLsExport, 3000);
-    return () => clearInterval(interval);
-  }, [lsExport?.status, loadLsExport]);
-
   useEffect(() => {
     loadTraining();
-    loadLsExport();
     fetchJson<ModelOptions>("/app-api/v1/ai-training/model-options")
       .then((d) => {
         setModelOptions(d);
@@ -307,7 +142,7 @@ export default function AiTrainingPage() {
         if (d.image_sizes.length && !d.image_sizes.includes(320)) setImageSize(d.image_sizes[0]);
       })
       .catch(() => {});
-  }, [loadLsExport]);
+  }, []);
 
   // Poll status every 15s while a training job is in progress.
   useEffect(() => {
@@ -316,58 +151,31 @@ export default function AiTrainingPage() {
     return () => clearInterval(interval);
   }, [training?.in_progress]);
 
-  useEffect(() => {
-    if (labelstudio && !labelstudio.api_token) setSource("manual");
-  }, [labelstudio]);
-
   const submitTraining = async () => {
     setSubmitting(true);
-    // 09.10, Sid ("y a visuellement rien qui montre que le clic a pris"):
-    // the Label Studio export (source==="labelstudio") can take several
-    // minutes for a few thousand images before the request even resolves -
-    // an immediate, explicit message so a long wait reads as "working",
-    // not "did my click even register".
-    setTrainingMsg(
-      source === "labelstudio"
-        ? "Export depuis Label Studio en cours… ça peut prendre plusieurs minutes pour beaucoup de photos."
-        : "Envoi en cours…"
-    );
+    setTrainingMsg("Envoi en cours…");
     try {
       const form = new FormData();
-      form.append("source", source);
       form.append("model_name", modelName);
       form.append("user_name", userName);
       form.append("email", email);
       form.append("base_model", baseModel);
       form.append("image_size", String(imageSize));
-      if (source === "manual") {
-        if (!trainingFile) {
-          setTrainingMsg("Un fichier ZIP est requis.");
-          setSubmitting(false);
-          return;
-        }
-        form.append("file", trainingFile);
+      if (!trainingFile) {
+        setTrainingMsg("Un fichier ZIP est requis.");
+        setSubmitting(false);
+        return;
       }
-      const result = await fetchJson<{ ok: boolean; export_started?: boolean; job_id?: string }>(
+      form.append("file", trainingFile);
+      await fetchJson<{ ok: boolean; job_id?: string }>(
         "/app-api/v1/ai-training/model-training/submit",
         { method: "POST", body: form }
       );
-      if (result.export_started) {
-        // Backend started the export+submit worker and returned right
-        // away - loadLsExport's own polling loop (triggered by this state
-        // change) takes over the "submitting" spinner and the final
-        // success/error message from here.
-        setTrainingMsg(
-          "Export depuis Label Studio en cours… ça peut prendre plusieurs minutes pour beaucoup de photos."
-        );
-        loadLsExport();
-      } else {
-        setTrainingMsg("Entraînement soumis.");
-        setTrainingFile(null);
-        if (trainingFileRef.current) trainingFileRef.current.value = "";
-        loadTraining();
-        setSubmitting(false);
-      }
+      setTrainingMsg("Entraînement soumis.");
+      setTrainingFile(null);
+      if (trainingFileRef.current) trainingFileRef.current.value = "";
+      loadTraining();
+      setSubmitting(false);
     } catch (err) {
       setTrainingMsg(err instanceof Error ? err.message : "Échec de la soumission.");
       setSubmitting(false);
@@ -382,95 +190,6 @@ export default function AiTrainingPage() {
       loadTraining();
     } finally {
       setCancelling(false);
-    }
-  };
-
-  // ---- Human Corrections export ----
-  const [corrExport, setCorrExport] = useState<{ ls_ready: boolean; pending: number } | null>(null);
-  const [exportingCorr, setExportingCorr] = useState(false);
-  const [corrMsg, setCorrMsg] = useState<string | null>(null);
-  // 09.10, Sid ("en sous-marin... sans monopoliser le CPU"): self-driving
-  // background export - starts once, then just polls its own progress
-  // until the queue is empty, no repeated clicking needed.
-  const [autoExport, setAutoExport] = useState<{
-    running: boolean;
-    sent_total: number;
-    failed_total: number;
-    remaining: number;
-  } | null>(null);
-
-  const loadCorrExport = () => {
-    fetchJson<{ ls_ready: boolean; pending: number }>("/app-api/v1/ai-training/corrections-export")
-      .then(setCorrExport)
-      .catch(() => {});
-  };
-
-  useEffect(loadCorrExport, []);
-
-  const exportCorrections = async () => {
-    setExportingCorr(true);
-    setCorrMsg(null);
-    try {
-      const result = await fetchJson<{ sent: number; failed: number; remaining: number }>(
-        "/app-api/v1/ai-training/corrections-export",
-        { method: "POST" }
-      );
-      if (result.sent === 0 && result.failed === 0) {
-        setCorrMsg("Rien à exporter.");
-      } else if (result.failed) {
-        setCorrMsg(
-          `Envoyé ${result.sent}, ${result.failed} échoué(s) (réessayé la prochaine fois). ${result.remaining} en attente.`
-        );
-      } else if (result.remaining) {
-        setCorrMsg(`Envoyé ${result.sent} correction(s). ${result.remaining} en attente - clique à nouveau.`);
-      } else {
-        setCorrMsg(`Envoyé ${result.sent} correction(s) à Label Studio.`);
-      }
-      loadCorrExport();
-    } catch (err) {
-      setCorrMsg(err instanceof Error ? err.message : "Échec de l'export.");
-    } finally {
-      setExportingCorr(false);
-    }
-  };
-
-  const loadAutoExportState = () => {
-    fetchJson<{ running: boolean; sent_total: number; failed_total: number; remaining: number }>(
-      "/app-api/v1/ai-training/corrections-export/auto-state"
-    )
-      .then(setAutoExport)
-      .catch(() => {});
-  };
-
-  useEffect(() => {
-    loadAutoExportState();
-  }, []);
-
-  // Polls only while actually running - otherwise this would hit the
-  // server every 2s forever for nothing.
-  useEffect(() => {
-    if (!autoExport?.running) return;
-    const interval = setInterval(() => {
-      loadAutoExportState();
-      loadCorrExport();
-    }, 2000);
-    return () => clearInterval(interval);
-  }, [autoExport?.running]);
-
-  const startAutoExport = async () => {
-    try {
-      await fetchJson("/app-api/v1/ai-training/corrections-export/auto-start", { method: "POST" });
-      loadAutoExportState();
-    } catch (err) {
-      setCorrMsg(err instanceof Error ? err.message : "Échec du démarrage.");
-    }
-  };
-
-  const cancelAutoExport = async () => {
-    try {
-      await fetchJson("/app-api/v1/ai-training/corrections-export/auto-cancel", { method: "POST" });
-    } catch {
-      // best-effort - next poll reflects the real state either way
     }
   };
 
@@ -783,154 +502,15 @@ export default function AiTrainingPage() {
           <div className="text-lg font-semibold">Entraînement de l'IA</div>
         </div>
 
-        <Section
-          title="Label Studio"
-          description="Statut, jeton d'API et projet utilisé pour les corrections/entraînements."
+        <a
+          href="http://192.168.178.127:8082"
+          target="_blank"
+          rel="noreferrer"
+          className="mb-4 flex items-center justify-between rounded-lg bg-white/5 p-3 text-sm hover:bg-white/10"
         >
-          {labelstudio && (
-            <>
-              <div className="mb-4 flex items-center justify-between rounded-lg bg-white/5 p-3">
-                <div>
-                  <div className="flex items-center gap-2 text-sm">
-                    <span className={`h-2.5 w-2.5 rounded-full ${labelstudio.running ? "bg-green-400" : "bg-red-400"}`} />
-                    {labelstudio.running ? "En ligne" : "Hors ligne"}
-                    {labelstudio.version && (
-                      <span className="text-white/65">· v{labelstudio.version}</span>
-                    )}
-                  </div>
-                </div>
-                {labelstudio.running && (
-                  <a
-                    href={labelstudio.url}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="rounded-md border border-white/20 px-3 py-1.5 text-sm hover:bg-white/10"
-                  >
-                    Ouvrir ↗
-                  </a>
-                )}
-              </div>
-
-              <h3 className="mb-2 text-sm font-medium">Jeton d'API</h3>
-              <p className="mb-2 text-xs text-white/65">
-                Nécessaire pour accéder aux projets Label Studio depuis cette page.
-              </p>
-              <div className="mb-4 flex gap-2">
-                <input
-                  type="password"
-                  value={tokenInput}
-                  onChange={(e) => setTokenInput(e.target.value)}
-                  placeholder="Coller le token ici"
-                  className={inputClass}
-                />
-                <button
-                  onClick={saveToken}
-                  disabled={savingToken}
-                  className="shrink-0 rounded-md border border-white/20 px-4 py-2 text-sm hover:bg-white/10 disabled:opacity-40"
-                >
-                  💾
-                </button>
-              </div>
-              {tokenMsg && <p className="mb-4 text-sm text-white/70">{tokenMsg}</p>}
-
-              <h3 className="mb-2 text-sm font-medium">Projet</h3>
-              {!labelstudio.api_token && (
-                <p className="text-sm text-white/65">
-                  Configure un jeton d'API ci-dessus pour choisir un projet.
-                </p>
-              )}
-              {labelstudio.api_token && !labelstudio.running && (
-                <p className="text-sm text-white/65">
-                  Label Studio n'est pas en ligne — impossible de lister les projets.
-                </p>
-              )}
-              {labelstudio.api_token && labelstudio.running && projects === null && !projectsReason && (
-                <p className="text-sm text-white/65">Chargement…</p>
-              )}
-              {projectsReason === "fetch_failed" && (
-                <p className="text-sm text-amber-300">
-                  Impossible de récupérer les projets — vérifie ton jeton d'API.
-                </p>
-              )}
-              {projects && projects.length === 0 && (
-                <p className="text-sm text-white/65">Aucun projet trouvé dans Label Studio.</p>
-              )}
-              {projects && projects.length > 0 && (
-                <select
-                  value={selectedProject}
-                  onChange={(e) => saveProject(e.target.value)}
-                  disabled={savingProject}
-                  className="w-full rounded-md border border-white/15 bg-neutral-900 px-3 py-2"
-                >
-                  <option value="">— Choisir un projet —</option>
-                  {projects.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.title}
-                    </option>
-                  ))}
-                </select>
-              )}
-            </>
-          )}
-        </Section>
-
-        <Section
-          title="Corrections humaines"
-          description="Envoyer tes détections validées/corrigées (onglet Photos) à Label Studio."
-        >
-          {corrExport && !corrExport.ls_ready && (
-            <p className="text-sm text-white/65">
-              Configure Label Studio ci-dessus d'abord (jeton, projet) pour envoyer des corrections.
-            </p>
-          )}
-          {corrExport && corrExport.ls_ready && (
-            <>
-              <p className="mb-3 text-sm">
-                {corrExport.pending > 0
-                  ? `${corrExport.pending} correction(s) en attente d'envoi.`
-                  : "Aucune correction en attente - tout ce que tu as révisé dans Photos est déjà dans Label Studio."}
-              </p>
-              <div className="flex flex-wrap gap-2">
-                <button
-                  onClick={startAutoExport}
-                  disabled={!!autoExport?.running || corrExport.pending === 0}
-                  className="rounded-md border border-white/20 px-4 py-2 text-sm hover:bg-white/10 disabled:opacity-40"
-                >
-                  🚀 Envoyer tout en arrière-plan
-                </button>
-                {autoExport?.running && (
-                  <button
-                    onClick={cancelAutoExport}
-                    className="rounded-md border border-red-400/30 px-4 py-2 text-sm text-red-300 hover:bg-red-500/10"
-                  >
-                    Arrêter
-                  </button>
-                )}
-                <button
-                  onClick={exportCorrections}
-                  disabled={exportingCorr || !!autoExport?.running || corrExport.pending === 0}
-                  className="rounded-md border border-white/20 px-4 py-2 text-sm hover:bg-white/10 disabled:opacity-40"
-                >
-                  {exportingCorr ? "Envoi…" : "⬆️ Envoyer un lot (50) manuellement"}
-                </button>
-              </div>
-              {autoExport?.running && (
-                <p className="mt-2 text-sm text-white/70">
-                  En cours en arrière-plan : {autoExport.sent_total} envoyée(s)
-                  {autoExport.failed_total > 0 ? `, ${autoExport.failed_total} échouée(s)` : ""} — {autoExport.remaining}{" "}
-                  restante(s). Tu peux fermer cette page, ça continue tout seul.
-                </p>
-              )}
-              {!autoExport?.running && autoExport && autoExport.sent_total > 0 && (
-                <p className="mt-2 text-sm text-white/70">
-                  Terminé : {autoExport.sent_total} envoyée(s)
-                  {autoExport.failed_total > 0 ? `, ${autoExport.failed_total} échouée(s)` : ""}.
-                </p>
-              )}
-              {corrMsg && <p className="mt-2 text-sm text-white/70">{corrMsg}</p>}
-            </>
-          )}
-        </Section>
+          <span>Trier et équilibrer les photos (Paws Review)</span>
+          <span className="rounded-md border border-white/20 px-3 py-1.5">Ouvrir ↗</span>
+        </a>
 
         <Section
           title="Gestion des modèles"
@@ -1326,35 +906,13 @@ export default function AiTrainingPage() {
           {training && !training.in_progress && training.server_status && !training.server_status.maintenance && (
             <>
               <h3 className="mb-2 text-sm font-medium">Données d'entraînement</h3>
-              <div className="mb-3 flex gap-2">
-                <label className="flex items-center gap-1.5 text-sm">
-                  <input
-                    type="radio"
-                    checked={source === "labelstudio"}
-                    onChange={() => setSource("labelstudio")}
-                    disabled={!labelstudio?.api_token}
-                  />
-                  Export depuis Label Studio{" "}
-                  {projects?.find((p) => p.id === selectedProject)?.title
-                    ? `(${projects.find((p) => p.id === selectedProject)?.title})`
-                    : ""}
-                </label>
-              </div>
-              <div className="mb-3 flex gap-2">
-                <label className="flex items-center gap-1.5 text-sm">
-                  <input type="radio" checked={source === "manual"} onChange={() => setSource("manual")} />
-                  Envoyer un ZIP manuellement
-                </label>
-              </div>
-              {source === "manual" && (
-                <input
-                  ref={trainingFileRef}
-                  type="file"
-                  accept=".zip"
-                  onChange={(e) => setTrainingFile(e.target.files?.[0] ?? null)}
-                  className="mb-3 w-full text-sm"
-                />
-              )}
+              <input
+                ref={trainingFileRef}
+                type="file"
+                accept=".zip"
+                onChange={(e) => setTrainingFile(e.target.files?.[0] ?? null)}
+                className="mb-3 w-full text-sm"
+              />
 
               <Field label="Nom du modèle (optionnel)">
                 <input value={modelName} onChange={(e) => setModelName(e.target.value)} className={inputClass} />
@@ -1404,44 +962,14 @@ export default function AiTrainingPage() {
                 </div>
               </details>
 
-              {source === "labelstudio" && lsSummary && (
-                <div
-                  className={`mb-3 rounded-md border px-3 py-2 text-sm ${
-                    lsSummary.status === "ready"
-                      ? "border-green-500/30 bg-green-500/10 text-green-300"
-                      : "border-amber-500/30 bg-amber-500/10 text-amber-300"
-                  }`}
-                >
-                  {lsSummary.status === "not_running" && "Label Studio n'est pas lancé."}
-                  {lsSummary.status === "no_project" && "Aucun projet Label Studio sélectionné."}
-                  {lsSummary.status === "fetch_failed" &&
-                    "Impossible de récupérer les informations du projet."}
-                  {lsSummary.status === "empty" &&
-                    "Le projet sélectionné n'a aucune photo. Ajoute et étiquette des images dans Label Studio d'abord."}
-                  {lsSummary.status === "incomplete" &&
-                    `${lsSummary.unannotated} photo(s) sur ${lsSummary.total} sans étiquette. Complète les étiquettes avant d'entraîner.`}
-                  {lsSummary.status === "ready" && `✅ Projet prêt : ${lsSummary.annotated} photo(s) étiquetée(s).`}
-                </div>
-              )}
-
               <button
                 onClick={submitTraining}
-                disabled={submitting || (source === "manual" && !trainingFile)}
+                disabled={submitting || !trainingFile}
                 className="w-full rounded-lg bg-white py-3 text-center font-medium text-black disabled:opacity-50"
               >
                 Soumettre pour entraînement
               </button>
               {trainingMsg && <p className="mt-2 text-center text-sm text-white/70">{trainingMsg}</p>}
-              {lsExport &&
-                (lsExport.status === "exporting" || lsExport.status === "submitting") && (
-                  <p className="mt-1 text-center text-xs text-white/50">
-                    {lsExport.status === "exporting" && lsExport.total > 0
-                      ? `Export : ${lsExport.written} / ${lsExport.total} photo(s)`
-                      : lsExport.status === "exporting"
-                        ? "Export en cours…"
-                        : "Envoi au serveur d'entraînement…"}
-                  </p>
-                )}
             </>
           )}
         </Section>

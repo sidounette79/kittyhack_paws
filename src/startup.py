@@ -34,7 +34,6 @@ from src.helper import (
 )
 from src.system import (
     KittyhackUpdater,
-    LabelStudioInstall,
     WlanManager,
 )
 from src.database import (
@@ -792,7 +791,6 @@ def run() -> None:
 
     logging.info("Starting frontend...")
 
-    CONFIG["LABELSTUDIO_VERSION"] = LabelStudioInstall.get_labelstudio_installed_version()
     free_disk_space = SystemInfo.get_free_disk_space()
 
     logging.info("Checking ids with images in the database...")

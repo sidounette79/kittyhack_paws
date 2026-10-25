@@ -13,6 +13,18 @@ Shiny-for-Python web app that replaces the defunct Kittyflap cloud/app. Controls
 
 User-facing docs: `README.md` (EN + DE). This file is for the assistant.
 
+## ⚠️ Before restarting the service, ANY mode - check for active motion first
+
+24.10, Sid: **"avant de relancer kittyhack regarde toujours s'il y a du mouvement
+intérieur ou extérieur"** - before `systemctl restart kittyhack`, redeploying the
+remote container, or anything else that interrupts the running process, check
+whether a cat is mid-transit (motion active on either side) first. Restarting
+mid-passage risks leaving a magnet state inconsistent with reality, or
+interrupting an in-flight unlock sequence. Check via the live motion/presence
+state (webui/app-api `live/status`, or the Presence page) before restarting -
+don't just restart on a schedule or because code changed, without checking.
+Applies to every restart, not just ones tied to a specific incident.
+
 ## Runtime topology — target vs remote mode
 
 Two deployment shapes, gated by `is_remote_mode()` (`src/mode.py`, reads `.remote-mode` marker or env):

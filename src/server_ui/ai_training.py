@@ -1,8 +1,6 @@
-"""AI training and Label Studio handlers."""
+"""AI training handlers."""
 
 import os
-import time as tm
-import tempfile
 import threading
 import pandas as pd
 from src.clock import monotonic_time
@@ -13,21 +11,8 @@ import re
 import hashlib
 import asyncio
 from src.baseconfig import CONFIG, set_language, update_single_config_parameter
-from src.helper import (
-    SystemInfo,
-    is_valid_uuid4,
-)
-from src.system import (
-    LabelStudioInstall,
-    ServiceOps,
-)
+from src.helper import is_valid_uuid4
 from src.mode import is_remote_mode
-from src.labelstudio_api import (
-    get_labelstudio_projects_list,
-    export_labelstudio_project_as_zip,
-    get_labelstudio_project_task_summary,
-    export_corrections_to_labelstudio,
-)
 from src.database import DetectionFeedbackRepo, EventsRepo, ModelReviewRepo, CatsRepo
 from src.model import YoloModel, RemoteModelTrainer
 from src.model.retroactive_review import run_retroactive_review_batch
@@ -89,249 +74,7 @@ def register_ai_training(input, output, session, ctx: SessionContext):
     @reactive.event(reload_trigger_ai, ignore_none=True)
     def ui_ai_training():
 
-        # Check labelstudio
-        if CONFIG["LABELSTUDIO_VERSION"] is not None:
-            labelstudio_latest_version = (
-                LabelStudioInstall.get_labelstudio_latest_version()
-            )
-            labelstudio_latest_version_display = labelstudio_latest_version or _(
-                "unknown"
-            )
-
-            # Check if labelstudio is running
-            if LabelStudioInstall.get_labelstudio_status() == True:
-                ui_labelstudio = ui.div(
-                    ui.div(
-                        ui.input_task_button(
-                            "btn_labelstudio_stop",
-                            _("Stop Label Studio"),
-                            icon=icon_svg("stop"),
-                        ),
-                        ui.HTML(
-                            ' <a href="http://{}:{}" target="_blank" class="btn btn-default">{}</a>'.format(
-                                # get_current_ip() reads the wlan0 interface, which only
-                                # exists on the physical Kittyflap - meaningless inside
-                                # this Docker container, so prefer the explicit override.
-                                os.environ.get("KITTYHACK_LABELSTUDIO_EXTERNAL_HOST")
-                                or SystemInfo.get_current_ip(),
-                                os.environ.get("KITTYHACK_LABELSTUDIO_EXTERNAL_PORT", "8080"),
-                                _("Open Label Studio"),
-                            )
-                        ),
-                        class_="d-flex gap-2 justify-content-center flex-wrap",
-                    ),
-                    ui.help_text(
-                        _("Label Studio Version: {}").format(
-                            CONFIG["LABELSTUDIO_VERSION"]
-                        )
-                        + " · "
-                        + _("Latest: {}").format(labelstudio_latest_version_display)
-                    ),
-                    style_="text-align:center;",
-                )
-            else:
-                ui_labelstudio = ui.div(
-                    ui.input_task_button(
-                        "btn_labelstudio_start",
-                        _("Start Label Studio"),
-                        icon=icon_svg("play"),
-                    ),
-                    ui.br(),
-                    ui.help_text(
-                        _("Label Studio is not running."), style_="margin-top:0.5rem;"
-                    ),
-                    ui.help_text(
-                        _("Version: {}").format(CONFIG["LABELSTUDIO_VERSION"])
-                        + " · "
-                        + _("Latest: {}").format(labelstudio_latest_version_display)
-                    ),
-                    style_="text-align:center;",
-                )
-
-            if (
-                labelstudio_latest_version is not None
-                and labelstudio_latest_version != CONFIG["LABELSTUDIO_VERSION"]
-            ):
-                ui_labelstudio = (
-                    ui_labelstudio,
-                    ui.div(
-                        ui.hr(),
-                        ui.input_task_button(
-                            "btn_labelstudio_update",
-                            _("Update Label Studio"),
-                            icon=icon_svg("circle-up"),
-                            class_="btn-primary",
-                        ),
-                        ui.help_text(
-                            CONFIG["LABELSTUDIO_VERSION"]
-                            + " → "
-                            + labelstudio_latest_version_display,
-                            style_="margin-top:0.5rem;",
-                        ),
-                        style_="text-align:center;",
-                    ),
-                )
-
-            ui_labelstudio = (
-                ui_labelstudio,
-                ui.hr(),
-                ui.div(
-                    ui.markdown(_("#### API Token")),
-                    ui.help_text(
-                        _("Required to access Label Studio projects from this page.")
-                    ),
-                    ui.br(),
-                    ui.div(
-                        ui.tags.button(
-                            ui.tags.span(
-                                "\u25b6",
-                                class_="toggle-chevron",
-                                style_="display:inline-block; transition:transform .2s;",
-                            ),
-                            " ",
-                            _("How to create an API token"),
-                            type="button",
-                            class_="btn btn-link p-0 info-toggle-btn",
-                            style_="text-decoration:none;",
-                            **{
-                                "data-bs-toggle": "collapse",
-                                "data-bs-target": "#labelstudio_token_help_body",
-                                "aria-expanded": "false",
-                                "aria-controls": "labelstudio_token_help_body",
-                            },
-                        ),
-                        ui.div(
-                            ui.br(),
-                            ui.markdown(
-                                _("**Option 1: Legacy Token (preferred)**")
-                                + "  \n"
-                                + _(
-                                    "1. Open Label Studio in your browser (button above)"
-                                )
-                                + "  \n"
-                                + _(
-                                    "2. In Label Studio, go to 'burger menu' → Organization"
-                                )
-                                + "  \n"
-                                + _(
-                                    "3. Click on 'API Tokens Settings' and enable 'Legacy Tokens'"
-                                )
-                                + "  \n"
-                                + _("4. Click your user icon → Account & Settings")
-                                + "  \n"
-                                + _(
-                                    "5. Find 'Legacy Token' section and copy the 'Access Token'"
-                                )
-                                + "  \n"
-                                + _(
-                                    "6. Important: the 'Copy token' button in Label Studio does NOT work. Please copy the token manually."
-                                )
-                                + "  \n"
-                                + _("7. Paste it below and click Save")
-                                + "  \n"
-                                + "  \n"
-                                + _("**Option 2: Personal Access Token**")
-                                + "  \n"
-                                + _(
-                                    "1. Open Label Studio in your browser (button above)"
-                                )
-                                + "  \n"
-                                + _(
-                                    "2. Click on your user icon (top right) → Account & Settings"
-                                )
-                                + "  \n"
-                                + _("3. Scroll to 'Personal Access Tokens' section")
-                                + "  \n"
-                                + _("4. Click 'Create new token'")
-                                + "  \n"
-                                + _(
-                                    "5. Important: the 'Copy token' button in Label Studio does NOT work. Please copy the token manually."
-                                )
-                                + "  \n"
-                                + _("6. Paste it below and click Save")
-                            ),
-                            id="labelstudio_token_help_body",
-                            class_="collapse",
-                            style_="text-align: left; padding: 1rem; background-color: var(--bs-body-bg); border: 1px solid var(--bs-border-color); border-radius: 0.25rem; margin-top: 0.5rem;",
-                        ),
-                    ),
-                    ui.br(),
-                    ui.div(
-                        ui.input_password(
-                            "labelstudio_api_token",
-                            _("Label Studio API Token"),
-                            value=CONFIG.get("LABELSTUDIO_API_TOKEN", ""),
-                            placeholder=_(
-                                "Paste Personal Access Token or Legacy Token here"
-                            ),
-                            width="100%",
-                        ),
-                        ui.br(),
-                        ui.input_action_button(
-                            "btn_save_labelstudio_token",
-                            _("Save Token"),
-                            class_="btn-primary",
-                        ),
-                        style_="max-width:600px; margin:0 auto;",
-                    ),
-                    style_="text-align:center;",
-                ),
-                ui.hr(),
-                ui.div(
-                    ui.markdown(_("#### Project")),
-                    ui.output_ui("ui_labelstudio_project_selector"),
-                    style_="text-align:center;",
-                ),
-                ui.hr(),
-                ui.div(
-                    ui.input_task_button(
-                        "btn_labelstudio_remove",
-                        _("Remove Label Studio"),
-                        icon=icon_svg("trash"),
-                        class_="btn-danger btn-sm",
-                    ),
-                    ui.br(),
-                    ui.help_text(
-                        _("Your project data will not be deleted."),
-                        style_="margin-top:0.5rem;",
-                    ),
-                    style_="text-align:center;",
-                ),
-            )
-
-            # If labelstudio is not installed, show the install button
-        else:
-            ui_labelstudio = ui.div(
-                ui.markdown(
-                    _(
-                        "**Option 1** – Install on the Kittyflap (easy, limited resources)"
-                    )
-                    + "  \n"
-                    + _(
-                        "**Option 2** – Install on your own computer ([labelstud.io](https://labelstud.io/))"
-                    )
-                    + "  \n\n"
-                    + _(
-                        "> Some Kittyflaps have only 1 GB RAM. Stop Label Studio when not in use."
-                    )
-                ),
-                ui.hr(),
-                ui.div(
-                    ui.input_task_button(
-                        "btn_labelstudio_install",
-                        _("Install Label Studio on the Kittyflap"),
-                    ),
-                    ui.help_text(
-                        _(
-                            "This will take 5–10 minutes. The Kittyflap may not be reachable during installation."
-                        ),
-                        style_="margin-top:0.5rem;",
-                    ),
-                    style_="text-align:center;",
-                ),
-            )
-
-            # Check if a model training is in progress
+        # Check if a model training is in progress
         training_status = RemoteModelTrainer.check_model_training_result(
             show_in_progress=True, return_pretty_status=True
         )
@@ -464,36 +207,19 @@ def register_ai_training(input, output, session, ctx: SessionContext):
                         model_training_image_size_input
                     )
 
-                    # Build training data source options
-                api_token = CONFIG.get("LABELSTUDIO_API_TOKEN", "").strip()
-                saved_project = CONFIG.get("LABELSTUDIO_PROJECT", "").strip()
-                project_title = (
-                    CONFIG.get("LABELSTUDIO_PROJECT_TITLE", "").strip() or saved_project
-                )
-                labelstudio_source_label = _("Export from Label Studio project")
-                if project_title:
-                    labelstudio_source_label += f" ({project_title})"
-
+                    # Build training data source options (Label Studio export
+                    # removed 24.10 - manual zip upload is the only source now)
                 ls_training_source_options = {
-                    "__labelstudio__": labelstudio_source_label,
                     "__manual__": _("Upload project zip manually"),
                 }
-                default_training_source = (
-                    "__labelstudio__"
-                    if (
-                        api_token
-                        and saved_project
-                        and LabelStudioInstall.get_labelstudio_status()
-                    )
-                    else "__manual__"
-                )
+                default_training_source = "__manual__"
 
                 training_content = ui.div(
                     ui.div(
                         ui.div(
                             ui.markdown(_("### Training Data")),
                             ui.input_select(
-                                "model_training_labelstudio_project",
+                                "model_training_source",
                                 _("Training data source"),
                                 ls_training_source_options,
                                 selected=default_training_source,
@@ -605,19 +331,10 @@ def register_ai_training(input, output, session, ctx: SessionContext):
                                         var tid = setInterval(function() {
                                             if (!document.body.contains(btn)) { clearInterval(tid); return; }
 
-                                            var srcSelect = document.querySelector('select[id*="model_training_labelstudio_project"]');
-                                            var src = srcSelect ? srcSelect.value : '';
-
-                                            if (src === '__labelstudio__') {
-                                                // LS project: enable if no warning note is visible
-                                                var note = document.getElementById('ls_project_task_warning');
-                                                btn.disabled = !!note;
-                                            } else {
-                                                // Manual upload: enable when file upload is complete
-                                                var bar = document.querySelector('#model_training_data_progress .progress-bar');
-                                                var fileUploaded = bar && bar.textContent.trim().toLowerCase() === 'upload complete';
-                                                btn.disabled = !fileUploaded;
-                                            }
+                                            // Manual upload: enable when file upload is complete
+                                            var bar = document.querySelector('#model_training_data_progress .progress-bar');
+                                            var fileUploaded = bar && bar.textContent.trim().toLowerCase() === 'upload complete';
+                                            btn.disabled = !fileUploaded;
                                         }, 300);
                                     })();
                                 """)
@@ -648,32 +365,6 @@ def register_ai_training(input, output, session, ctx: SessionContext):
                         + "</a>"
                     ),
                     style_="text-align:center; margin-bottom:1.5rem;",
-                ),
-                collapsible_section(
-                    "ai_labelstudio",
-                    "Label Studio",
-                    (
-                        _(
-                            "Manage Label Studio, configure API access, and select a project."
-                        )
-                        if CONFIG["LABELSTUDIO_VERSION"] is not None
-                        else _("Install Label Studio to start labeling your images.")
-                    ),
-                    ui.div(
-                        ui_labelstudio,
-                        class_="generic-container align-left",
-                        style_="padding-left:1rem !important; padding-right:1rem !important;",
-                    ),
-                ),
-                collapsible_section(
-                    "ai_corrections_export",
-                    _("Human Corrections"),
-                    _("Send your validated/corrected detections (Photos tab) to Label Studio as pre-annotated tasks."),
-                    ui.div(
-                        ui.output_ui("ui_corrections_export"),
-                        class_="generic-container align-left",
-                        style_="padding-left:1rem !important; padding-right:1rem !important;",
-                    ),
                 ),
                 collapsible_section(
                     "ai_model_training",
@@ -717,152 +408,6 @@ def register_ai_training(input, output, session, ctx: SessionContext):
             ui.br(),
         )
         return ui_ai_training
-
-    @render.ui
-    @reactive.event(reload_trigger_ai, ignore_none=True)
-    def ui_corrections_export():
-        """04.10, Sid ("le bouton pour envoyer les corrections"): pending-count +
-        export button for human-reviewed detections (Photos tab) -> Label Studio."""
-        pending = DetectionFeedbackRepo.get_pending_export_count(CONFIG["KITTYHACK_DATABASE_PATH"])
-        ls_ready = (
-            CONFIG["LABELSTUDIO_VERSION"] is not None
-            and CONFIG.get("LABELSTUDIO_API_TOKEN")
-            and CONFIG.get("LABELSTUDIO_PROJECT")
-        )
-        if not ls_ready:
-            return ui.p(
-                _("Configure Label Studio above first (install, token, project) to send corrections."),
-                class_="text-muted",
-            )
-        status_text = (
-            _("{n} correction(s) waiting to be sent.").format(n=pending)
-            if pending
-            else _("No corrections waiting - everything you've reviewed on the Photos tab is already in Label Studio.")
-        )
-        # 04.10, Sid ("j'ai cliqué, rien ne s'est passe"): always render the
-        # button (just disabled at 0) instead of conditionally omitting it -
-        # simpler, standard Shiny practice, no element appearing/disappearing
-        # across re-renders to go wrong.
-        return ui.div(
-            ui.p(status_text),
-            ui.input_action_button(
-                "btn_export_corrections",
-                _("Send to Label Studio"),
-                icon=icon_svg("upload"),
-                disabled=(pending == 0),
-                class_="btn-primary",
-            ),
-        )
-
-    def _export_corrections_blocking(batch_size: int) -> tuple[int, int, int]:
-        """All the blocking HTTP/file I/O for one export batch - runs off the
-        event loop (see asyncio.to_thread below). Returns (sent, failed, remaining).
-
-        04.10, Sid ("Connection lost" on every click, only 1-2 corrections going
-        through): running this synchronously inside the reactive effect blocked
-        Shiny's single event loop long enough that the websocket heartbeat
-        starved and the browser saw it as a dropped connection - the container
-        itself never crashed (confirmed via docker inspect, RestartCount stayed
-        0). Same asyncio.to_thread pattern already used for the Label Studio
-        project list fetch above.
-        """
-        database = CONFIG["KITTYHACK_DATABASE_PATH"]
-        df = DetectionFeedbackRepo.get_pending_corrections(database, limit=batch_size)
-        if df.empty:
-            return 0, 0, 0
-
-        from src.labelstudio_api import LabelStudioAPI
-        api = LabelStudioAPI()
-        if not api.authenticate(token=CONFIG.get("LABELSTUDIO_API_TOKEN")):
-            logging.error("[AI_TRAINING] Could not authenticate with Label Studio for export.")
-            return 0, len(df), DetectionFeedbackRepo.get_pending_export_count(database)
-
-        project_id = int(CONFIG["LABELSTUDIO_PROJECT"])
-        succeeded_ids = []
-        try:
-            for i, (_, row) in enumerate(df.iterrows()):
-                row_id = int(row["id"])
-                logging.info(f"[AI_TRAINING] Exporting correction {i + 1}/{len(df)} (id={row_id})...")
-
-                corrected = (row.get("corrected_name") or "").strip()
-                if corrected and corrected.lower() != "none":
-                    label = corrected
-                elif row.get("confirmed"):
-                    label = row.get("original_name")
-                else:
-                    # "none" (false positive) or un-reviewed original - no valid
-                    # label in this project's config, upload the image with no box.
-                    label = None
-
-                # 04.10, Sid ("je fais 12x les memes photos"): old corrections
-                # whose original image file no longer exists on disk were being
-                # skipped but left pending - since there's nothing more we can
-                # ever do for them, they permanently clogged every batch (same
-                # 14 unexportable rows reprocessed, max 1 new one through per
-                # click). Mark them exported too so the queue actually drains.
-                img_path = EventsRepo._original_image_path(int(row["photo_id"]))
-                if not os.path.exists(img_path):
-                    logging.warning(f"[AI_TRAINING] Image gone for correction {row_id}, giving up on it: {img_path}")
-                    DetectionFeedbackRepo.mark_exported(database, [row_id])
-                    continue
-                try:
-                    with open(img_path, "rb") as f:
-                        image_bytes = f.read()
-                except Exception as e:
-                    logging.warning(f"[AI_TRAINING] Could not read image for correction {row_id}: {e}")
-                    DetectionFeedbackRepo.mark_exported(database, [row_id])
-                    continue
-
-                ok = api.upload_image_with_correction(
-                    project_id, image_bytes,
-                    f"correction_{int(row['photo_id'])}_{int(row['object_index'])}.jpg",
-                    label,
-                    float(row["x"]), float(row["y"]), float(row["width"]), float(row["height"]),
-                )
-                logging.info(f"[AI_TRAINING] Correction {row_id}: {'OK' if ok else 'FAILED'}")
-                if ok:
-                    succeeded_ids.append(row_id)
-                    # Incremental, not batched at the end - a stall here still keeps this.
-                    DetectionFeedbackRepo.mark_exported(database, [row_id])
-        finally:
-            api.close()
-
-        failed = len(df) - len(succeeded_ids)
-        remaining = DetectionFeedbackRepo.get_pending_export_count(database)
-        return len(succeeded_ids), failed, remaining
-
-    @reactive.effect
-    @reactive.event(input.btn_export_corrections, ignore_none=True)
-    async def on_export_corrections():
-        logging.info("[AI_TRAINING] Export-corrections button clicked.")
-        sent, failed, remaining = await asyncio.to_thread(_export_corrections_blocking, 50)
-        logging.info(f"[AI_TRAINING] Batch done: sent={sent} failed={failed} remaining={remaining}")
-
-        # 04.10, Sid: a translation-call TypeError here once killed the whole
-        # effect silently after a successful upload (never root-caused - not
-        # reproducible in isolation - but the upload itself is unaffected, so
-        # a failure to show the toast must never look like the export failed).
-        try:
-            if sent == 0 and failed == 0:
-                msg, kind = _("Nothing to export."), "message"
-            elif failed:
-                msg = _("Sent {ok}, {fail} failed (will retry next time). {rem} still waiting.").format(
-                    ok=sent, fail=failed, rem=remaining
-                )
-                kind = "warning"
-            elif remaining:
-                msg = _("Sent {ok} correction(s). {rem} still waiting - click again to continue.").format(
-                    ok=sent, rem=remaining
-                )
-                kind = "message"
-            else:
-                msg = _("Sent {ok} correction(s) to Label Studio.").format(ok=sent)
-                kind = "message"
-            ui.notification_show(msg, duration=8, type=kind)
-        except Exception as e:
-            logging.warning(f"[AI_TRAINING] Could not build the result notification (export itself still ran fine): {e}")
-            ui.notification_show(f"Sent {sent}, {failed} failed, {remaining} remaining.", duration=8)
-        reload_trigger_ai.set(reload_trigger_ai.get() + 1)
 
     @render.ui
     @reactive.event(reload_trigger_ai, ignore_none=True)
@@ -1291,7 +836,7 @@ def register_ai_training(input, output, session, ctx: SessionContext):
     def ui_model_training_data_upload():
         """Show/hide file upload based on training data source selection."""
         try:
-            selected = input.model_training_labelstudio_project()
+            selected = input.model_training_source()
             if selected == "__manual__" or selected is None:
                 return ui.div(
                     uix.input_file(
@@ -1322,244 +867,37 @@ def register_ai_training(input, output, session, ctx: SessionContext):
     @output
     @render.ui
     def ui_model_training_project_note():
-        """Show a warning if the selected LS project has no/incomplete labeled pictures."""
-        # Read reload_trigger_ai so this output re-executes when the AI tab reloads
-        # (e.g. after saving a new project selection).
-        reload_trigger_ai.get()
-
-        try:
-            selected = input.model_training_labelstudio_project()
-        except Exception:
-            return ui.div()
-
-        if selected != "__labelstudio__":
-            return ui.div()
-
-        api_token = CONFIG.get("LABELSTUDIO_API_TOKEN", "").strip()
-        if not api_token:
-            return ui.div(
-                ui.div(
-                    ui.div(
-                        icon_svg("circle-info", margin_left="-0.1em"),
-                        " ",
-                        _(
-                            "No Label Studio API token configured. If you want to train a model directly from a Label Studio project, please add your API token in the Label Studio card above."
-                        ),
-                        style_="margin-bottom: 0;",
-                    ),
-                    id="ls_project_task_warning",
-                    class_="alert alert-info",
-                    style_="text-align: left; margin-top: 0.5rem;",
-                ),
-            )
-
-        saved_project = CONFIG.get("LABELSTUDIO_PROJECT", "").strip()
-        if not saved_project:
-            return ui.div(
-                ui.div(
-                    ui.div(
-                        icon_svg("triangle-exclamation", margin_left="-0.1em"),
-                        " ",
-                        _(
-                            "No Label Studio project selected. Please select a project in the Label Studio card above."
-                        ),
-                        style_="margin-bottom: 0;",
-                    ),
-                    id="ls_project_task_warning",
-                    class_="alert alert-warning",
-                    style_="text-align: left; margin-top: 0.5rem;",
-                ),
-            )
-
-        if not LabelStudioInstall.get_labelstudio_status():
-            return ui.div(
-                ui.div(
-                    ui.div(
-                        icon_svg("triangle-exclamation", margin_left="-0.1em"),
-                        " ",
-                        _(
-                            "Label Studio is not running. Please start it in the Label Studio card above."
-                        ),
-                        style_="margin-bottom: 0;",
-                    ),
-                    id="ls_project_task_warning",
-                    class_="alert alert-warning",
-                    style_="text-align: left; margin-top: 0.5rem;",
-                ),
-            )
-
-        try:
-            project_id = int(saved_project)
-        except (ValueError, TypeError):
-            return ui.div()
-
-        summary = get_labelstudio_project_task_summary(project_id)
-        if summary is None:
-            return ui.div(
-                ui.div(
-                    ui.div(
-                        icon_svg("triangle-exclamation", margin_left="-0.1em"),
-                        " ",
-                        _(
-                            "Could not retrieve picture information for the selected project."
-                        ),
-                        style_="margin-bottom: 0;",
-                    ),
-                    id="ls_project_task_warning",
-                    class_="alert alert-warning",
-                    style_="text-align: left; margin-top: 0.5rem;",
-                ),
-            )
-
-        if summary["total_tasks"] == 0:
-            return ui.div(
-                ui.div(
-                    ui.div(
-                        icon_svg("triangle-exclamation", margin_left="-0.1em"),
-                        " ",
-                        _(
-                            "The selected project has no pictures. Please add and label images in Label Studio first."
-                        ),
-                        style_="margin-bottom: 0;",
-                    ),
-                    id="ls_project_task_warning",
-                    class_="alert alert-warning",
-                    style_="text-align: left; margin-top: 0.5rem;",
-                ),
-            )
-
-        if not summary["ready"]:
-            return ui.div(
-                ui.div(
-                    ui.div(
-                        icon_svg("triangle-exclamation", margin_left="-0.1em"),
-                        " ",
-                        _(
-                            "The selected project has {unlabeled} of {total} pictures without labels. Please complete all labels before training."
-                        ).format(
-                            unlabeled=summary["unannotated_tasks"],
-                            total=summary["total_tasks"],
-                        ),
-                        style_="margin-bottom: 0;",
-                    ),
-                    id="ls_project_task_warning",
-                    class_="alert alert-warning",
-                    style_="text-align: left; margin-top: 0.5rem;",
-                ),
-            )
-
-            # All good
-        return ui.div(
-            ui.div(
-                ui.div(
-                    icon_svg("circle-check", margin_left="-0.1em"),
-                    " ",
-                    _("Project ready: {labeled} labeled pictures.").format(
-                        labeled=summary["annotated_tasks"],
-                    ),
-                    style_="margin-bottom: 0;",
-                ),
-                class_="alert alert-success",
-                style_="text-align: left; margin-top: 0.5rem;",
-            ),
-        )
+        # 24.10: Label Studio export removed - this readiness note only ever
+        # applied to that source, never to a manual zip upload.
+        return ui.div()
 
     @reactive.Effect
     @reactive.event(input.submit_model_training)
     def on_submit_model_training():
-        # Check if a Label Studio project was selected or a file was uploaded
-        labelstudio_project_id = None
         zip_file_path = None
 
-        try:
-            source = input.model_training_labelstudio_project()
-            if source == "__labelstudio__":
-                saved_project = CONFIG.get("LABELSTUDIO_PROJECT", "").strip()
-                if saved_project:
-                    try:
-                        labelstudio_project_id = int(saved_project)
-                    except (ValueError, TypeError):
-                        labelstudio_project_id = None
-        except Exception:
-            labelstudio_project_id = None
-
-        if labelstudio_project_id:
-            # User selected a Label Studio project
-            logging.info(
-                f"[MODEL_TRAINING] User selected Label Studio project {labelstudio_project_id}"
+        if input.model_training_data() is None:
+            ui.notification_show(
+                _("Please upload a ZIP file with the training data."),
+                duration=10,
+                type="error",
             )
+            return
 
-            # Export the project as YOLO format
-            try:
-                with ui.Progress(min=1, max=3) as p:
-                    p.set(message=_("Exporting Label Studio project..."), value=1)
+            # Check if the file is a ZIP file
+        if not input.model_training_data()[0]["name"].endswith(".zip"):
+            ui.notification_show(
+                _(
+                    "The uploaded file is not a ZIP file. Please upload a valid ZIP file."
+                ),
+                duration=10,
+                type="error",
+            )
+            return
 
-                    # Create a temporary file for the export
-                    temp_dir = tempfile.gettempdir()
-                    zip_file_path = os.path.join(
-                        temp_dir,
-                        f"labelstudio_project_{labelstudio_project_id}_{int(tm.time())}.zip",
-                    )
-
-                    p.set(message=_("Downloading project data..."), value=2)
-                    if not export_labelstudio_project_as_zip(
-                        labelstudio_project_id, zip_file_path
-                    ):
-                        ui.notification_show(
-                            _(
-                                "Failed to export Label Studio project. Please ensure the project is properly configured and exported as 'YOLO with Images'."
-                            ),
-                            duration=15,
-                            type="error",
-                        )
-                        # Clean up temp file if it was created
-                        try:
-                            if os.path.exists(zip_file_path):
-                                os.remove(zip_file_path)
-                        except Exception:
-                            pass
-                        return
-
-                    p.set(message=_("Project exported successfully"), value=3)
-                    logging.info(
-                        f"[MODEL_TRAINING] Successfully exported Label Studio project to {zip_file_path}"
-                    )
-            except Exception as e:
-                logging.error(
-                    f"[MODEL_TRAINING] Error exporting Label Studio project: {e}"
-                )
-                ui.notification_show(
-                    _("Error exporting Label Studio project: {}").format(str(e)),
-                    duration=15,
-                    type="error",
-                )
-                return
-        else:
-            # User uploaded a file
-            if input.model_training_data() is None:
-                ui.notification_show(
-                    _(
-                        "Please either select a Label Studio project or upload a ZIP file with the training data."
-                    ),
-                    duration=10,
-                    type="error",
-                )
-                return
-
-                # Check if the file is a ZIP file
-            if not input.model_training_data()[0]["name"].endswith(".zip"):
-                ui.notification_show(
-                    _(
-                        "The uploaded file is not a ZIP file. Please upload a valid ZIP file."
-                    ),
-                    duration=10,
-                    type="error",
-                )
-                return
-
-                # Get the uploaded file path
-            zip_file_path = input.model_training_data()[0]["datapath"]
-            logging.info(f"[MODEL_TRAINING] User uploaded ZIP file: {zip_file_path}")
+            # Get the uploaded file path
+        zip_file_path = input.model_training_data()[0]["datapath"]
+        logging.info(f"[MODEL_TRAINING] User uploaded ZIP file: {zip_file_path}")
 
         model_name = input.model_name()
         email_notification = input.email_notification()
@@ -1664,335 +1002,3 @@ def register_ai_training(input, output, session, ctx: SessionContext):
 
         reload_trigger_ai.set(reload_trigger_ai.get() + 1)
 
-        # --- Label Studio installation and update ---
-
-    @reactive.Effect
-    @reactive.event(input.btn_labelstudio_install)
-    def btn_labelstudio_install():
-        with ui.Progress(min=1, max=5) as p:
-            # Check available disk space
-            if SystemInfo.get_free_disk_space() < 1500:
-                ui.notification_show(
-                    _(
-                        "Insufficient disk space. At least 1.5GB of free space is required to install Label Studio. Please free up some space and try again."
-                    ),
-                    duration=15,
-                    type="error",
-                )
-                return
-
-            def update_progress(step, message, detail):
-                p.set(step, message=message, detail=detail)
-
-                # Start the installation with progress updates
-
-            success = LabelStudioInstall.install_labelstudio(
-                progress_callback=update_progress
-            )
-
-            if success:
-                ui.notification_show(
-                    _("Label Studio installed successfully! You can start it now."),
-                    duration=15,
-                    type="message",
-                )
-                CONFIG["LABELSTUDIO_VERSION"] = (
-                    LabelStudioInstall.get_labelstudio_installed_version()
-                )
-            else:
-                ui.notification_show(
-                    _(
-                        "Label Studio installation failed. Please check the logs for details."
-                    ),
-                    duration=None,
-                    type="error",
-                )
-
-        reload_trigger_ai.set(reload_trigger_ai.get() + 1)
-
-    @reactive.Effect
-    @reactive.event(input.btn_labelstudio_update)
-    def btn_labelstudio_update():
-        with ui.Progress(min=1, max=2) as p:
-
-            def update_progress(step, message, detail):
-                p.set(step, message=message, detail=detail)
-
-                # Start the installation with progress updates
-
-            success = LabelStudioInstall.update_labelstudio(
-                progress_callback=update_progress
-            )
-
-            if success:
-                ui.notification_show(
-                    _("Label Studio updated successfully! You can start it now."),
-                    duration=15,
-                    type="message",
-                )
-                CONFIG["LABELSTUDIO_VERSION"] = (
-                    LabelStudioInstall.get_labelstudio_installed_version()
-                )
-            else:
-                ui.notification_show(
-                    _("Label Studio update failed. Please check the logs for details."),
-                    duration=None,
-                    type="error",
-                )
-
-        reload_trigger_ai.set(reload_trigger_ai.get() + 1)
-
-    @reactive.Effect
-    @reactive.event(input.btn_labelstudio_remove)
-    def btn_labelstudio_remove():
-        m = ui.modal(
-            title=_("Remove Label Studio"),
-            easy_close=True,
-            footer=ui.div(
-                ui.input_task_button(
-                    "btn_labelstudio_remove_ok", _("OK"), class_="btn-default"
-                ),
-                ui.input_action_button("btn_modal_cancel", _("Cancel")),
-            ),
-        )
-        ui.modal_show(m)
-
-    @reactive.effect
-    @reactive.event(input.btn_labelstudio_remove_ok)
-    def btn_labelstudio_remove_ok():
-        with ui.Progress(min=1, max=2) as p:
-            p.set(1, message=_("Removing Label Studio"), detail=_("Please wait..."))
-            success = LabelStudioInstall.remove_labelstudio()
-            p.set(2)
-
-            if success:
-                ui.notification_show(
-                    _("Label Studio removed successfully."), duration=5, type="message"
-                )
-                CONFIG["LABELSTUDIO_VERSION"] = None
-            else:
-                ui.notification_show(
-                    _(
-                        "Label Studio removal failed. Please check the logs for details."
-                    ),
-                    duration=None,
-                    type="error",
-                )
-        ui.modal_remove()
-
-        reload_trigger_ai.set(reload_trigger_ai.get() + 1)
-
-    @reactive.Effect
-    @reactive.event(input.btn_labelstudio_stop)
-    def stop_labelstudio():
-        ServiceOps.systemctl("stop", "labelstudio")
-        ServiceOps.systemctl("disable", "labelstudio")
-
-        # Wait up to 10 seconds for the process to stop
-        max_wait_time = 10  # seconds
-        start_time = monotonic_time()
-
-        with ui.Progress(min=0, max=100) as p:
-            p.set(message=_("Stopping Label Studio..."), detail=_("Please wait..."))
-
-            while monotonic_time() - start_time < max_wait_time:
-                if not LabelStudioInstall.get_labelstudio_status():
-                    ui.notification_show(
-                        _("Label Studio stopped successfully."),
-                        duration=5,
-                        type="message",
-                    )
-                    reload_trigger_ai.set(reload_trigger_ai.get() + 1)
-                    return
-
-                    # Update progress
-                progress_percent = int(
-                    ((monotonic_time() - start_time) / max_wait_time) * 100
-                )
-                p.set(progress_percent)
-                tm.sleep(0.5)
-
-                # If we get here, the process didn't stop within the timeout period
-        ui.notification_show(
-            _("Label Studio may not have stopped completely. Please check the logs."),
-            duration=5,
-            type="warning",
-        )
-        reload_trigger_ai.set(reload_trigger_ai.get() + 1)
-
-    @reactive.Effect
-    @reactive.event(input.btn_labelstudio_start)
-    def start_labelstudio():
-        ServiceOps.systemctl("enable", "labelstudio")
-        ServiceOps.systemctl("start", "labelstudio")
-
-        # Wait up to 300 seconds for the process to start
-        # The first start may take a lot longer, so we set a higher timeout
-        max_wait_time = 300  # seconds
-        start_time = monotonic_time()
-
-        with ui.Progress(min=0, max=100) as p:
-            p.set(
-                message=_("Starting Label Studio..."),
-                detail=_("Please wait...")
-                + " "
-                + _("(The first start of Label Studio may take several minutes!)"),
-            )
-
-            while monotonic_time() - start_time < max_wait_time:
-                # Check if service is running and the web server is responding on port 8080
-                if LabelStudioInstall.get_labelstudio_status():
-                    if SystemInfo.is_port_open(8080):
-                        ui.notification_show(
-                            _("Label Studio started successfully."),
-                            duration=5,
-                            type="message",
-                        )
-                        reload_trigger_ai.set(reload_trigger_ai.get() + 1)
-                        return
-
-                        # Update progress
-                progress_percent = int(
-                    ((monotonic_time() - start_time) / max_wait_time) * 100
-                )
-                p.set(progress_percent)
-                tm.sleep(0.5)
-
-                # If we get here, the process didn't start within the timeout period
-        ui.notification_show(
-            _("Label Studio may not have started completely. Please check the logs."),
-            duration=5,
-            type="warning",
-        )
-        reload_trigger_ai.set(reload_trigger_ai.get() + 1)
-
-    @reactive.Effect
-    @reactive.event(input.btn_save_labelstudio_token)
-    def save_labelstudio_token():
-        """Save the Label Studio API token to config.ini and reload the AI Training tab."""
-        try:
-            token = (input.labelstudio_api_token() or "").strip()
-            CONFIG["LABELSTUDIO_API_TOKEN"] = token
-            update_single_config_parameter("LABELSTUDIO_API_TOKEN")
-
-            if token:
-                ui.notification_show(
-                    _("Label Studio API token saved successfully. Reloading…"),
-                    duration=3,
-                    type="message",
-                )
-            else:
-                ui.notification_show(
-                    _("Label Studio API token cleared. Reloading…"),
-                    duration=3,
-                    type="message",
-                )
-
-                # Trigger a reload of the AI Training tab so the project list is
-                # re-fetched with the (possibly new) token.
-            reload_trigger_ai.set(reload_trigger_ai.get() + 1)
-        except Exception as e:
-            logging.error(f"[SERVER] Failed to save Label Studio API token: {e}")
-            ui.notification_show(
-                _("Failed to save token. Please check the logs."),
-                duration=None,
-                type="error",
-            )
-
-    @output
-    @render.ui
-    @reactive.event(reload_trigger_ai, ignore_none=True)
-    async def ui_labelstudio_project_selector():
-        """Render the Label Studio project dropdown with async fetching and spinner."""
-        token = CONFIG.get("LABELSTUDIO_API_TOKEN", "").strip()
-        if not token:
-            return ui.div(
-                ui.help_text(
-                    _("Please configure an API token above to select a project.")
-                ),
-                style_="margin-top: 0.5rem;",
-            )
-
-        if not LabelStudioInstall.get_labelstudio_status():
-            return ui.div(
-                ui.help_text(
-                    _(
-                        "Label Studio is not running. Please start it to select a project."
-                    )
-                ),
-                style_="margin-top: 0.5rem;",
-            )
-
-            # Fetch projects (may take a few seconds – Shiny shows a spinner automatically for async outputs)
-        projects = await asyncio.to_thread(get_labelstudio_projects_list, token=token)
-
-        if projects is None:
-            return ui.div(
-                ui.div(
-                    ui.markdown(
-                        f"{icon_svg('triangle-exclamation', margin_left='-0.1em')} "
-                        + _("Could not fetch projects. Please check your API token.")
-                    ),
-                    class_="alert alert-warning",
-                    style_="text-align: left; margin-top: 0.5rem;",
-                ),
-            )
-
-        if not projects:
-            return ui.div(
-                ui.help_text(_("No projects found in Label Studio.")),
-                style_="margin-top: 0.5rem;",
-            )
-
-        project_choices = {"": _("— Select a project —")}
-        for p in projects:
-            project_choices[str(p["id"])] = p.get("title", f"Project {p['id']}")
-
-            # Store the id->title map so the save handler can look up names
-        ls_project_choices.set({k: v for k, v in project_choices.items() if k})
-
-        saved_project = CONFIG.get("LABELSTUDIO_PROJECT", "").strip()
-        selected = saved_project if saved_project in project_choices else ""
-
-        return ui.div(
-            ui.input_select(
-                "labelstudio_project_select",
-                _("Select a Label Studio project"),
-                project_choices,
-                selected=selected,
-                width="90%",
-            ),
-            style_="max-width: 600px; margin: 0 auto; margin-top: 0.5rem;",
-        )
-
-    @reactive.Effect
-    @reactive.event(input.labelstudio_project_select)
-    def save_labelstudio_project():
-        """Persist the selected Label Studio project to config.ini whenever the dropdown changes."""
-        try:
-            selected = (input.labelstudio_project_select() or "").strip()
-            if selected == CONFIG.get("LABELSTUDIO_PROJECT", ""):
-                return  # no change
-
-            CONFIG["LABELSTUDIO_PROJECT"] = selected
-            update_single_config_parameter("LABELSTUDIO_PROJECT")
-
-            # Also persist the human-readable project title
-            choices = ls_project_choices.get()
-            title = choices.get(selected, "") if selected else ""
-            CONFIG["LABELSTUDIO_PROJECT_TITLE"] = title
-            update_single_config_parameter("LABELSTUDIO_PROJECT_TITLE")
-
-            if selected:
-                ui.notification_show(
-                    _("Label Studio project saved."), duration=2, type="message"
-                )
-
-            reload_trigger_ai.set(reload_trigger_ai.get() + 1)
-        except Exception as e:
-            logging.error(f"[SERVER] Failed to save Label Studio project: {e}")
-            ui.notification_show(
-                _("Failed to save project selection. Please check the logs."),
-                duration=None,
-                type="error",
-            )

@@ -96,14 +96,28 @@ def training_targets_counts():
 
 @app.get("/app-api/rebalance/counts")
 def rebalance_counts():
-    """Pour chaque chat (+ Prey, + Negatif), le compte de captures déjà
-    'kept' dans le chantier de rééquilibrage en cours, HK vs Reolink+Manuel
-    séparément - alimente la barre de progression de l'onglet dédié."""
+    """Pour chaque chat (+ Prey, + Negatif), le compte de captures qui
+    comptent pour le chantier de rééquilibrage en cours, HK vs
+    Reolink+Manuel séparément - alimente la barre de progression de
+    l'onglet dédié.
+    24.10, Sid ("j'en ai validé 14 via le circuit classique mais comment
+    faire pour qu'elles soient aussi comptabilisées dans mon
+    équilibrage ?") - ne comptait avant que le lot 'kept' en cours
+    (pending + rebalance_bucket='kept'), donc une capture validée par le
+    circuit normal (review_status passe direct à 'confirmed'/'corrected',
+    bucket jamais touché) disparaissait du compte pour toujours, même si
+    elle est bel et bien export-éligible et compte réellement dans le
+    modèle. Le compte reflète maintenant TOUT ce qui compte vers l'objectif
+    de 200 : le lot 'kept' pas encore promu + tout ce qui est déjà
+    confirmed/corrected, quel que soit le chemin pris pour y arriver -
+    mutuellement exclusif par review_status, pas de double-compte
+    possible."""
     with get_conn() as conn:
         rows = conn.execute(
             """SELECT c.id, c.source, c.detected_objects_json
                FROM captures c
-               WHERE c.review_status = 'pending' AND c.rebalance_bucket = 'kept'"""
+               WHERE (c.review_status = 'pending' AND c.rebalance_bucket = 'kept')
+                  OR c.review_status IN ('confirmed', 'corrected')"""
         ).fetchall()
         groups = {c: {"kittyflap": 0, "reolink_manual": 0} for c in list(CLASSES) + ["Negatif"]}
         for row in rows:
@@ -159,7 +173,16 @@ def review_queue(
 ):
     query = """SELECT c.* FROM captures c"""
     params: list = []
-    if cat_name is not None:
+    # 25.10, Sid ("j'ai pas proie dans le menu déroulant") - "Prey" n'est
+    # jamais une entrée de capture_cat_labels (ce n'est pas une identité
+    # de chat enregistrée, voir cat_labels.py), donc la JOIN cat_name
+    # habituelle ne peut jamais la matcher. Filtré en Python plus bas via
+    # effective_boxes, même mécanisme que negative_only juste en dessous -
+    # c'est la "proie confirmée" (étiquette effective), pas la case
+    # "proies suspectées" (is_prey_candidate, un indice de priorité de
+    # revue calculé à l'ingestion, pas une classification).
+    filter_prey_label = cat_name == "Prey"
+    if cat_name is not None and not filter_prey_label:
         query += """ JOIN capture_cat_labels ccl
                         ON ccl.capture_id = c.id AND ccl.cat_name = ?"""
         params.append(cat_name)
@@ -225,6 +248,12 @@ def review_queue(
     # disponibles séparément pour qui veut les distinguer.
     if source == "reolink_manual":
         query += " AND c.source != 'kittyflap'"
+    elif source == "reolink_or_manual":
+        # 25.10, Sid ("on peut faire qu'un onglet pour manuel et reolink")
+        # - IN explicite, pas "!= kittyflap" comme reolink_manual
+        # ci-dessus (regrouperait par erreur les captures 'labelstudio'
+        # encore pending, jamais voulu dans l'onglet Reolink fusionné).
+        query += " AND c.source IN ('reolink', 'manual')"
     elif source is not None:
         query += " AND c.source = ?"
         params.append(source)
@@ -251,21 +280,25 @@ def review_queue(
     # ci-dessus faisait planter "Validées"/"Écartées"/"Archivées" en 500
     # (params.append(limit) tournait quand même, sans "?" correspondant
     # dans la requête, confirmé en testant "Archivées" juste après coup).
-    if not negative_only:
+    needs_python_filter = negative_only or filter_prey_label
+    if not needs_python_filter:
         query += " LIMIT ?"
         params.append(limit)
     with get_conn() as conn:
         rows = conn.execute(query, params).fetchall()
-        if not negative_only:
+        if not needs_python_filter:
             return [dict(r) for r in rows]
         result = []
         for row in rows:
             boxes = effective_boxes(conn, row["id"], row["detected_objects_json"])
             classes_here = {canonicalize(b.get("label")) for b in boxes} - {None}
-            if not classes_here:
-                result.append(dict(row))
-                if len(result) >= limit:
-                    break
+            if negative_only and classes_here:
+                continue
+            if filter_prey_label and "Prey" not in classes_here:
+                continue
+            result.append(dict(row))
+            if len(result) >= limit:
+                break
         return result
 
 
@@ -396,6 +429,13 @@ def bulk_review_captures(payload: dict = Body(...)):
     return {"ok": True, "count": len(ids)}
 
 
+# 25.10, Sid ("le chiffre ne se met pas à zéro quand c'est vide") - pas un
+# vrai bug : /app-api/queue exclut rebalance_bucket='queued' des onglets
+# Manuel/Reolink normaux (ces captures ne sont visibles que via
+# Rééquilibrage), mais ces badges comptaient quand même tout le
+# review_status='pending', donnant un chiffre que l'onglet affiché ne
+# pouvait jamais atteindre. Même filtre rebalance_bucket IS NULL que la
+# queue, pour que le badge corresponde à ce qu'on peut réellement y voir.
 @app.get("/app-api/stats")
 def stats():
     with get_conn() as conn:
@@ -406,9 +446,10 @@ def stats():
                    SUM(is_prey_candidate) AS prey_candidates,
                    SUM(model_disagreement) AS model_disagreements,
                    SUM(review_status = 'skipped_dedup') AS deduped,
-                   SUM(review_status = 'pending' AND source = 'labelstudio') AS labelstudio_pending,
-                   SUM(review_status = 'pending' AND source = 'reolink') AS reolink_pending,
-                   SUM(review_status = 'pending' AND source = 'manual') AS manual_pending,
+                   SUM(review_status = 'pending' AND source = 'labelstudio' AND rebalance_bucket IS NULL) AS labelstudio_pending,
+                   SUM(review_status = 'pending' AND source = 'reolink' AND rebalance_bucket IS NULL) AS reolink_pending,
+                   SUM(review_status = 'pending' AND source = 'manual' AND rebalance_bucket IS NULL) AS manual_pending,
+                   SUM(review_status = 'pending' AND source IN ('reolink', 'manual') AND rebalance_bucket IS NULL) AS reolink_or_manual_pending,
                    SUM(review_status = 'pending' AND is_prey_candidate = 1) AS prey_pending,
                    SUM(review_status IN ('confirmed', 'corrected') AND exported_at IS NULL) AS validated_total,
                    SUM(review_status = 'rejected' AND exported_at IS NULL) AS rejected_total,
@@ -573,6 +614,30 @@ async def manual_drop_upload(
     return {"ok": True}
 
 
+# 25.10, Sid ("j'ai que deux photos qui sont venues de pookie en HK... faut
+# que je corrige la forme de la boîte. Donc une fonction de transfert vers
+# paws review") - appelé depuis kittyhack-remote (POST
+# .../pictures/{pid}/send-to-paws-review), qui a déjà fait toute la
+# reconstruction (boîtes corrigées, RFID résolu) de son côté - voir
+# ingest_kittyflap_single() dans ingest.py pour l'upsert lui-même. Même
+# jeton que manual-drop/model-upload ci-dessus (même frontière de
+# confiance : appelé depuis un autre conteneur sur le LAN, pas depuis le
+# navigateur).
+@app.post("/app-api/ingest/kittyflap")
+def ingest_kittyflap_single_route(payload: dict = Body(...), x_upload_token: str = Header(default="")):
+    if MODEL_UPLOAD_TOKEN and x_upload_token != MODEL_UPLOAD_TOKEN:
+        raise HTTPException(403, "jeton invalide")
+    from app.ingest import ingest_kittyflap_single
+
+    try:
+        result = ingest_kittyflap_single(payload)
+    except FileNotFoundError as e:
+        raise HTTPException(404, str(e))
+    except (KeyError, TypeError, ValueError) as e:
+        raise HTTPException(400, f"payload invalide : {e}")
+    return result
+
+
 # 19.10, Sid ("crée le bouton et on teste ensuite en live") - la clé API
 # vast.ai vit ici en variable d'env (même frontière de confiance que
 # MODEL_UPLOAD_TOKEN, même conteneur) plutôt que saisie à la main à chaque
@@ -691,6 +756,21 @@ def model_review_resolve(payload: dict = Body(...)):
         return {"ok": True, "count": 0}
     count = resolve_queue_items(ids, action)
     return {"ok": True, "count": count}
+
+
+# 25.10, Sid ("Faire un Reset de rectification. Je ferais une fois le
+# nouvel entraînement effectué") - "Relancer le scan" (model_review_start)
+# n'a jamais fait de DELETE, seulement des INSERT (voir model_review.py) :
+# les désaccords encore en attente d'un scan précédent restaient dans la
+# file même après un nouvel entraînement, potentiellement obsolètes
+# puisque jugés sur l'ancien modèle. ON DELETE CASCADE sur
+# model_review_queue_members.queue_id (foreign_keys=ON) nettoie les
+# membres du même coup.
+@app.post("/app-api/model-review/reset")
+def model_review_reset():
+    with get_conn() as conn:
+        cur = conn.execute("DELETE FROM model_review_queue WHERE status = 'pending'")
+        return {"ok": True, "count": cur.rowcount}
 
 
 class NoCacheStaticFiles(StaticFiles):

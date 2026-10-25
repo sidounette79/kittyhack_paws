@@ -52,6 +52,13 @@ msgstr "{cat} est sorti(e) !"
 msgid "A cat went outside."
 msgstr "Un chat est sorti."
 
+#, python-brace-format
+msgid "{cat} looked inside but didn't come in."
+msgstr "{cat} en balade !"
+
+msgid "A cat looked inside but didn't come in."
+msgstr "Un chat en balade !"
+
 msgid "Motion detected outside"
 msgstr "Mouvement détecté à l'extérieur"
 

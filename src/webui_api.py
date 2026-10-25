@@ -21,10 +21,12 @@ import re
 import threading
 import uuid
 import zipfile as _zipfile
+
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import pandas as pd
+import requests
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
@@ -108,21 +110,6 @@ _model_review_cancel_event = threading.Event()
 _rfid_ground_truth_process_lock = threading.Lock()
 _rfid_ground_truth_last_result: dict | None = None
 _rfid_ground_truth_cancel_event = threading.Event()
-
-# 09.10, Sid ("As-tu un moyen de faire ça en sous-marin? sans que ca
-# monopolise le CPU"): background, self-driving export of confirmed
-# corrections to Label Studio - unlike the retroactive scan this is pure
-# network I/O (image upload + a few lookup calls, see
-# LabelStudioAPI.upload_image_with_correction), no YOLO inference, so no
-# real CPU contention risk with the live detection loop. Runs as a real
-# asyncio background task (not tied to the request that started it) so it
-# keeps going after the HTTP response returns, small batches with a pause
-# between them so it never looks like a burst to Label Studio either.
-# _corr_export_task holds a strong reference so the task isn't garbage
-# collected mid-flight (a known asyncio footgun).
-_corr_export_task: "asyncio.Task | None" = None
-_corr_export_cancel_event = threading.Event()
-_corr_export_progress = {"running": False, "sent_total": 0, "failed_total": 0, "remaining": 0}
 
 # 07.10, Sid: one shared static prefix for every migrated page's JS/CSS now
 # (single multi-page bundle, see web/vite.config.ts and web/src/main.tsx) -
@@ -541,58 +528,11 @@ async def get_watchdog_event_frame(filename: str, _user: str = Depends(require_s
 # (post_event_correction / add-detection below), but these frames have no
 # DB photo id - the JSON sidecar _save_event_frame wrote IS the record,
 # edited in place.
-# 10.10, Sid ("tu fais en sorte quelles suivent aussi le pipeline
-# labelstudio labellisées ? sans minuscule?"): the flap's own corrections
-# only get exported to Label Studio later, by a separate scheduled batch
-# job keyed on the detection_feedback DB table (see
-# export_pending_corrections_to_labelstudio further down) - there's no
-# equivalent table for these file-backed frames, so instead of building one
-# just to defer the same work, push each reolink correction to Label Studio
-# synchronously, right here, via the same upload_batch_with_corrections()
-# the batch job itself uses. _canonical_cat_name() is the exact fix from
-# earlier tonight (1081 annotations corrected, 4 write sites patched) -
-# applied here too so this new 5th write site can't reintroduce the same
-# lowercase-duplicate-class bug.
 def _reolink_json_path(filename: str) -> str | None:
     path = _safe_event_frame_path(filename)
     if not path:
         return None
     return path[:-4] + ".json"
-
-
-async def _push_reolink_correction_to_labelstudio(
-    json_path: str, label: str | None, x: float, y: float, width: float, height: float
-) -> None:
-    if not label or label.lower() == "none":
-        # False-positive - nothing to annotate, same convention as the
-        # flap's own export (upload_batch_with_corrections' own comment).
-        return
-    project_id = CONFIG.get("LABELSTUDIO_PROJECT", "").strip()
-    api_token = CONFIG.get("LABELSTUDIO_API_TOKEN", "").strip()
-    if not project_id or not api_token:
-        return
-    img_path = json_path[:-5] + ".jpg"
-    if not os.path.exists(img_path):
-        return
-    try:
-        with open(img_path, "rb") as f:
-            image_bytes = f.read()
-        from src.labelstudio_api import LabelStudioAPI
-
-        def _do_upload():
-            api = LabelStudioAPI()
-            if not api.authenticate(token=api_token):
-                logging.warning("[WEBUI] Could not authenticate with Label Studio for reolink correction export.")
-                return
-            api.upload_batch_with_corrections(
-                int(project_id),
-                [{"image_bytes": image_bytes, "label": label, "x": x, "y": y, "width": width, "height": height}],
-            )
-            api.close()
-
-        await asyncio.to_thread(_do_upload)
-    except Exception as e:
-        logging.warning(f"[WEBUI] Failed to export reolink correction to Label Studio: {e}")
 
 
 @webui_app.post("/app-api/v1/events/{block_id}/reolink-correction")
@@ -629,9 +569,6 @@ async def post_reolink_correction(block_id: int, request: Request, _user: str = 
     with open(json_path, "w", encoding="utf-8") as f:
         json.dump(detections, f)
 
-    await _push_reolink_correction_to_labelstudio(
-        json_path, final_label, det.get("x", 0), det.get("y", 0), det.get("width", 0), det.get("height", 0)
-    )
     return JSONResponse({"ok": True})
 
 
@@ -666,7 +603,6 @@ async def post_reolink_add_detection(block_id: int, request: Request, _user: str
     with open(json_path, "w", encoding="utf-8") as f:
         json.dump(detections, f)
 
-    await _push_reolink_correction_to_labelstudio(json_path, label, x, y, width, height)
     return JSONResponse({"idx": idx})
 
 
@@ -747,9 +683,6 @@ async def get_watchdog_sample_thumb(filename: str, _user: str = Depends(require_
 
 @webui_app.post("/app-api/v1/journey/capture")
 async def post_journey_capture(request: Request, _user: str = Depends(require_session)):
-    from src.labelstudio_api import upload_image_to_labelstudio_project
-    from src.system import LabelStudioInstall
-
     body = await request.json()
     filename = str(body.get("filename") or "")
     action = str(body.get("action") or "")
@@ -760,33 +693,6 @@ async def post_journey_capture(request: Request, _user: str = Depends(require_se
     if action == "delete":
         if os.path.exists(path):
             os.remove(path)
-        return JSONResponse({"ok": True})
-
-    if action == "send":
-        project_id = CONFIG.get("LABELSTUDIO_PROJECT", "").strip()
-        api_token = CONFIG.get("LABELSTUDIO_API_TOKEN", "").strip()
-        if not project_id or not api_token:
-            raise HTTPException(
-                status_code=409,
-                detail="Label Studio non configuré (jeton API / projet manquant dans Configuration).",
-            )
-        if not LabelStudioInstall.get_labelstudio_status():
-            raise HTTPException(status_code=409, detail="Label Studio n'est pas démarré.")
-        if not os.path.exists(path):
-            raise HTTPException(status_code=404, detail="capture file no longer exists")
-        with open(path, "rb") as f:
-            img_bytes = f.read()
-        import asyncio
-
-        success = await asyncio.to_thread(
-            upload_image_to_labelstudio_project,
-            project_id=int(project_id),
-            image_bytes=img_bytes,
-            filename=filename,
-            token=api_token,
-        )
-        if not success:
-            raise HTTPException(status_code=502, detail="échec de l'envoi à Label Studio")
         return JSONResponse({"ok": True})
 
     raise HTTPException(status_code=400, detail=f"unknown action: {action}")
@@ -1045,6 +951,71 @@ async def post_picture_add_detection(pid: int, request: Request, _user: str = De
     if not result.success:
         raise HTTPException(status_code=500, detail=result.message)
     return JSONResponse({"ok": True, "idx": new_idx})
+
+
+# 25.10, Sid ("j'ai que deux photos qui sont venues de pookie en HK... faut
+# que je corrige la forme de la boîte. Donc une fonction de transfert vers
+# paws review") - l'ingestion automatique côté Paws Review (ingest.py) lit
+# event_text en SÉQUENCE une seule fois (checkpoint jamais revisité) et ne
+# relit jamais les corrections faites ici après coup - une boîte corrigée
+# (fausse détection écartée + nouvelle boîte dessinée à la main) reste donc
+# invisible côté Paws Review, ou y arrive déjà figée avec l'ancienne boîte
+# fausse du modèle. Envoie explicitement l'état CORRIGÉ actuel (même
+# reconstruction que _serialize_picture : reviewedAs appliqué, fausses
+# détections exclues) - Paws Review n'a plus qu'à lire le fichier image lui-
+# même (même volume partagé en lecture seule que son ingestion habituelle,
+# voir compose.yaml) et upsert la capture avec ces boîtes.
+@webui_app.post("/app-api/v1/pictures/{pid}/send-to-paws-review")
+async def post_picture_send_to_paws_review(pid: int, _user: str = Depends(require_session)):
+    database = CONFIG["KITTYHACK_DATABASE_PATH"]
+    df = DatabaseCore.read_df_from_database(
+        database,
+        f"""SELECT id, block_id, created_at, mouse_probability, own_cat_probability, rfid, event_text
+            FROM events WHERE id = {int(pid)}""",
+    )
+    if df.empty:
+        raise HTTPException(status_code=404, detail="unknown photo id")
+    row = df.iloc[0].to_dict()
+    feedback = DetectionFeedbackRepo.get_for_photo(database, pid)
+    cat_name_dict = CatsRepo.get_cat_name_rfid_dict(database)
+    picture = _serialize_picture(row, cat_name_dict, feedback)
+
+    boxes = []
+    for obj in picture["objects"]:
+        label = obj.get("reviewedAs") if obj.get("reviewed") else obj["name"]
+        if not label or str(label).lower() == "none":
+            continue  # fausse détection écartée, jamais envoyée
+        boxes.append({
+            "object_name": label,
+            "probability": 0 if obj.get("manual") else obj["prob"],
+            "x": obj["x"], "y": obj["y"], "width": obj["w"], "height": obj["h"],
+        })
+
+    payload = {
+        "event_id": int(pid),
+        "block_id": int(row["block_id"]),
+        "created_at": str(row["created_at"]),
+        "rfid": row.get("rfid") or None,
+        # Déjà résolu ici (CatsRepo) - Paws Review n'a plus besoin de lire la
+        # table cats de Kittyhack pour cette capture précise.
+        "cat_name": cat_name_dict.get(row.get("rfid")) if row.get("rfid") else None,
+        "mouse_probability": None if pd.isna(row.get("mouse_probability")) else float(row["mouse_probability"]),
+        "own_cat_probability": None if pd.isna(row.get("own_cat_probability")) else float(row["own_cat_probability"]),
+        "boxes": boxes,
+    }
+    try:
+        # 25.10 : même constat que compose.yaml côté Paws Review
+        # (KITTYHACK_API_URL) - deux projets docker compose séparés, donc
+        # deux réseaux Docker distincts ; 127.0.0.1 ici ne route pas vers
+        # l'hôte sur Linux, IP LAN de l'hôte nécessaire.
+        resp = requests.post(
+            "http://192.168.178.127:8082/app-api/ingest/kittyflap", json=payload, timeout=15,
+            headers={"X-Upload-Token": os.environ.get("PAWS_REVIEW_UPLOAD_TOKEN", "")},
+        )
+        resp.raise_for_status()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Échec de l'envoi vers Paws Review : {e}")
+    return JSONResponse(resp.json())
 
 
 @webui_app.delete("/app-api/v1/pictures/{pid}")
@@ -1665,9 +1636,6 @@ async def post_reolink_correction_bulk(block_id: int, request: Request, _user: s
             det["reviewed_as"] = final_label if final_label else "none"
             changed = True
             applied += 1
-            await _push_reolink_correction_to_labelstudio(
-                json_path, final_label, det.get("x", 0), det.get("y", 0), det.get("width", 0), det.get("height", 0)
-            )
         if changed:
             with open(json_path, "w", encoding="utf-8") as f:
                 json.dump(detections, f)
@@ -1751,35 +1719,6 @@ async def download_event_zip(block_id: int, _user: str = Depends(require_session
         media_type="application/zip",
         headers={"Content-Disposition": f'attachment; filename="kittyhack_event_{block_id}.zip"'},
     )
-
-
-@webui_app.post("/app-api/v1/events/{block_id}/send/{pid}")
-async def send_event_photo_to_labelstudio(block_id: int, pid: int, _user: str = Depends(require_session)):
-    from src.labelstudio_api import upload_image_to_labelstudio_project
-    from src.system import LabelStudioInstall
-
-    project_id = CONFIG.get("LABELSTUDIO_PROJECT", "").strip()
-    api_token = CONFIG.get("LABELSTUDIO_API_TOKEN", "").strip()
-    if not project_id or not api_token:
-        raise HTTPException(status_code=409, detail="Label Studio non configuré.")
-    if not LabelStudioInstall.get_labelstudio_status():
-        raise HTTPException(status_code=409, detail="Label Studio n'est pas démarré.")
-    img_bytes = _load_original_image_bytes(pid)
-    if img_bytes is None:
-        raise HTTPException(status_code=404, detail="image introuvable")
-
-    import asyncio
-
-    success = await asyncio.to_thread(
-        upload_image_to_labelstudio_project,
-        project_id=int(project_id),
-        image_bytes=img_bytes,
-        filename=f"kittyhack_event_{block_id}_{pid}.jpg",
-        token=api_token,
-    )
-    if not success:
-        raise HTTPException(status_code=502, detail="échec de l'envoi à Label Studio")
-    return JSONResponse({"ok": True})
 
 
 # ---------------------------------------------------------------------------
@@ -3070,109 +3009,7 @@ async def get_system_upstream_check(_user: str = Depends(require_session)):
 
 # ---------------------------------------------------------------------------
 # AI Training - migrated section by section like Configuration.
-#
-# Label Studio management: start/stop/install/update/remove are ALL
-# systemd-only (ServiceOps.systemctl(...) with no Docker branch at all) -
-# this deployment has no systemd and runs Label Studio as its own sibling
-# Docker container instead (confirmed via get_labelstudio_status()'s own
-# Docker-aware branch, which IS what's used here). Those 5 buttons would
-# just error out uselessly if ported - only status display, the API token,
-# and the project selector (all genuinely functional in this deployment)
-# are built here.
 # ---------------------------------------------------------------------------
-
-
-@webui_app.get("/app-api/v1/ai-training/labelstudio")
-async def get_ai_training_labelstudio(_user: str = Depends(require_session)):
-    from src.helper import SystemInfo
-    from src.system import LabelStudioInstall
-
-    running = LabelStudioInstall.get_labelstudio_status()
-    host = os.environ.get("KITTYHACK_LABELSTUDIO_EXTERNAL_HOST") or SystemInfo.get_current_ip()
-    port = os.environ.get("KITTYHACK_LABELSTUDIO_EXTERNAL_PORT", "8080")
-    return JSONResponse(
-        {
-            "running": bool(running),
-            "version": CONFIG.get("LABELSTUDIO_VERSION"),
-            "url": f"http://{host}:{port}",
-            "api_token": CONFIG.get("LABELSTUDIO_API_TOKEN", "") or "",
-            "project": CONFIG.get("LABELSTUDIO_PROJECT", "") or "",
-        }
-    )
-
-
-@webui_app.post("/app-api/v1/ai-training/labelstudio/token")
-async def post_ai_training_labelstudio_token(request: Request, _user: str = Depends(require_session)):
-    body = await request.json()
-    CONFIG["LABELSTUDIO_API_TOKEN"] = str(body.get("token") or "").strip()
-    update_single_config_parameter("LABELSTUDIO_API_TOKEN")
-    return JSONResponse({"ok": True})
-
-
-@webui_app.get("/app-api/v1/ai-training/labelstudio/projects")
-async def get_ai_training_labelstudio_projects(_user: str = Depends(require_session)):
-    from src.labelstudio_api import get_labelstudio_projects_list
-    from src.system import LabelStudioInstall
-
-    token = CONFIG.get("LABELSTUDIO_API_TOKEN", "").strip()
-    if not token:
-        return JSONResponse({"projects": None, "reason": "no_token"})
-    if not LabelStudioInstall.get_labelstudio_status():
-        return JSONResponse({"projects": None, "reason": "not_running"})
-
-    projects = await asyncio.to_thread(get_labelstudio_projects_list, token=token)
-    if projects is None:
-        return JSONResponse({"projects": None, "reason": "fetch_failed"})
-    return JSONResponse(
-        {"projects": [{"id": str(p["id"]), "title": p.get("title", f"Project {p['id']}")} for p in projects]}
-    )
-
-
-# 09.10, Sid ("j'ai pas eu le texte comme quoi il y a x nouvelles photos
-# dans LS... ca ne disait aussi si certaines photos n'étaient pas taguées"):
-# the old Shiny tab's live readiness panel for the selected project
-# (ai_training.py's ui_labelstudio_project_task_status, built on
-# get_labelstudio_project_task_summary - already written, just never
-# called from anywhere in this React port) - ported here as-is rather than
-# re-invented, same 5 states.
-@webui_app.get("/app-api/v1/ai-training/labelstudio/project-summary")
-async def get_ai_training_labelstudio_project_summary(_user: str = Depends(require_session)):
-    from src.labelstudio_api import get_labelstudio_project_task_summary
-    from src.system import LabelStudioInstall
-
-    saved_project = CONFIG.get("LABELSTUDIO_PROJECT", "").strip()
-    if not saved_project:
-        return JSONResponse({"status": "no_project"})
-    if not LabelStudioInstall.get_labelstudio_status():
-        return JSONResponse({"status": "not_running"})
-    try:
-        project_id = int(saved_project)
-    except (ValueError, TypeError):
-        return JSONResponse({"status": "no_project"})
-
-    summary = await asyncio.to_thread(
-        get_labelstudio_project_task_summary, project_id, token=CONFIG.get("LABELSTUDIO_API_TOKEN")
-    )
-    if summary is None:
-        return JSONResponse({"status": "fetch_failed"})
-    if summary["total_tasks"] == 0:
-        return JSONResponse({"status": "empty"})
-    if not summary["ready"]:
-        return JSONResponse({
-            "status": "incomplete",
-            "annotated": summary["annotated_tasks"],
-            "total": summary["total_tasks"],
-            "unannotated": summary["unannotated_tasks"],
-        })
-    return JSONResponse({"status": "ready", "annotated": summary["annotated_tasks"]})
-
-
-@webui_app.post("/app-api/v1/ai-training/labelstudio/project")
-async def post_ai_training_labelstudio_project(request: Request, _user: str = Depends(require_session)):
-    body = await request.json()
-    CONFIG["LABELSTUDIO_PROJECT"] = str(body.get("project") or "").strip()
-    update_single_config_parameter("LABELSTUDIO_PROJECT")
-    return JSONResponse({"ok": True})
 
 
 # Model Training - submit (Label Studio export or manual zip upload),
@@ -3205,7 +3042,6 @@ async def post_ai_training_model_training_submit(request: Request, _user: str = 
     from src.model.yolo_model import YoloModel
 
     form = await request.form()
-    source = str(form.get("source") or "")
     model_name = str(form.get("model_name") or "")
     user_name = str(form.get("user_name") or "")
     email = str(form.get("email") or "")
@@ -3227,38 +3063,6 @@ async def post_ai_training_model_training_submit(request: Request, _user: str = 
     if user_name and user_name != CONFIG["USER_NAME"]:
         CONFIG["USER_NAME"] = user_name
         update_single_config_parameter("USER_NAME")
-
-    # 13.10, Sid (real 502 confirmed live in the logs: "Starting YOLO
-    # export..." then nothing, the reverse proxy cut the request before
-    # the one-by-one download of 6584 images could finish): this used to
-    # run synchronously right here (export_labelstudio_project_as_zip
-    # inside the request), which a project this size will always
-    # eventually outrun no matter the timeout. Now a background worker
-    # (labelstudio_export_worker.py) does the export AND the submit, and
-    # the frontend polls /ai-training/labelstudio/export-status instead of
-    # waiting on this request - same pattern already used for the trained-
-    # model download (RemoteModelTrainer.start_download_model_async).
-    if source == "labelstudio":
-        from src.labelstudio_api import start_labelstudio_export_async
-
-        saved_project = CONFIG.get("LABELSTUDIO_PROJECT", "").strip()
-        if not saved_project:
-            raise HTTPException(status_code=400, detail="Aucun projet Label Studio sélectionné.")
-        started = await asyncio.to_thread(
-            start_labelstudio_export_async,
-            int(saved_project),
-            model_name,
-            user_name,
-            email,
-            model_variant,
-            image_size,
-        )
-        if not started:
-            raise HTTPException(
-                status_code=409,
-                detail="Un export Label Studio est déjà en cours.",
-            )
-        return JSONResponse({"ok": True, "export_started": True})
 
     upload = form.get("file")
     if upload is None or not getattr(upload, "filename", "").endswith(".zip"):
@@ -3299,20 +3103,6 @@ async def post_ai_training_model_training_submit(request: Request, _user: str = 
     raise HTTPException(status_code=502, detail=error_messages.get(result, f"Erreur : {result}"))
 
 
-# 13.10, Sid: polling counterpart to the background worker started by
-# start_labelstudio_export_async above - mirrors how the trained-model
-# download's own progress is already polled elsewhere on this page.
-@webui_app.get("/app-api/v1/ai-training/labelstudio/export-status")
-async def get_ai_training_labelstudio_export_status(_user: str = Depends(require_session)):
-    from src.labelstudio_api import get_labelstudio_export_state
-
-    state = get_labelstudio_export_state()
-    if state.get("status") == "done" and state.get("job_id"):
-        CONFIG["MODEL_TRAINING"] = state["job_id"]
-        update_single_config_parameter("MODEL_TRAINING")
-    return JSONResponse(state)
-
-
 @webui_app.post("/app-api/v1/ai-training/model-training/cancel")
 async def post_ai_training_model_training_cancel(_user: str = Depends(require_session)):
     from src.model.remote_trainer import RemoteModelTrainer
@@ -3336,177 +3126,6 @@ async def get_ai_training_model_options(_user: str = Depends(require_session)):
             "email": CONFIG.get("EMAIL", ""),
         }
     )
-
-
-# Human Corrections export - 04.10, Sid's own Shiny feature, reused
-# verbatim: send reviewed/corrected detections (Photos tab) to Label
-# Studio as pre-annotated tasks.
-@webui_app.get("/app-api/v1/ai-training/corrections-export")
-async def get_ai_training_corrections_export(_user: str = Depends(require_session)):
-    database = CONFIG["KITTYHACK_DATABASE_PATH"]
-    ls_ready = bool(
-        CONFIG["LABELSTUDIO_VERSION"] is not None
-        and CONFIG.get("LABELSTUDIO_API_TOKEN")
-        and CONFIG.get("LABELSTUDIO_PROJECT")
-    )
-    pending = DetectionFeedbackRepo.get_pending_export_count(database) if ls_ready else 0
-    return JSONResponse({"ls_ready": ls_ready, "pending": pending})
-
-
-def _export_corrections_blocking(batch_size: int) -> tuple[int, int, int]:
-    """Same function as ai_training.py's own (not imported - that one is
-    nested inside register_ai_training()). All blocking HTTP/file I/O for
-    one export batch, meant to run via asyncio.to_thread.
-
-    09.10, Sid ("ca prend quand meme 5 secondes environ par photo"):
-    switched from one upload_image_with_correction() call per photo (each
-    one its own upload + up to 5 polling round-trips to find the task it
-    just created) to a single upload_batch_with_corrections() call for the
-    whole batch - see that method's own comment for why the old path
-    needed polling at all. "Image gone"/false-positive rows are still
-    handled per-row exactly as before (nothing to upload either way),
-    they just never reach the batch call.
-
-    All-or-nothing per batch rather than per-photo: the batch endpoint only
-    reports back a created-count, not which specific items landed, so a
-    partial server-side failure can't be mapped to individual row ids. Mark
-    nothing exported in that case - at worst a retry re-uploads a few
-    already-created tasks as duplicates in Label Studio, which is far
-    safer than silently losing a correction Kittyhack's own side forgets
-    about. Logged clearly either way."""
-    database = CONFIG["KITTYHACK_DATABASE_PATH"]
-    df = DetectionFeedbackRepo.get_pending_corrections(database, limit=batch_size)
-    if df.empty:
-        return 0, 0, 0
-
-    from src.labelstudio_api import LabelStudioAPI
-
-    api = LabelStudioAPI()
-    if not api.authenticate(token=CONFIG.get("LABELSTUDIO_API_TOKEN")):
-        logging.error("[AI_TRAINING] Could not authenticate with Label Studio for export.")
-        return 0, len(df), DetectionFeedbackRepo.get_pending_export_count(database)
-
-    project_id = int(CONFIG["LABELSTUDIO_PROJECT"])
-    batch_items = []  # [(row_id, item_dict_for_api)], only rows with a real label
-    immediately_done_ids = []  # image gone / unreadable - nothing to upload, already handled
-    try:
-        for __, row in df.iterrows():
-            row_id = int(row["id"])
-
-            corrected = (row.get("corrected_name") or "").strip()
-            if corrected and corrected.lower() != "none":
-                label = corrected
-            elif row.get("confirmed"):
-                label = row.get("original_name")
-            else:
-                label = None
-
-            img_path = EventsRepo._original_image_path(int(row["photo_id"]))
-            if not os.path.exists(img_path):
-                logging.warning(f"[AI_TRAINING] Image gone for correction {row_id}, giving up on it: {img_path}")
-                immediately_done_ids.append(row_id)
-                continue
-            try:
-                with open(img_path, "rb") as f:
-                    image_bytes = f.read()
-            except Exception as e:
-                logging.warning(f"[AI_TRAINING] Could not read image for correction {row_id}: {e}")
-                immediately_done_ids.append(row_id)
-                continue
-
-            if label is None:
-                # False-positive correction - nothing to annotate in Label
-                # Studio, see upload_batch_with_corrections' own comment.
-                immediately_done_ids.append(row_id)
-                continue
-
-            batch_items.append((row_id, {
-                "image_bytes": image_bytes,
-                "label": label,
-                "x": float(row["x"]), "y": float(row["y"]),
-                "width": float(row["width"]), "height": float(row["height"]),
-            }))
-
-        if immediately_done_ids:
-            DetectionFeedbackRepo.mark_exported(database, immediately_done_ids)
-
-        succeeded_ids = list(immediately_done_ids)
-        if batch_items:
-            logging.info(f"[AI_TRAINING] Exporting a batch of {len(batch_items)} correction(s)...")
-            created, batch_failed = api.upload_batch_with_corrections(
-                project_id, [item for __, item in batch_items]
-            )
-            if batch_failed == 0:
-                logging.info(f"[AI_TRAINING] Batch export OK: {created} correction(s).")
-                batch_ids = [row_id for row_id, __ in batch_items]
-                DetectionFeedbackRepo.mark_exported(database, batch_ids)
-                succeeded_ids.extend(batch_ids)
-            else:
-                logging.warning(
-                    f"[AI_TRAINING] Batch export incomplete: {created}/{len(batch_items)} created - "
-                    "none marked exported, will retry next time."
-                )
-    finally:
-        api.close()
-
-    failed = len(df) - len(succeeded_ids)
-    remaining = DetectionFeedbackRepo.get_pending_export_count(database)
-    return len(succeeded_ids), failed, remaining
-
-
-@webui_app.post("/app-api/v1/ai-training/corrections-export")
-async def post_ai_training_corrections_export(_user: str = Depends(require_session)):
-    sent, failed, remaining = await asyncio.to_thread(_export_corrections_blocking, 50)
-    return JSONResponse({"sent": sent, "failed": failed, "remaining": remaining})
-
-
-async def _run_corr_export_background():
-    """09.10, Sid ("en sous-marin... sans monopoliser le CPU"): batches of
-    25 with a real pause between them (2s) - purely so this never hammers
-    Label Studio in a tight loop, not because of any local CPU concern
-    (there isn't one, see _corr_export_task's comment above). Raised from
-    10 once _export_corrections_blocking switched to one HTTP round-trip
-    per whole batch instead of one per photo (see its own comment) - a
-    bigger batch no longer means a slower one.
-    Keeps going on its own until the queue is empty or cancelled."""
-    global _corr_export_progress
-    try:
-        while not _corr_export_cancel_event.is_set():
-            sent, failed, remaining = await asyncio.to_thread(_export_corrections_blocking, 25)
-            _corr_export_progress["sent_total"] += sent
-            _corr_export_progress["failed_total"] += failed
-            _corr_export_progress["remaining"] = remaining
-            if sent == 0 and failed == 0:
-                break  # nothing left, or auth/project not configured
-            if remaining <= 0:
-                break
-            await asyncio.sleep(2)
-    finally:
-        _corr_export_progress["running"] = False
-
-
-@webui_app.post("/app-api/v1/ai-training/corrections-export/auto-start")
-async def post_corr_export_auto_start(_user: str = Depends(require_session)):
-    global _corr_export_task
-    if _corr_export_progress["running"]:
-        return JSONResponse({"error": "already_running"}, status_code=409)
-    _corr_export_cancel_event.clear()
-    _corr_export_progress.update({"running": True, "sent_total": 0, "failed_total": 0, "remaining": 0})
-    _corr_export_task = asyncio.create_task(_run_corr_export_background())
-    return JSONResponse({"started": True})
-
-
-@webui_app.get("/app-api/v1/ai-training/corrections-export/auto-state")
-async def get_corr_export_auto_state(_user: str = Depends(require_session)):
-    return JSONResponse(dict(_corr_export_progress))
-
-
-@webui_app.post("/app-api/v1/ai-training/corrections-export/auto-cancel")
-async def post_corr_export_auto_cancel(_user: str = Depends(require_session)):
-    if not _corr_export_progress["running"]:
-        return JSONResponse({"error": "not_running"}, status_code=409)
-    _corr_export_cancel_event.set()
-    return JSONResponse({"cancelling": True})
 
 
 # Model Management - list/activate/rename/delete installed YOLO models

@@ -38,6 +38,7 @@ from src.backend.constants import (
     GLANCE_NOTIFICATION_COOLDOWN_S,
     RFID_BACKFILL_WINDOW_S,
     WAIT_FOR_OUTSIDE_RISING_TIMEOUT_S,
+    VIDEO_FALLBACK_MIN_BOX_HEIGHT_PCT,
 )
 import src.backend.model_runtime as model_runtime
 import src.backend.mqtt_bridge as mqtt_bridge
@@ -147,6 +148,7 @@ def backend_main(
     tag_id = None
     tag_id_valid = False
     tag_id_from_video = None
+    tag_id_from_video_close = False
     tag_timestamp = 0.0
     tag_seen_mono = 0.0
     motion_outside = 0
@@ -826,6 +828,7 @@ def backend_main(
         ).start()
 
         tag_id_from_video = None
+        tag_id_from_video_close = False
         motion_timeline_entries = []
         if tag_id is not None:
             rfid.set_tag(None, 0.0)
@@ -863,7 +866,7 @@ def backend_main(
         nonlocal last_motion_outside_mono, last_motion_outside_tm, last_outside_crossing, last_written_effective_fps, low_fps_window_count, motion_block_id, motion_inside, motion_inside_mono
         nonlocal motion_inside_raw, motion_inside_raw_mono, motion_outside, motion_outside_mono, motion_outside_raw, pending_exit_rfid_check, pending_fast_exit_finalize_mono, previous_use_camera_for_motion
         nonlocal camera_idle_resume_until_mono
-        nonlocal rfid_thread, suppress_entry_decision_after_fast_exit, suppress_inside_motion_block, suppress_outside_motion_block, tag_id, tag_id_from_video, tag_id_valid, tag_seen_mono
+        nonlocal rfid_thread, suppress_entry_decision_after_fast_exit, suppress_inside_motion_block, suppress_outside_motion_block, tag_id, tag_id_from_video, tag_id_from_video_close, tag_id_valid, tag_seen_mono
         nonlocal tag_timestamp, timeline_no_prey_logged, timeline_prey_logged, timeline_rfid_cat_logged, timeline_video_cat_logged, unlock_inside, unlock_inside_decision_made, unlock_inside_tm
         nonlocal unlock_outside_tm, wait_for_outside_rising_after_exit, wait_for_outside_rising_after_exit_mono
         nonlocal mouse_check_conditions, motion_source, use_camera_for_motion
@@ -1435,8 +1438,10 @@ def backend_main(
             # Only attempt unlock now if we are not waiting for an RFID tag
             if not pending_exit_rfid_check:
                 if check_allowed_to_exit() == True and per_cat_exit_allowed and not exit_blocked_after_prey:
-                    if magnets.get_inside_state() == True:
-                        logging.info("[BACKEND] Inside magnet is already unlocked. Only one magnet is allowed. --> Outside magnet will not be unlocked.")
+                    # 24.10: same fix as the inside-unlock gate above (~line 2000)
+                    # - also check the queue, not just the already-executed state.
+                    if magnets.get_inside_state() == True or magnets.check_queued("unlock_inside") == True:
+                        logging.info("[BACKEND] Inside magnet is already unlocked or about to be. Only one magnet is allowed. --> Outside magnet will not be unlocked.")
                     else:
                         logging.info("[BACKEND] Allow cats to exit.")
                         if magnets.check_queued("unlock_outside") == False:
@@ -1562,21 +1567,46 @@ def backend_main(
                 votes: dict[str, int] = {}
                 best_probs: dict[str, float] = {}
                 ordered_best_names: list[str] = []
+                # 25.10: box height of the winning detection in the MOST
+                # RECENT buffered frame only (not an aggregate across the
+                # vote history) - see VIDEO_FALLBACK_MIN_BOX_HEIGHT_PCT's own
+                # comment. imgs_with_cats is chronological, so whatever this
+                # ends up holding after the loop is simply the last frame's
+                # result.
+                recent_frame_best_name = ""
+                recent_frame_best_height = 0.0
                 for element in imgs_with_cats:
                     img = image_buffer.get_by_id(element)
                     per_image_best_name = ""
                     per_image_best_prob = 0.0
+                    per_image_best_height = 0.0
                     for obj in getattr(img, 'detected_objects', []):
                         obj_name = getattr(obj, 'object_name', '').lower()
                         obj_probability = getattr(obj, 'probability', 0.0)
                         if obj_name not in ["prey", "beute"] and obj_probability > per_image_best_prob:
                             per_image_best_prob = obj_probability
                             per_image_best_name = obj_name
+                            per_image_best_height = getattr(obj, 'height', 0.0)
                     if per_image_best_name:
                         votes[per_image_best_name] = votes.get(per_image_best_name, 0) + 1
                         if per_image_best_prob > best_probs.get(per_image_best_name, 0.0):
                             best_probs[per_image_best_name] = per_image_best_prob
                         ordered_best_names.append(per_image_best_name)
+                    recent_frame_best_name = per_image_best_name
+                    recent_frame_best_height = per_image_best_height
+
+                # 25.10, Sid ("faut qu'on ajuste... on teste ça"): independent
+                # of whether the vote above just changed tag_id_from_video -
+                # reflects "is whoever's CURRENTLY the video identity also
+                # visibly close to the camera RIGHT NOW", not a historical
+                # aggregate. Only meaningful as a video-fallback signal when
+                # ENTRY_REQUIRE_RFID_READ is on; harmless to compute either way.
+                current_video_name = cat_rfid_name_dict.get(tag_id_from_video, "").lower() if tag_id_from_video else ""
+                tag_id_from_video_close = bool(
+                    current_video_name
+                    and recent_frame_best_name == current_video_name
+                    and recent_frame_best_height >= VIDEO_FALLBACK_MIN_BOX_HEIGHT_PCT
+                )
 
                 if votes:
                     detected_cat = max(votes, key=lambda name: (votes[name], best_probs[name]))
@@ -1786,8 +1816,9 @@ def backend_main(
                         cat_settings_map,
                     )
 
-                    if magnets.get_inside_state() == True:
-                        logging.info("[BACKEND] Inside magnet is already unlocked. Only one magnet is allowed. --> Outside magnet will not be unlocked.")
+                    # 24.10: same fix as the other exit-gate above (~line 1438).
+                    if magnets.get_inside_state() == True or magnets.check_queued("unlock_inside") == True:
+                        logging.info("[BACKEND] Inside magnet is already unlocked or about to be. Only one magnet is allowed. --> Outside magnet will not be unlocked.")
                     else:
                         flag = exit_flag2 or str(EventType.EXIT_PER_CAT_DENIED)
                         if check_allowed_to_exit() and per_cat_exit_allowed2:
@@ -1850,7 +1881,9 @@ def backend_main(
                     logging.info("[BACKEND] Exit flow ended while outside motion persists. Re-evaluating entry decision for current motion block.")
                     deferred_entry_due_to_exit = False
                 identified_tag, id_source = _identified_tag_for_entry(
-                    tag_id, tag_id_from_video, known_rfid_tags, CONFIG['ALLOWED_TO_ENTER']
+                    tag_id, tag_id_from_video, known_rfid_tags, CONFIG['ALLOWED_TO_ENTER'],
+                    require_rfid_read=CONFIG['ENTRY_REQUIRE_RFID_READ'],
+                    video_close=tag_id_from_video_close,
                 )
 
                 # Decide by mode
@@ -1876,7 +1909,13 @@ def backend_main(
                     tag_id_valid = True
                     unlock_inside_decision_made = True
                     _timeline_log_entry_decision(identified_tag, id_source, True, rfid_for_name=tag_id)
-                    logging.info("[BACKEND] Detected RFID tag is in the database. Kitty is allowed to enter...")
+                    if id_source == "video-close":
+                        logging.info(
+                            "[BACKEND] No chip read, but video identity is confident and close to the "
+                            "camera (video-close fallback). Kitty is allowed to enter..."
+                        )
+                    else:
+                        logging.info("[BACKEND] Detected RFID tag is in the database. Kitty is allowed to enter...")
                 elif CONFIG['ALLOWED_TO_ENTER'] == AllowedToEnter.KNOWN and tag_id and tag_id not in known_rfid_tags:
                     tag_id_valid = False
                     unlock_inside_decision_made = True
@@ -1997,12 +2036,29 @@ def backend_main(
             float(CONFIG['LOCK_DURATION_AFTER_PREY_DETECTION']),
         )
 
+        # 24.10, Sid ("un chat de chaque côté... ça fait quand même crasher le
+        # Pi"): `get_outside_state()` only reflects a command that has already
+        # been DEQUEUED and executed - the shared hardware queue enforces a
+        # 1s delay between commands (MAG_RFID_CMD_DELAY, see magnets_rfid.py),
+        # so a just-queued "unlock_outside" that hasn't run yet still reads as
+        # "locked" here. That let this gate approve an inside-unlock while an
+        # outside-unlock was already in flight, landing within ~1s of each
+        # other - both magnets drawing holding current at once, right in the
+        # Pi's actual crash window that night (confirmed via the remote
+        # backend's own timestamped logs). Same root cause the 09.10 fix
+        # above (line ~2136) already named for the MANUAL override path -
+        # this closes the matching gap in the AUTOMATIC path, which is what
+        # actually ran that night.
+        outside_locked_and_not_queued = (
+            magnets.get_outside_state() == False
+            and magnets.check_queued("unlock_outside") == False
+        )
         unlock_inside_conditions = build_unlock_inside_conditions(
             motion_outside=motion_outside == 1,
             tag_id_valid=tag_id_valid,
             inside_locked=magnets.get_inside_state() == False,
             mouse_check=mouse_check,
-            outside_locked=magnets.get_outside_state() == False,
+            outside_locked=outside_locked_and_not_queued,
             no_unlock_queued=magnets.check_queued("unlock_inside") == False,
             no_prey_within_timeout_effective=no_prey_within_timeout_effective,
             not_manually_locked=inside_manually_locked_tm == 0.0 or (_mono() - inside_manually_locked_tm) > MAX_UNLOCK_TIME,
@@ -2132,7 +2188,7 @@ def backend_main(
             logging.debug(f"[BACKEND] Motion outside: {motion_outside}, Motion inside: {motion_inside}, Tag ID: {tag_id}, Tag valid: {tag_id_valid}, Motion block ID: {motion_block_id}, Images with mouse: {len(ids_with_mouse)}, Images in current block: {len(ids_of_current_motion_block)} ({ids_of_current_motion_block})")
             if manual_door_override['unlock_inside'] and magnets.get_inside_state():
                 logging.info("[BACKEND] Manual override: Inside door is already open.")
-            elif manual_door_override['unlock_inside'] and magnets.get_outside_state():
+            elif manual_door_override['unlock_inside'] and (magnets.get_outside_state() or magnets.check_queued("unlock_outside")):
                 # 09.10, Sid (Pi crashes repeatedly correlated with using the
                 # manual Presence-page buttons, confirmed via a live timeline:
                 # "Extérieur ouvert" immediately followed by "Intérieur ouvert
@@ -2175,11 +2231,11 @@ def backend_main(
                 outside_manually_unlocked = True
                 with door_unlock_source_lock:
                     door_unlock_source["outside"] = "manual"
-            elif magnets.get_inside_state():
+            elif magnets.get_inside_state() or magnets.check_queued("unlock_inside"):
                 # 09.10: same "only one magnet" rule as the inside manual
                 # override above - see that comment for the full reasoning
                 # (Pi crashes correlated with these buttons).
-                logging.warning("[BACKEND] Manual override: Inside magnet is already unlocked. Only one magnet is allowed. Outside magnet will not be unlocked.")
+                logging.warning("[BACKEND] Manual override: Inside magnet is already unlocked or about to be. Only one magnet is allowed. Outside magnet will not be unlocked.")
             else:
                 logging.info("[BACKEND] Manual override: Opening outside door")
                 magnets.empty_queue()

@@ -280,13 +280,7 @@ class RemoteControlClient:
                 }
             )
 
-        self._send_async(
-            {
-                "type": "sync_request",
-                # Optional: include Label Studio user data (if present on target).
-                "include_labelstudio": bool(CONFIG.get("REMOTE_SYNC_LABELSTUDIO", True)),
-            }
-        )
+        self._send_async({"type": "sync_request"})
         return True
 
     def get_sync_status(self) -> dict[str, Any]:

@@ -2668,7 +2668,23 @@ class DbMigrations:
 
     @staticmethod
     def create_kittyhack_cats_table(database: str):
-        """Create the kittyhack ``cats`` table if missing."""
+        """Create the kittyhack ``cats`` table if missing.
+
+        25.10, Sid ("tu peux en profiter pour résoudre les bugs même les
+        préexistants ?"): block_exit_after_prey and the bio columns below
+        were only ever added via the retroactive startup migration
+        (src/startup.py's "ensure per-cat settings columns" block, same
+        add-if-missing pattern) and never carried over into this base
+        CREATE TABLE - unlike enable_prey_detection/allow_entry/allow_exit,
+        which did get that follow-up fix at some point. A brand-new
+        database (every test fixture included - tests/conftest.py's
+        tmp_kittyhack_db calls this function directly, never the full
+        startup migration sequence) silently ended up without them,
+        surfacing as "no such column: block_exit_after_prey" and an empty
+        cat_settings_map in several tests. The startup.py migration stays
+        in place (still needed for any already-existing real database from
+        before this fix), this just closes the gap for every fresh one.
+        """
         stmt = """
             CREATE TABLE IF NOT EXISTS cats (
                 id INTEGER PRIMARY KEY,
@@ -2678,7 +2694,16 @@ class DbMigrations:
                 cat_image BLOB,
                 enable_prey_detection INTEGER DEFAULT 1,
                 allow_entry INTEGER DEFAULT 1,
-                allow_exit INTEGER DEFAULT 1
+                allow_exit INTEGER DEFAULT 1,
+                block_exit_after_prey INTEGER DEFAULT 1,
+                species TEXT,
+                sex TEXT,
+                sterilized INTEGER,
+                birth_date TEXT,
+                weight_kg REAL,
+                breed_primary TEXT,
+                breed_secondary TEXT,
+                bio_comments TEXT
             )
         """
         result = DatabaseCore.write_stmt_to_database(database, stmt)

@@ -1014,16 +1014,6 @@
                 }, true);
             }
         } catch (e) {}
-
-        // Signal current frame index before Shiny processes Label Studio upload click
-        try {
-            var lsBtn = modal.querySelector('button[id$="btn_send_to_labelstudio"]');
-            if (lsBtn) {
-                lsBtn.addEventListener('click', function () {
-                    self._signalFrameIdx(self.currentIdx);
-                }, true);
-            }
-        } catch (e) {}
     };
 
     Player.prototype._attachKeyboardHandler = function () {

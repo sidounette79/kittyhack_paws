@@ -242,11 +242,34 @@ class Magnets:
             else:
                 logging.info("[MAGNETS] Magnets initialized and released.")
 
+    def _warn_if_both_unlocked(self):
+        """
+        24.10, Sid ("un chat de chaque côté... ça fait quand même crasher le
+        Pi"): filet de sécurité générique, indépendant du chemin de code qui a
+        mené ici - si jamais les deux aimants se retrouvent déverrouillés (donc
+        alimentés) en même temps, on le sait tout de suite au lieu de devoir
+        reconstruire la chronologie à la main après coup. Chaque aimant tire du
+        courant en continu tant qu'il reste déverrouillé (pas une impulsion) -
+        les deux en même temps est le scénario suspecté d'avoir fait planter le
+        Pi le 24.10 (voir CRASH_KITTYFLAP.md, incident #2). Les gardes dans
+        loop.py sont censées empêcher ça désormais - ce message ne devrait
+        plus jamais apparaître ; s'il apparaît, c'est qu'un chemin a été
+        oublié.
+        """
+        if self.magnet_controller.magnet_state_inside and self.magnet_controller.magnet_state_outside:
+            logging.warning(
+                "[MAGNETS] ⚠️ BOTH magnets are now unlocked simultaneously - "
+                "suspected cause of the 24.10 Pi crash (simultaneous solenoid "
+                "current draw). This should be prevented upstream in loop.py; "
+                "if you see this, a code path is missing the queued-command check."
+            )
+
     def _unlock_inside(self):
         """
         Unlocks the magnet lock to the inside direction.
         """
         self.magnet_controller.magnet_state_inside = True
+        self._warn_if_both_unlocked()
 
         if self.simulate_kittyflap:
             logging.info("[MAGNETS] Simulation: Inside direction would be now unlocked.")
@@ -281,6 +304,7 @@ class Magnets:
         Unlocks the magnet lock to the outside direction.
         """
         self.magnet_controller.magnet_state_outside = True
+        self._warn_if_both_unlocked()
 
         if self.simulate_kittyflap:
             logging.info("[MAGNETS] Simulation: Outside direction would be now unlocked.")

@@ -22,6 +22,22 @@ GLANCE_NOTIFICATION_COOLDOWN_S = 600.0  # 05.10, Sid: "a regarde" push notificat
 # the DB (Parcours/Chronologie/stats/revision) gets corrected.
 RFID_BACKFILL_WINDOW_S = 15.0
 
+# 25.10, Sid ("faut qu'on ajuste mais je sais pas comment... on teste ça"):
+# ENTRY_REQUIRE_RFID_READ (24.10) correctly stops a cat merely lounging in
+# the catio from opening the door by video alone, but it also blocked a
+# genuine entry attempt (Nala, 41s of continuous high-confidence video ID,
+# chip never read in that window). Real data from already-confirmed HK
+# captures (25.10) showed two fairly distinct clusters by detection box
+# height: close-up/entering shots run ~78-98%, farther/lounging ones ~37-
+# 47% - this sits in the gap between them. When ENTRY_REQUIRE_RFID_READ is
+# on, a video identity is now trusted anyway if its most recent contributing
+# frame's box is at least this tall - "confidently identified AND currently
+# close to the camera", not just "recognized from somewhere in the catio".
+# A real chip read still always wins outright, unaffected by this. Not yet
+# confirmed on-device - first cut from real capture data, tune after seeing
+# it in practice (see [[project_kittyhack_crash_master]]-style follow-up).
+VIDEO_FALLBACK_MIN_BOX_HEIGHT_PCT = 60.0
+
 # 09.10, Sid ("un de chaque coté de la chatière, histoire de savoir qui
 # gagne l'affrontement visuel... ils font ca assez souvent"): wait_for_
 # outside_rising_after_exit is only ever cleared by a motion-outside RISING

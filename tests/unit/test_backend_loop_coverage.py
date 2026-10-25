@@ -44,11 +44,17 @@ def harness(loop_db):
     image_buffer.clear()
 
 
-def _inject_frame(harness, *, mouse=0.0, own_cat=0.0, cat_name=None):
-    """Append a detection frame aligned to the FakeClock (mono + wall)."""
+def _inject_frame(harness, *, mouse=0.0, own_cat=0.0, cat_name=None, height=20.0):
+    """Append a detection frame aligned to the FakeClock (mono + wall).
+
+    25.10: height defaults to 20 (% of frame) - same as the old hardcoded
+    value, well under VIDEO_FALLBACK_MIN_BOX_HEIGHT_PCT (60) so existing
+    callers keep exercising the "far from camera" case unless they pass a
+    taller one explicitly.
+    """
     detected = None
     if cat_name:
-        detected = [DetectedObject(0.1, 0.1, 0.2, 0.2, cat_name, float(own_cat or 90.0))]
+        detected = [DetectedObject(0.1, 0.1, 0.2, float(height), cat_name, float(own_cat or 90.0))]
     image_buffer.append(
         harness.clock.wall_time(),
         b"",
@@ -297,10 +303,15 @@ def test_camera_motion_detection_unlocks_all(harness):
 
 
 def test_camera_cat_detection_known_without_rfid(harness):
+    # 24.10: this fallback (video identification alone unlocking, no actual
+    # chip read) is now opt-in via ENTRY_REQUIRE_RFID_READ=False - see
+    # test_camera_only_detection_does_not_unlock_by_default below for the
+    # new default behavior Sid asked for.
     baseconfig.CONFIG["ALLOWED_TO_ENTER"] = AllowedToEnter.KNOWN
     baseconfig.CONFIG["MOUSE_CHECK_ENABLED"] = False
     baseconfig.CONFIG["USE_CAMERA_FOR_CAT_DETECTION"] = True
     baseconfig.CONFIG["CAT_THRESHOLD"] = 50.0
+    baseconfig.CONFIG["ENTRY_REQUIRE_RFID_READ"] = False
 
     harness.clear_rfid()
     harness.set_outside(True)
@@ -311,11 +322,72 @@ def test_camera_cat_detection_known_without_rfid(harness):
     assert harness.magnets.get_inside_state() is True
 
 
-def test_rfid_overrides_video_and_locks(harness):
+def test_camera_only_detection_does_not_unlock_by_default(harness):
+    """24.10, Sid ("j'aimerais garder la détection mais que ce soit que le
+    RFID qui ouvre") - cats lounging in the catio right next to the flap
+    were getting identified by camera alone (no chip read, since RFID only
+    reads at genuinely close range) and kept re-triggering the inside
+    unlock. ENTRY_REQUIRE_RFID_READ defaults to True now: video keeps
+    identifying the cat (see 'Detected cat... by video stream' below) but
+    must not unlock on its own."""
     baseconfig.CONFIG["ALLOWED_TO_ENTER"] = AllowedToEnter.KNOWN
     baseconfig.CONFIG["MOUSE_CHECK_ENABLED"] = False
     baseconfig.CONFIG["USE_CAMERA_FOR_CAT_DETECTION"] = True
     baseconfig.CONFIG["CAT_THRESHOLD"] = 50.0
+    assert baseconfig.CONFIG["ENTRY_REQUIRE_RFID_READ"] is True
+
+    harness.clear_rfid()
+    harness.set_outside(True)
+    harness.pump(3)
+    _inject_frame(harness, own_cat=90.0, cat_name="Mia")
+    harness.advance(0.2)
+    harness.pump(8)
+    assert harness.magnets.get_inside_state() is False
+
+    # A real chip read for the same cat still unlocks normally.
+    harness.inject_rfid("CAT001")
+    harness.pump(8)
+    assert harness.magnets.get_inside_state() is True
+
+
+def test_camera_close_detection_unlocks_without_rfid(harness):
+    """25.10, Sid ("faut qu'on ajuste mais je sais pas comment... on teste
+    ça") - the test above (far from camera, height=20%) correctly still
+    doesn't unlock. A cat confidently identified AND visibly close to the
+    camera (height >= VIDEO_FALLBACK_MIN_BOX_HEIGHT_PCT) should, even with
+    ENTRY_REQUIRE_RFID_READ on and no chip read at all - the "video-close"
+    fallback from entry_policy.py."""
+    baseconfig.CONFIG["ALLOWED_TO_ENTER"] = AllowedToEnter.KNOWN
+    baseconfig.CONFIG["MOUSE_CHECK_ENABLED"] = False
+    baseconfig.CONFIG["USE_CAMERA_FOR_CAT_DETECTION"] = True
+    baseconfig.CONFIG["CAT_THRESHOLD"] = 50.0
+    assert baseconfig.CONFIG["ENTRY_REQUIRE_RFID_READ"] is True
+
+    harness.clear_rfid()
+    harness.set_outside(True)
+    harness.pump(3)
+    _inject_frame(harness, own_cat=90.0, cat_name="Mia", height=70.0)
+    harness.advance(0.2)
+    harness.pump(8)
+    assert harness.magnets.get_inside_state() is True
+
+
+def test_late_stranger_rfid_does_not_relock_video_entry(harness):
+    """08.10, Sid ("il faut désactiver ce truc, si puce RFID détectée, quel
+    que soit le nombre de chat à quel moment = ça ouvre"): real incident -
+    Pookie's own entry (granted by video) got silently re-locked mid-
+    passage because an unrelated stranger's collar tag was read moments
+    later nearby. The "RFID overrides video" mechanism (loop.py's disabled
+    `if False and (...)` block, ~line 1711) was deliberately turned off for
+    exactly this reason - once a valid entry is granted, nothing should be
+    able to take it back mid-passage. This test used to assert the OLD,
+    now-intentionally-removed behavior (a later stranger tag re-locking the
+    door); updated 25.10 to assert the current, deliberate one instead."""
+    baseconfig.CONFIG["ALLOWED_TO_ENTER"] = AllowedToEnter.KNOWN
+    baseconfig.CONFIG["MOUSE_CHECK_ENABLED"] = False
+    baseconfig.CONFIG["USE_CAMERA_FOR_CAT_DETECTION"] = True
+    baseconfig.CONFIG["CAT_THRESHOLD"] = 50.0
+    baseconfig.CONFIG["ENTRY_REQUIRE_RFID_READ"] = False
 
     harness.clear_rfid()
     harness.set_outside(True)
@@ -326,7 +398,7 @@ def test_rfid_overrides_video_and_locks(harness):
 
     harness.inject_rfid("STRANGER")
     harness.pump(8)
-    assert harness.magnets.get_inside_state() is False
+    assert harness.magnets.get_inside_state() is True
 
 
 def test_different_known_cat_finalizes_open_block(loop_db, caplog):

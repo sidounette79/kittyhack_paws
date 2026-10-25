@@ -195,6 +195,27 @@ def ingest_kittyflap_batch(limit: int = 2000) -> int:
                 )
             )
 
+            # 24.10, Sid ("on peut suspendre l'envoi des photos taguées avec
+            # boubou, tant que proie n'y est pas associé ou qu'il est pas
+            # tout seul") - quota HK/Boubou atteint (200/200, voir
+            # /app-api/rebalance/counts) : inutile d'en accumuler davantage
+            # dans la file de revue. N'ignore QUE "Boubou seul, sans proie" -
+            # une photo avec une proie ou un autre chat reste importée
+            # normalement, ces cas-là restent utiles ailleurs. Vide ce set
+            # pour reprendre l'import normal (aucune autre modification
+            # nécessaire).
+            _hk_ingest_paused_solo_cats = {"boubou", "nala"}
+            if (
+                not is_prey_candidate
+                and cat_name
+                and cat_name.lower() in _hk_ingest_paused_solo_cats
+                and not any(
+                    n.lower() != cat_name.lower() and n.lower() != "prey"
+                    for n in detected_names
+                )
+            ):
+                continue
+
             own_cat_probability = event["own_cat_probability"]
             # Chat peu/pas visible (occlusion, sortie momentanée du cadre, ou
             # carrément une fausse détection genre "bâche de jardin = Patoune") :
@@ -252,6 +273,130 @@ def ingest_kittyflap_batch(limit: int = 2000) -> int:
 
     log.info("Ingestion terminée : %d nouvelles captures (checkpoint = %d)", ingested, last_id)
     return ingested
+
+
+# 25.10, Sid ("j'ai que deux photos qui sont venues de pookie en HK... faut
+# que je corrige la forme de la boîte. Donc une fonction de transfert vers
+# paws review") - ingest_kittyflap_batch() ci-dessus lit event_text en
+# séquence une seule fois (checkpoint jamais revisité) : une correction
+# faite après coup dans la page Photos de Kittyhack (fausse détection
+# écartée + boîte redessinée à la main) ne remonte jamais ici toute seule.
+# Appelé depuis POST /app-api/ingest/kittyflap (voir main.py), lui-même
+# appelé par kittyhack-remote (POST .../pictures/{pid}/send-to-paws-review)
+# qui a déjà fait toute la reconstruction (boîtes effectives, RFID résolu)
+# de son côté - jamais de dédoublonnage ici (elle choisit cette photo
+# précise exprès), upsert sur (source='kittyflap', source_event_id) pour
+# que renvoyer la même photo après une nouvelle correction rafraîchisse la
+# capture existante plutôt que d'en créer un doublon.
+def ingest_kittyflap_single(payload: dict) -> dict:
+    event_id = int(payload["event_id"])
+    block_id = payload.get("block_id")
+    created_at = payload["created_at"]
+    rfid = payload.get("rfid")
+    cat_name = payload.get("cat_name")
+    mouse_probability = payload.get("mouse_probability")
+    own_cat_probability = payload.get("own_cat_probability")
+    boxes = payload.get("boxes") or []
+
+    os.makedirs(ORIGINALS_DIR, exist_ok=True)
+    os.makedirs(THUMBNAILS_DIR, exist_ok=True)
+    init_db()
+
+    src_original = os.path.join(SOURCE_ORIGINALS_DIR, f"{event_id}.jpg")
+    src_thumb = os.path.join(SOURCE_THUMBNAILS_DIR, f"{event_id}.jpg")
+    if not (os.path.isfile(src_original) and os.path.isfile(src_thumb)):
+        raise FileNotFoundError(f"photo Kittyhack {event_id} introuvable (déjà purgée ?)")
+
+    dst_original = os.path.join(ORIGINALS_DIR, f"kittyflap_{event_id}.jpg")
+    dst_thumb = os.path.join(THUMBNAILS_DIR, f"kittyflap_{event_id}.jpg")
+    shutil.copy2(src_original, dst_original)
+    shutil.copy2(src_thumb, dst_thumb)
+
+    cat_source = "rfid" if (rfid and cat_name) else None
+    visual_label = None
+    visual_confidence = None
+    for b in boxes:
+        if not _looks_like_prey(b.get("object_name")):
+            visual_label = b["object_name"]
+            visual_confidence = b.get("probability")
+            break
+    if cat_source is None and visual_label:
+        # Repli : aucune identité RFID déjà résolue côté kittyhack-remote -
+        # premier chat visuel (jamais Prey) parmi les boîtes envoyées, même
+        # logique que ingest_kittyflap_batch ci-dessus.
+        cat_name = visual_label
+        cat_source = "visual"
+
+    detected_names = [b["object_name"] for b in boxes]
+    is_prey_candidate = bool(
+        (mouse_probability is not None and mouse_probability >= PREY_REVIEW_THRESHOLD)
+        or _looks_like_prey(cat_name, visual_label, *detected_names)
+    )
+    low_cat_confidence = bool(
+        not is_prey_candidate
+        and own_cat_probability is not None
+        and own_cat_probability < MIN_OWN_CAT_PROBABILITY
+    )
+    detected_objects_json = json.dumps(boxes)
+
+    with get_conn() as catalog:
+        existing = catalog.execute(
+            "SELECT id, review_status FROM captures WHERE source = 'kittyflap' AND source_event_id = ?",
+            (event_id,),
+        ).fetchone()
+        if existing is not None:
+            capture_id = existing["id"]
+            new_status = "pending" if existing["review_status"] == "skipped_dedup" else existing["review_status"]
+            # Remplace detected_objects_json en entier (nouvelle liste de
+            # boîtes, nouveaux indices) - toute correction déjà faite DANS
+            # Paws Review (box_annotations, indexée sur l'ancien
+            # detected_objects_json) pointerait sinon sur le mauvais objet
+            # après coup. Cet envoi devient la nouvelle vérité de départ.
+            catalog.execute("DELETE FROM box_annotations WHERE capture_id = ?", (capture_id,))
+            catalog.execute(
+                """UPDATE captures SET
+                       cat_name = ?, cat_source = ?, rfid = ?,
+                       visual_label = ?, visual_confidence = ?,
+                       prey_probability = ?, own_cat_probability = ?,
+                       is_prey_candidate = ?, low_cat_confidence = ?,
+                       detected_objects_json = ?, dedup_of_id = NULL,
+                       review_status = ?
+                   WHERE id = ?""",
+                (
+                    cat_name, cat_source, rfid,
+                    visual_label, visual_confidence,
+                    mouse_probability, own_cat_probability,
+                    int(is_prey_candidate), int(low_cat_confidence),
+                    detected_objects_json, new_status,
+                    capture_id,
+                ),
+            )
+            action = "updated"
+        else:
+            cursor = catalog.execute(
+                """INSERT INTO captures (
+                       source, source_event_id, block_id, created_at,
+                       cat_name, cat_source, rfid,
+                       visual_label, visual_confidence,
+                       prey_probability, own_cat_probability, is_prey_candidate, model_disagreement,
+                       low_cat_confidence,
+                       original_path, thumbnail_path, detected_objects_json,
+                       review_status
+                   ) VALUES (?,?,?,?, ?,?,?, ?,?, ?,?,?,?, ?, ?,?,?, ?)""",
+                (
+                    "kittyflap", event_id, block_id, created_at,
+                    cat_name, cat_source, rfid,
+                    visual_label, visual_confidence,
+                    mouse_probability, own_cat_probability, int(is_prey_candidate), 0,
+                    int(low_cat_confidence),
+                    dst_original, dst_thumb, detected_objects_json,
+                    "pending",
+                ),
+            )
+            capture_id = cursor.lastrowid
+            action = "inserted"
+        recompute_cat_labels(catalog, capture_id, None)
+    return {"ok": True, "capture_id": capture_id, "action": action}
 
 
 if __name__ == "__main__":

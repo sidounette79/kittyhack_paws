@@ -41,11 +41,6 @@ def models_yolo_root() -> str:
     return os.path.join(install_base(), "models", "yolo")
 
 
-def labelstudio_root() -> str:
-    """Directory for Label Studio data/install."""
-    return os.path.join(install_base(), "labelstudio")
-
-
 def wallpapers_dir() -> str:
     """07.10, Sid ("choisir parmi des wallpaper, ou télécharger depuis
     smartphone - comme pour meelo"): small gallery of uploaded background

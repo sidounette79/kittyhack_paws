@@ -196,14 +196,27 @@ export default function PictureDetail({
     }
   };
 
-  const sendToLabelStudio = async () => {
+  // 25.10, Sid ("j'ai que deux photos qui sont venues de pookie en HK...
+  // faut que je corrige la forme de la boîte. Donc une fonction de
+  // transfert vers paws review") - envoie l'état CORRIGÉ actuel (après
+  // confirm/correct/false_positive/ajout manuel ci-dessus, déjà enregistré
+  // côté serveur) vers Paws Review, qui upsert sur cette capture (même
+  // photo renvoyée après une nouvelle correction = mise à jour, pas de
+  // doublon).
+  const sendToPawsReview = async () => {
     setBusy(true);
-    setMessage(null);
     try {
-      await fetchJson(`/app-api/v1/events/${picture.block_id}/send/${picture.id}`, { method: "POST" });
-      setMessage("Envoyé à Label Studio.");
-    } catch (err) {
-      setMessage(err instanceof Error ? err.message : "Échec de l'envoi.");
+      const result = await fetchJson<{ action: string }>(
+        `/app-api/v1/pictures/${picture.id}/send-to-paws-review`,
+        { method: "POST" }
+      );
+      setMessage(
+        result.action === "updated"
+          ? "Mise à jour envoyée vers Paws Review."
+          : "Envoyée vers Paws Review."
+      );
+    } catch {
+      setMessage("Échec de l'envoi vers Paws Review.");
     } finally {
       setBusy(false);
     }
@@ -377,6 +390,14 @@ export default function PictureDetail({
             {drawing ? "✕ Dessin" : "✏️ Ajouter"}
           </button>
           <div className="flex gap-1">
+            <button
+              onClick={sendToPawsReview}
+              disabled={busy}
+              className="rounded-md bg-white/10 px-3 py-2 disabled:opacity-30"
+              title="Envoyer (ou mettre à jour) cette photo vers Paws Review"
+            >
+              📤
+            </button>
             <a
               href={`/app-api/v1/events/${picture.block_id}/download/${picture.id}`}
               className="rounded-md bg-white/10 px-3 py-2"
@@ -384,9 +405,6 @@ export default function PictureDetail({
             >
               💾
             </a>
-            <button onClick={sendToLabelStudio} disabled={busy} className="rounded-md bg-white/10 px-3 py-2 disabled:opacity-30" title="Envoyer à Label Studio">
-              ⬆️
-            </button>
             <button onClick={doDelete} disabled={busy} className="rounded-md bg-red-500/15 px-3 py-2 text-red-300 disabled:opacity-30" title="Supprimer la photo">
               🗑️
             </button>

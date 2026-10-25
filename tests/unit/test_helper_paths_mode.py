@@ -6,7 +6,6 @@ from src.mode import is_remote_mode, remote_mode_marker_path
 from src.paths import (
     install_base,
     kittyhack_root,
-    labelstudio_root,
     models_yolo_root,
     pictures_original_dir,
     pictures_root,
@@ -32,7 +31,6 @@ def test_paths_and_mode(monkeypatch, tmp_path):
     assert "original_images" in pictures_original_dir()
     assert "thumbnails" in pictures_thumbnails_dir()
     assert "yolo" in models_yolo_root()
-    assert "labelstudio" in labelstudio_root()
     install_base.cache_clear()
 
     monkeypatch.setenv("KITTYHACK_MODE", "remote")

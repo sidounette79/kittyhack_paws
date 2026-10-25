@@ -24,12 +24,19 @@ let lastStats = {};
 // fois pour toutes) retiré - plus aucune nouvelle capture n'arrivera par
 // ce canal. Son emplacement dans la barre d'onglets réutilisé par
 // COMPARE_TAB ci-dessous.
+// 19.10, Sid ("un dossier dans docker dans lequel je peux ajouter
+// manuellement des photos qui viendraient direct dans paws reviews") -
+// storage/manual_drop, repris par ingest_manual.py à chaque cycle.
+// 25.10, Sid ("on peut faire qu'un onglet pour manuel et reolink, les
+// manuelles je les prends de l'app reolink de toute façon") - fusionnés :
+// Reolink et Manuel étaient déjà le même angle caméra pour elle, la
+// distinction de source n'apportait rien à la revue. 'reolink_or_manual'
+// (IN ('reolink','manual') côté backend) plutôt que la valeur
+// 'reolink_manual' déjà existante (utilisée par Rééquilibrage/stats, qui
+// fait `source != 'kittyflap'` - regrouperait par erreur les 185 captures
+// 'labelstudio' encore pending, jamais voulu ici).
 const SOURCE_TABS = [
-  { key: '__reolink__', label: 'Reolink', source: 'reolink', statKey: 'reolink_pending' },
-  // 19.10, Sid ("un dossier dans docker dans lequel je peux ajouter
-  // manuellement des photos qui viendraient direct dans paws reviews") -
-  // storage/manual_drop, repris par ingest_manual.py à chaque cycle.
-  { key: '__manual__', label: 'Manuel', source: 'manual', statKey: 'manual_pending' },
+  { key: '__reolink__', label: 'Reolink', source: 'reolink_or_manual', statKey: 'reolink_or_manual_pending' },
 ];
 
 // 18.10, Sid ("plus logique d'avoir un onglet avec les potentielles
@@ -49,13 +56,21 @@ const PREY_TAB = '__prey__';
 // normalement - aucun bouton "annuler" séparé nécessaire.
 const REVIEWED_TABS = [
   { key: '__validated__', label: 'Validées', statusGroup: 'validated', statKey: 'validated_total' },
-  { key: '__rejected__', label: 'Écartées', statusGroup: 'rejected', statKey: 'rejected_total' },
+  { key: '__rejected__', label: 'Écartées', statusGroup: 'rejected', statKey: 'rejected_total', catFilterable: true },
   // 18.10, Sid ("fais un archives oui") - une fois exportée (export pour
   // entraînement), une capture sort de Validées/Écartées (la session est
   // close) mais reste accessible ici, réouvrable comme les autres, plutôt
   // que de devenir invisible partout.
-  { key: '__archived__', label: 'Archivées', statusGroup: 'archived', statKey: 'archived_total' },
+  { key: '__archived__', label: 'Archivées', statusGroup: 'archived', statKey: 'archived_total', catFilterable: true },
 ];
+
+// 25.10, Sid ("Archivées et écartées : mettre aussi le filtre par chat")
+// - cat_name se combine déjà librement avec status_group côté backend
+// (/app-api/queue), rien à changer là-bas. Réinitialisé à chaque
+// changement d'onglet, même logique que selectedIds.clear() juste en
+// dessous dans selectTab() - un filtre d'un autre onglet n'a plus de sens
+// ici.
+let reviewedCatFilter = null;
 
 // 20.10, Sid ("le module de revérification... je contrôle tout au même
 // endroit") - file à part (model_review_queue), pas un filtre sur
@@ -75,18 +90,6 @@ const COMPARE_TAB = '__compare__';
 // aucune file, juste le tableau renvoyé par
 // GET /app-api/stats/by-class-source.
 const STATS_TAB = '__stats__';
-
-// 21.10, Sid ("je repars encore une fois à zéro... 200 tag reolink et 200
-// tag HK par chat... trier reo vs HK pour pouvoir faire du différent de
-// tous les côtés possibles") - vraie file parcourable (pas juste un
-// tableau comme Stats) avec des filtres combinables (chat + source +
-// modèle actuel/nouveau + négatif), pour trier/supprimer l'excédent vers
-// une cible de 200+200 par chat. Réutilise currentQueue/renderQueue/les
-// actions existantes (Valider/Écarter) - seul loadTrainingQueue() change
-// par rapport à loadQueue().
-const TRAINING_TAB = '__training__';
-let trainingFilters = { cat: null, source: null, group: 'new', negative: false };
-let trainingCounts = null;
 
 // 22.10, Sid ("la page 200+200 c'est pas ce que je veux... il me faut un
 // onglet spécifique") - remplace le chantier 200+200 par un flux plus
@@ -195,17 +198,6 @@ async function startExport(full = false) {
   await checkExportStatus();
 }
 
-// 21.10, Sid ("je voulais... un lot tout neuf qui ne tient plus compte
-// des 1800 premières exportées qui ne sont pas équilibrées") - bouton
-// dédié dans l'onglet Tri 200+200, voir export_training.py (full=True)
-// pour ce que ça change réellement. Confirmation avant de lancer : à la
-// différence du bouton d'export habituel (petit delta), celui-ci
-// réembarque potentiellement des milliers d'images d'un coup.
-async function startFullExport() {
-  if (!confirm("Export complet : reprend TOUTES les captures encore confirmées/corrigées (anciennes du modèle actuel incluses), pas juste les nouvelles. Continuer ?")) return;
-  await startExport(true);
-}
-
 function renderExportBar(state) {
   const bar = document.getElementById('export-bar');
   if (state.status === 'running') {
@@ -286,28 +278,26 @@ function renderTabs() {
          style="${currentTab === STATS_TAB ? 'background:var(--accent)' : 'border-color:var(--accent)'}"
          onclick="selectTab('${STATS_TAB}')">
       Stats</div>`;
-  const trainingTab = `
-    <div class="tab ${currentTab === TRAINING_TAB ? 'active' : ''}"
-         style="${currentTab === TRAINING_TAB ? 'background:var(--accent)' : 'border-color:var(--accent)'}"
-         onclick="selectTab('${TRAINING_TAB}')">
-      Tri 200+200</div>`;
   const rebalanceTab = `
     <div class="tab ${currentTab === REBALANCE_TAB ? 'active' : ''}"
          style="${currentTab === REBALANCE_TAB ? 'background:var(--accent)' : 'border-color:var(--accent)'}"
          onclick="selectTab('${REBALANCE_TAB}')">
       Rééquilibrage</div>`;
-  tabsEl.innerHTML = allTab + catTabs + sourceTabs + preyTab + reviewedTabs + modelReviewTab + compareTab + statsTab + trainingTab + rebalanceTab;
+  tabsEl.innerHTML = allTab + catTabs + sourceTabs + preyTab + reviewedTabs + modelReviewTab + compareTab + statsTab + rebalanceTab;
 }
 
 function selectTab(name) {
   currentTab = name;
   selectedIds.clear(); // une sélection d'un autre onglet n'a plus de sens ici
+  reviewedCatFilter = null;
   renderTabs();
   document.getElementById('model-review-bar').hidden = currentTab !== MODEL_REVIEW_TAB;
   document.getElementById('compare-bar').hidden = currentTab !== COMPARE_TAB;
   document.getElementById('stats-bar').hidden = currentTab !== STATS_TAB;
-  document.getElementById('training-bar').hidden = currentTab !== TRAINING_TAB;
   document.getElementById('rebalance-bar').hidden = currentTab !== REBALANCE_TAB;
+  const reviewedTabForFilter = REVIEWED_TABS.find(t => t.key === currentTab && t.catFilterable);
+  document.getElementById('reviewed-filter-bar').hidden = !reviewedTabForFilter;
+  if (reviewedTabForFilter) renderReviewedFilterBar();
   if (currentTab === MODEL_REVIEW_TAB) {
     checkModelReviewStatus();
     loadModelReviewQueue();
@@ -321,9 +311,6 @@ function selectTab(name) {
     document.getElementById('queue').innerHTML = '';
     document.getElementById('empty').hidden = true;
     loadStatsTab();
-  } else if (currentTab === TRAINING_TAB) {
-    loadTrainingCounts();
-    loadTrainingQueue();
   } else if (currentTab === REBALANCE_TAB) {
     loadRebalanceCounts();
     loadRebalanceQueue();
@@ -333,11 +320,18 @@ function selectTab(name) {
 }
 
 async function loadQueue() {
-  const params = new URLSearchParams({ limit: 200 });
+  // 25.10, Sid ("je sois pas limitée à 200") - même raisonnement que
+  // loadRebalanceQueue (21.10) : une limite basse
+  // tronquait silencieusement dès qu'un onglet dépassait ce chiffre,
+  // rendant impossible de voir/trier le lot complet. Relevée largement
+  // au-dessus de n'importe quelle combinaison réaliste plutôt que
+  // supprimée (filet de sécurité).
+  const params = new URLSearchParams({ limit: 10000 });
   const sourceTab = SOURCE_TABS.find(t => t.key === currentTab);
   const reviewedTab = REVIEWED_TABS.find(t => t.key === currentTab);
   if (reviewedTab) {
     params.set('status_group', reviewedTab.statusGroup);
+    if (reviewedTab.catFilterable && reviewedCatFilter) params.set('cat_name', reviewedCatFilter);
   } else if (currentTab === PREY_TAB) {
     params.set('prey_only', '1');
   } else if (sourceTab) {
@@ -347,6 +341,22 @@ async function loadQueue() {
   }
   currentQueue = await api(`/app-api/queue?${params}`);
   renderQueue();
+}
+
+function renderReviewedFilterBar() {
+  const bar = document.getElementById('reviewed-filter-bar');
+  // 25.10 : même ajout que renderRebalanceBar() - "Prey" filtré via
+  // filter_prey_label côté /app-api/queue, absent de `cats` (identités
+  // RFID seulement).
+  const catOptions = ['', ...cats.map(c => c.name), 'Prey'].map(n =>
+    `<option value="${n}" ${reviewedCatFilter === (n || null) ? 'selected' : ''}>${n || 'Tous les chats'}</option>`
+  ).join('');
+  bar.innerHTML = `<select onchange="reviewedSetCatFilter(this.value || null)">${catOptions}</select>`;
+}
+
+function reviewedSetCatFilter(value) {
+  reviewedCatFilter = value;
+  loadQueue();
 }
 
 // 18.10, Sid ("un moyen d'en sélectionner plusieurs d'un coup pour les
@@ -500,14 +510,29 @@ function renderModelReviewBar(state) {
     const when = state.finished_at ? new Date(state.finished_at * 1000).toLocaleString('fr-CH') : '';
     bar.innerHTML = `
       <span class="export-msg">✓ ${state.flagged ?? 0} désaccord(s) à trancher (${state.scanned ?? 0} captures scannées, ${when})</span>
-      <button onclick="startModelReview()">Relancer le scan</button>`;
+      <button onclick="startModelReview()">Relancer le scan</button>
+      <button onclick="resetModelReview()" title="Vide la file de désaccords en attente, pour repartir d'une file propre après un nouvel entraînement">Réinitialiser</button>`;
   } else if (state.status === 'error') {
     bar.innerHTML = `
       <span class="export-msg export-error">Échec : ${state.message || 'erreur inconnue'}</span>
       <button onclick="startModelReview()">Réessayer</button>`;
   } else {
-    bar.innerHTML = `<button onclick="startModelReview()">Lancer le scan (dernier modèle)</button>`;
+    bar.innerHTML = `
+      <button onclick="startModelReview()">Lancer le scan (dernier modèle)</button>
+      <button onclick="resetModelReview()" title="Vide la file de désaccords en attente, pour repartir d'une file propre après un nouvel entraînement">Réinitialiser</button>`;
   }
+}
+
+// 25.10, Sid ("Faire un Reset de rectification. Je ferais une fois le
+// nouvel entraînement effectué") - vide model_review_queue côté serveur,
+// jamais lancé sans confirmation (irréversible : les désaccords non
+// tranchés sont perdus, pas juste masqués).
+async function resetModelReview() {
+  if (!confirm("Réinitialiser la revérification : vide la file de désaccords en attente (non tranchés = perdus). Continuer ?")) return;
+  await api('/app-api/model-review/reset', { method: 'POST' });
+  await checkModelReviewStatus();
+  await loadModelReviewQueue();
+  renderTabs();
 }
 
 async function loadModelReviewQueue() {
@@ -793,108 +818,20 @@ async function loadStatsTab() {
     <div class="hint" style="margin-top:8px">"Autre (ancien)" (import LabelStudio, angle caméra jamais enregistré) réparti 70% KH / 30% Reolink et ajouté dans les deux colonnes ci-dessus - ce sont des estimations, pas des comptes exacts.</div>`;
 }
 
-// 21.10, Sid ("je repars encore une fois à zéro... 200 tag reolink et 200
-// tag HK par chat") - onglet "Tri 200+200" : filtres combinables (chat,
-// source, modèle actuel/nouveau, négatif) au-dessus de la même grille de
-// vignettes que les autres onglets (currentQueue/renderQueue réutilisés
-// tels quels), avec un tableau de progression vers la cible 200+200 par
-// chat au-dessus.
-const TRAINING_TARGET_PER_SOURCE = 200;
-
-async function loadTrainingCounts() {
-  trainingCounts = await api('/app-api/training-targets/counts');
-  renderTrainingBar();
-}
-
-function trainingSetFilter(key, value) {
-  trainingFilters[key] = value;
-  loadTrainingQueue();
-  renderTrainingBar();
-}
-
-function renderTrainingBar() {
-  const bar = document.getElementById('training-bar');
-  const catOptions = ['', ...cats.map(c => c.name)].map(n =>
-    `<option value="${n}" ${trainingFilters.cat === (n || null) ? 'selected' : ''}>${n || 'Tous les chats'}</option>`
-  ).join('');
-  const controls = `
-    <select onchange="trainingSetFilter('cat', this.value || null)">${catOptions}</select>
-    <select onchange="trainingSetFilter('source', this.value || null)">
-      <option value="" ${!trainingFilters.source ? 'selected' : ''}>Toute source</option>
-      <option value="kittyflap" ${trainingFilters.source === 'kittyflap' ? 'selected' : ''}>HK</option>
-      <option value="reolink_manual" ${trainingFilters.source === 'reolink_manual' ? 'selected' : ''}>Reolink+Manuel</option>
-      <option value="reolink" ${trainingFilters.source === 'reolink' ? 'selected' : ''}>Reolink seulement</option>
-      <option value="manual" ${trainingFilters.source === 'manual' ? 'selected' : ''}>Manuel seulement</option>
-    </select>
-    <select onchange="trainingSetFilter('group', this.value)">
-      <option value="new" ${trainingFilters.group === 'new' ? 'selected' : ''}>Nouveau depuis le modèle actuel</option>
-      <option value="current" ${trainingFilters.group === 'current' ? 'selected' : ''}>Dans le modèle actuel</option>
-      <option value="" ${trainingFilters.group === '' ? 'selected' : ''}>Les deux</option>
-    </select>
-    <label style="margin-left:8px"><input type="checkbox" ${trainingFilters.negative ? 'checked' : ''}
-      onchange="trainingSetFilter('negative', this.checked)"> Négatif seulement (ni chat ni proie)</label>
-    <button style="margin-left:8px" onclick="startFullExport()" title="Reprend TOUT ce qui est encore confirmed/corrected, anciennes du modèle actuel comme nouvelles - ignore l'historique d'export, contrairement au bouton d'export habituel plus haut">
-      Export complet (ignore l'historique)
-    </button>
-  `;
-  let table = '';
-  if (trainingCounts) {
-    const rows = Object.entries(trainingCounts).map(([cls, g]) => {
-      const kh = g.current.kittyflap + g.new.kittyflap;
-      const reo = g.current.reolink_manual + g.new.reolink_manual;
-      return `<tr>
-        <td>${cls}</td>
-        <td class="${kh >= TRAINING_TARGET_PER_SOURCE ? '' : 'export-error'}">${kh} / ${TRAINING_TARGET_PER_SOURCE}</td>
-        <td class="${reo >= TRAINING_TARGET_PER_SOURCE ? '' : 'export-error'}">${reo} / ${TRAINING_TARGET_PER_SOURCE}</td>
-        <td>${kh + reo}</td>
-      </tr>`;
-    }).join('');
-    table = `
-      <table class="stats-table" style="margin-top:8px">
-        <thead><tr><th>Classe</th><th>HK</th><th>Reolink+Manuel</th><th>Total</th></tr></thead>
-        <tbody>${rows}</tbody>
-      </table>`;
-  }
-  bar.innerHTML = controls + table;
-}
-
 // 21.10, Sid ("j'ai sélectionné pookie + manuel, j'en ai écarté 7 et ça
 // a tout vidé ? Quand je les valide à nouveau elles vont où ? J'arrive
 // pas à voir le suivi") - bulkReview()/submitReview() rafraîchissaient
 // après action via loadQueue() (générique), qui ne connaît pas l'onglet
-// "Tri 200+200" et traitait son nom comme un nom de chat
-// (cat_name=__training__), donc zéro résultat - la liste semblait "tout
-// vidée" après une action, pas juste les 7 écartées. Les compteurs de
+// courant et traitait son nom comme un nom de chat, donc zéro résultat -
+// la liste semblait "tout vidée" après une action. Les compteurs de
 // progression n'étaient non plus jamais réactualisés après une action.
 async function reloadCurrentTab() {
-  if (currentTab === TRAINING_TAB) {
-    await loadTrainingQueue();
-    await loadTrainingCounts();
-  } else if (currentTab === REBALANCE_TAB) {
+  if (currentTab === REBALANCE_TAB) {
     await loadRebalanceQueue();
     await loadRebalanceCounts();
   } else {
     await loadQueue();
   }
-}
-
-async function loadTrainingQueue() {
-  // 21.10, Sid ("quand je filtre, il faut que je puisse voir toutes les
-  // images, sinon je peux pas trier les quasi identiques" / "j'en vois
-  // 68 alors qu'il y en a 230") - limite à 200 tronquait silencieusement
-  // dès qu'une combinaison chat/source dépassait ce chiffre (vérifié :
-  // Boubou+HK a 215 résultats réels). Le but de cet onglet est de voir
-  // le lot COMPLET pour éliminer les quasi-doublons à l'oeil - une vue
-  // partielle rend ça impossible. Limite relevée largement au-dessus de
-  // n'importe quelle combinaison réaliste plutôt que supprimée (filet de
-  // sécurité si jamais une requête sans aucun filtre était lancée).
-  const params = new URLSearchParams({ limit: 10000, training_mode: '1' });
-  if (trainingFilters.cat) params.set('cat_name', trainingFilters.cat);
-  if (trainingFilters.source) params.set('source', trainingFilters.source);
-  if (trainingFilters.group) params.set('in_model', trainingFilters.group);
-  if (trainingFilters.negative) params.set('negative_only', '1');
-  currentQueue = await api(`/app-api/queue?${params}`);
-  renderQueue();
 }
 
 const REBALANCE_TARGET_PER_SOURCE = 200;
@@ -931,7 +868,14 @@ async function rebalancePromote() {
 
 function renderRebalanceBar() {
   const bar = document.getElementById('rebalance-bar');
-  const catOptions = ['', ...cats.map(c => c.name)].map(n =>
+  // 25.10, Sid ("j'ai pas proie dans le menu déroulant") - "Prey" n'est
+  // jamais un chat enregistré (cats vient de /app-api/cats, les
+  // identités RFID), donc absent de cette liste par défaut. Ajouté à la
+  // main : filtre sur l'étiquette effective "Prey" (voir filter_prey_label
+  // côté /app-api/queue), distinct de la case "Proies suspectées"
+  // ci-dessous (is_prey_candidate, un indice de priorité de revue, pas
+  // une classification confirmée).
+  const catOptions = ['', ...cats.map(c => c.name), 'Prey'].map(n =>
     `<option value="${n}" ${rebalanceFilters.cat === (n || null) ? 'selected' : ''}>${n || 'Tous les chats'}</option>`
   ).join('');
   const controls = `

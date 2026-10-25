@@ -14,7 +14,6 @@ import math
 import asyncio
 from src.baseconfig import CONFIG, set_language, update_single_config_parameter
 from src.helper import DateTimeUtil
-from src.system import LabelStudioInstall
 from src.database import (
     CatsRepo,
     DatabaseCore,
@@ -24,7 +23,6 @@ from src.database import (
 )
 from src.paths import pictures_original_dir
 from src.mode import is_remote_mode
-from src.labelstudio_api import upload_image_to_labelstudio_project
 from src.server_ui.state import reload_trigger_photos
 from src.server_ui.context import SessionContext
 
@@ -666,12 +664,6 @@ def register_photos(input, output, session, ctx: SessionContext):
 
         img_html += "</div>"
 
-        ls_disabled = (
-            not CONFIG.get("LABELSTUDIO_API_TOKEN")
-            or not CONFIG.get("LABELSTUDIO_PROJECT")
-            or not LabelStudioInstall.get_labelstudio_status()
-        )
-
         card_class = "image-container kh-photo-card" + (
             " image-container-alert"
             if mouse_probability >= CONFIG["MOUSE_THRESHOLD"]
@@ -729,19 +721,6 @@ def register_photos(input, output, session, ctx: SessionContext):
                                 **{"data-pid": str(pid)},
                             ),
                             _("Tag a missed cat/prey directly on this picture"),
-                            options={"trigger": "hover"},
-                        ),
-                        ui.tooltip(
-                            ui.input_action_button(
-                                id=f"photo_send_ls_{pid}",
-                                label="",
-                                icon=icon_svg(
-                                    "upload", margin_left="0", margin_right="0"
-                                ),
-                                class_="btn-icon-square btn-outline-secondary kh-photo-action-btn",
-                                disabled_=ls_disabled,
-                            ),
-                            _("Send picture to Label Studio"),
                             options={"trigger": "hover"},
                         ),
                         ui.tooltip(
@@ -1068,7 +1047,6 @@ def register_photos(input, output, session, ctx: SessionContext):
         for pid in new_ids:
             _photo_action_registered_ids.add(pid)
             _register_single_photo_delete(int(pid))
-            _register_single_photo_send_ls(int(pid))
 
     def _register_single_photo_delete(pid: int):
         @reactive.effect
@@ -1158,7 +1136,6 @@ def register_photos(input, output, session, ctx: SessionContext):
                                 ui.insert_ui(card, "#photos_grid", where="beforeEnd")
                                 _photo_action_registered_ids.add(new_pid)
                                 _register_single_photo_delete(int(new_pid))
-                                _register_single_photo_send_ls(int(new_pid))
 
                                 # Update total-pages display via page input bounds
                     session.send_input_message(
@@ -1174,91 +1151,4 @@ def register_photos(input, output, session, ctx: SessionContext):
                     ),
                     duration=10,
                     type="error",
-                )
-
-    def _register_single_photo_send_ls(pid: int):
-        @reactive.effect
-        @reactive.event(input[f"photo_send_ls_{pid}"])
-        async def _handler():
-            project_id = CONFIG.get("LABELSTUDIO_PROJECT", "").strip()
-            api_token = CONFIG.get("LABELSTUDIO_API_TOKEN", "").strip()
-
-            if not project_id or not api_token:
-                ui.notification_show(
-                    _(
-                        "Label Studio is not configured. Please set an API token and select a project in the settings."
-                    ),
-                    type="warning",
-                    duration=5,
-                )
-                return
-
-            if not LabelStudioInstall.get_labelstudio_status():
-                ui.notification_show(
-                    _("Label Studio is not running."), type="warning", duration=5
-                )
-                return
-
-            img_bytes = None
-            try:
-                fp = os.path.join(pictures_original_dir(), f"{pid}.jpg")
-                if os.path.exists(fp):
-                    with open(fp, "rb") as f:
-                        img_bytes = f.read()
-            except Exception:
-                img_bytes = None
-
-            if img_bytes is None:
-                try:
-                    df = DatabaseCore.read_df_from_database(
-                        CONFIG["KITTYHACK_DATABASE_PATH"],
-                        f"SELECT original_image FROM events WHERE id = {int(pid)}",
-                    )
-                    if not df.empty:
-                        ob = df.iloc[0].get("original_image")
-                        if isinstance(ob, (bytes, bytearray)) and len(ob) > 0:
-                            img_bytes = bytes(ob)
-                except Exception:
-                    pass
-
-            if not isinstance(img_bytes, (bytes, bytearray)) or len(img_bytes) == 0:
-                ui.notification_show(
-                    _("Could not load the image."), type="warning", duration=5
-                )
-                return
-
-            ui.notification_show(
-                ui.HTML(
-                    '<div class="d-flex align-items-center gap-2">'
-                    '<div class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></div>'
-                    f"<span>{_('Sending picture to Label Studio...')}</span>"
-                    "</div>"
-                ),
-                id="ls_upload_progress",
-                type="message",
-                duration=None,
-            )
-
-            filename = f"kittyhack_photo_{pid}.jpg"
-            success = await asyncio.to_thread(
-                upload_image_to_labelstudio_project,
-                project_id=int(project_id),
-                image_bytes=img_bytes,
-                filename=filename,
-                token=api_token,
-            )
-
-            ui.notification_remove("ls_upload_progress")
-
-            if success:
-                ui.notification_show(
-                    _("Picture sent to Label Studio successfully."),
-                    type="message",
-                    duration=3,
-                )
-            else:
-                ui.notification_show(
-                    _("Failed to send picture to Label Studio."),
-                    type="error",
-                    duration=5,
                 )

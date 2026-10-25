@@ -3,8 +3,28 @@ from src.baseconfig import AllowedToEnter
 from src.helper import EventType
 
 
-def _identified_tag_for_entry(tag_id, tag_id_from_video, known_rfid_tags, allowed_to_enter=None):
-    """RFID reader identification takes priority over video identification."""
+def _identified_tag_for_entry(
+    tag_id, tag_id_from_video, known_rfid_tags, allowed_to_enter=None,
+    require_rfid_read=False, video_close=False,
+):
+    """RFID reader identification takes priority over video identification.
+
+    24.10, Sid: require_rfid_read=True drops the video-only fallback below
+    entirely - entry is decided from an actual chip read or not at all.
+    Video identification keeps running for everything else (logging,
+    journeys, photo labels), it just stops being able to unlock on its own.
+
+    25.10, Sid ("faut qu'on ajuste mais je sais pas comment... on teste
+    ça"): that fix correctly stopped a cat merely lounging in the catio from
+    opening the door by video alone, but also blocked a genuine entry
+    attempt (Nala, 41s of continuous high-confidence video ID, chip never
+    read). `video_close` (loop.py's tag_id_from_video_close, gated on
+    VIDEO_FALLBACK_MIN_BOX_HEIGHT_PCT - see that constant's own comment for
+    the real capture data behind the threshold) reflects whether the video
+    identity is ALSO visibly close to the camera right now, not just
+    recognized from somewhere in the catio - still a fallback below a real
+    chip read, never above it.
+    """
     if tag_id and tag_id in known_rfid_tags:
         return tag_id, "RFID"
     if allowed_to_enter == AllowedToEnter.CONFIGURE_PER_CAT and tag_id:
@@ -13,8 +33,10 @@ def _identified_tag_for_entry(tag_id, tag_id_from_video, known_rfid_tags, allowe
     if allowed_to_enter == AllowedToEnter.KNOWN and tag_id:
         # Unknown chip is not a registered cat; do not fall back to video.
         return None, "RFID"
+    if require_rfid_read and not video_close:
+        return None, None
     if tag_id_from_video and tag_id_from_video in known_rfid_tags:
-        return tag_id_from_video, "video"
+        return tag_id_from_video, "video-close" if require_rfid_read else "video"
     return None, None
 
 
