@@ -100,9 +100,9 @@ async function checkTrainStatus() {
   }
 }
 
-async function startTraining() {
+async function startTraining(collapseIdentity = false) {
   try {
-    await api('/app-api/train/start', { method: 'POST' });
+    await api(`/app-api/train/start?collapse_identity=${collapseIdentity ? '1' : '0'}`, { method: 'POST' });
   } catch (e) {
     // 409 = déjà en cours - pas une vraie erreur, juste resynchroniser l'affichage
   }
@@ -116,8 +116,17 @@ const TRAIN_STEP_LABELS = {
   training: 'Entraînement en cours',
 };
 
+// 29.10, plan de scission détection/identité - deux modes d'entraînement
+// possibles côté train_vastai.py (collapse_identity=0|1), même verrou/
+// état partagé (un seul run à la fois, peu importe le mode - même budget
+// Vast.ai). Deux boutons distincts tant qu'il n'y a pas de modèle 2 à
+// proprement parler : le modèle combiné actuel (5 classes, inchangé) et
+// le nouveau modèle 1 (détection pure Cat+Prey, voir export_training.py).
 function renderTrainBar(state) {
   const bar = document.getElementById('train-bar');
+  const bothButtons = `
+    <button onclick="startTraining(false)">Lancer un entraînement (modèle actuel, 5 classes)</button>
+    <button onclick="startTraining(true)" title="Classes réduites à Cat+Prey - voir le plan de scission détection/identité">Lancer un entraînement Modèle 1 (détection Cat+Prey)</button>`;
   if (state.status === 'running') {
     const label = TRAIN_STEP_LABELS[state.step] || 'En cours';
     const price = state.price ? ` - ${state.price.toFixed(3)}$/h` : '';
@@ -127,13 +136,13 @@ function renderTrainBar(state) {
     const when = state.finished_at ? new Date(state.finished_at * 1000).toLocaleString('fr-CH') : '';
     bar.innerHTML = `
       <span class="export-msg">✓ Nouveau modèle entraîné (${state.images} images, ${when}) - sélectionne-le dans Kittyhack</span>
-      <button onclick="startTraining()">Relancer un entraînement</button>`;
+      ${bothButtons}`;
   } else if (state.status === 'error') {
     bar.innerHTML = `
       <span class="export-msg export-error">Échec de l'entraînement : ${state.message || 'erreur inconnue'}</span>
-      <button onclick="startTraining()">Réessayer</button>`;
+      ${bothButtons}`;
   } else {
-    bar.innerHTML = `<button onclick="startTraining()">Lancer un entraînement</button>`;
+    bar.innerHTML = bothButtons;
   }
 }
 
