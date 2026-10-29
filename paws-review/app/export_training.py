@@ -31,7 +31,7 @@ from datetime import datetime, timezone
 from app.boxes import effective_boxes
 from app.catalog_db import get_conn, init_db
 from app.config import STORAGE_ROOT
-from app.labels import CLASSES, canonicalize
+from app.labels import CLASSES, DETECTION_CLASSES, IDENTITY_CLASSES, canonicalize
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [export_training] %(message)s")
 log = logging.getLogger(__name__)
@@ -241,7 +241,7 @@ def _run_export(full: bool = False):
     )
 
 
-def build_full_training_zip(output_path: str) -> dict:
+def build_full_training_zip(output_path: str, collapse_identity: bool = False) -> dict:
     """19.10, Sid ("on renvoie chaque fois le tout... pour repartir des
     poids du modèle précédent mais sans risque d'oubli") - contrairement à
     _run_export() ci-dessus (lié au bouton de l'UI, qui ne reprend que les
@@ -253,20 +253,29 @@ def build_full_training_zip(output_path: str) -> dict:
     HTTP) - la même construction que _run_export() mais sans thread/état
     partagé, inutiles ici.
 
-    19.10, Sid ("équilibrer la provenance des deux caméras" + "augmenter
-    mon taux [de Prey] à un niveau identique aux chats") - Prey reste la
-    classe la plus rare et la plus dure (petit objet, souvent caché par le
-    chat - voir la discussion sur la résolution d'entraînement), ET très
-    déséquilibrée entre kittyflap et reolink. Suréchantillonnage en deux
-    temps, jamais de fabrication d'image (juste des copies des VRAIES
-    photos déjà validées, avec un nom de fichier distinct à chaque copie -
-    les autres augmentations Ultralytics actives par défaut, mosaïque
-    incluse, évitent que le modèle voie littéralement deux fois la même
-    chose) :
-      1. kittyflap vs reolink ramenés à parité entre eux (la source la
-         moins fournie est dupliquée jusqu'à égaler l'autre).
-      2. Le total Prey (toutes provenances) est ensuite remonté au niveau
-         moyen des 4 classes de chats, en recyclant les mêmes photos."""
+    25.10, Sid ("tu avais créé un certain nombre d'images de proie pour
+    augmenter mon ratio, qui s'insèrent dans le zip mais que moi je ne
+    vois pas") - le suréchantillonnage Prey (19.10, deux passes : parité
+    kittyflap/reolink puis total remonté à la moyenne des classes de
+    chats) dupliquait des copies de fichiers directement dans le zip,
+    jamais comme captures réelles en base - invisible dans Paws Review,
+    impossible à auditer/corriger comme le reste. Retiré : maintenant 1
+    capture confirmée/corrigée = 1 image exportée, point, même principe
+    que _run_export() ci-dessus. Le vrai rééquilibrage Prey/chats se fait
+    désormais en amont, dans l'outil (onglet Rééquilibrage), pas en
+    duplication invisible à l'export.
+
+    29.10, plan de scission détection/identité (voir
+    /volume1/docker/claude-home-data/plans/twinkly-percolating-wombat.md) :
+    `collapse_identity=True` produit l'export destiné au Modèle 1
+    (détection pure) - chaque identité de chat (Pookie/Patoune/Nala/
+    Boubou) est remappée vers "Cat" avant d'écrire le label YOLO, "Prey"
+    reste "Prey", `classes.txt` devient DETECTION_CLASSES au lieu de
+    CLASSES. Le reste du comportement (négatif explicite, boîtes "Autre"
+    exclues) est inchangé - les captures confirmées/corrigées utilisées
+    sont les MÊMES que pour l'export identité (CLASSES), seul le mapping
+    de sortie change. `False` (défaut) garde le comportement actuel à 5
+    classes, pour ne rien casser des appels existants."""
     init_db()
     tmp_dir = output_path + ".tmp"
     images_dir = os.path.join(tmp_dir, "images")
@@ -277,14 +286,6 @@ def build_full_training_zip(output_path: str) -> dict:
     positives = negatives = 0
     skipped_boxes_by_class: dict[str, int] = {}
     included = 0
-    cat_class_counts: dict[str, int] = {c: 0 for c in CLASSES if c != "Prey"}
-    prey_rows_by_source: dict[str, list[str]] = {}  # base_name -> source, grouped
-
-    def _write_sample(base_name: str, img_bytes: bytes, lines: list[str]):
-        with open(os.path.join(images_dir, base_name + ".jpg"), "wb") as f:
-            f.write(img_bytes)
-        with open(os.path.join(labels_dir, base_name + ".txt"), "w") as f:
-            f.write("\n".join(lines) + ("\n" if lines else ""))
 
     with get_conn() as conn:
         rows = conn.execute(
@@ -292,19 +293,18 @@ def build_full_training_zip(output_path: str) -> dict:
                WHERE review_status IN ('confirmed', 'corrected')"""
         ).fetchall()
 
-        prey_originals: dict[str, list[tuple[str, bytes, list[str]]]] = {}  # source -> [(base_name, img_bytes, lines)]
-
+        active_classes = DETECTION_CLASSES if collapse_identity else CLASSES
         for row in rows:
             boxes = effective_boxes(conn, row["id"], row["detected_objects_json"])
             lines = []
-            classes_here = set()
             for box in boxes:
                 cls = canonicalize(box["label"])
                 if cls is None:
                     skipped_boxes_by_class[box["label"]] = skipped_boxes_by_class.get(box["label"], 0) + 1
                     continue
-                classes_here.add(cls)
-                cls_idx = CLASSES.index(cls)
+                if collapse_identity and cls in IDENTITY_CLASSES:
+                    cls = "Cat"
+                cls_idx = active_classes.index(cls)
                 x_center = (box["x"] + box["width"] / 2.0) / 100.0
                 y_center = (box["y"] + box["height"] / 2.0) / 100.0
                 w = box["width"] / 100.0
@@ -315,15 +315,11 @@ def build_full_training_zip(output_path: str) -> dict:
                 continue
 
             base_name = f"capture_{row['id']}"
-            with open(row["original_path"], "rb") as src:
-                img_bytes = src.read()
-            _write_sample(base_name, img_bytes, lines)
-
-            for cls in classes_here:
-                if cls in cat_class_counts:
-                    cat_class_counts[cls] += 1
-            if "Prey" in classes_here:
-                prey_originals.setdefault(row["source"], []).append((base_name, img_bytes, lines))
+            with open(row["original_path"], "rb") as src, \
+                 open(os.path.join(images_dir, base_name + ".jpg"), "wb") as dst:
+                dst.write(src.read())
+            with open(os.path.join(labels_dir, base_name + ".txt"), "w") as f:
+                f.write("\n".join(lines) + ("\n" if lines else ""))
 
             if lines:
                 positives += 1
@@ -331,40 +327,8 @@ def build_full_training_zip(output_path: str) -> dict:
                 negatives += 1
             included += 1
 
-    # --- Suréchantillonnage Prey : 1) parité kittyflap/reolink ---
-    kf = prey_originals.get("kittyflap", [])
-    rl = prey_originals.get("reolink", [])
-    prey_total_now = sum(len(v) for v in prey_originals.values())
-    target_each = max(len(kf), len(rl))
-    for name, samples in (("kittyflap", kf), ("reolink", rl)):
-        if not samples:
-            continue
-        dup_i = 0
-        while len(samples) + dup_i < target_each:
-            base_name, img_bytes, lines = samples[dup_i % len(samples)]
-            dup_name = f"{base_name}_dup{name}{dup_i}"
-            _write_sample(dup_name, img_bytes, lines)
-            included += 1
-            positives += 1
-            prey_total_now += 1
-            dup_i += 1
-
-    # --- 2) total Prey remonté au niveau moyen des classes de chats ---
-    all_prey_samples = [s for src_list in prey_originals.values() for s in src_list]
-    cat_counts = [n for n in cat_class_counts.values() if n > 0]
-    target_prey_total = int(sum(cat_counts) / len(cat_counts)) if cat_counts else 0
-
-    if all_prey_samples and prey_total_now < target_prey_total:
-        missing = target_prey_total - prey_total_now
-        for i in range(missing):
-            base_name, img_bytes, lines = all_prey_samples[i % len(all_prey_samples)]
-            dup_name = f"{base_name}_dupall{i}"
-            _write_sample(dup_name, img_bytes, lines)
-            included += 1
-            positives += 1
-
     with open(os.path.join(tmp_dir, "classes.txt"), "w") as f:
-        f.write("\n".join(CLASSES) + "\n")
+        f.write("\n".join(active_classes) + "\n")
 
     with zipfile.ZipFile(output_path, "w", zipfile.ZIP_DEFLATED) as zf:
         for root, _dirs, files in os.walk(tmp_dir):

@@ -38,7 +38,7 @@ import requests
 
 from app.config import STORAGE_ROOT
 from app.export_training import build_full_training_zip
-from app.labels import CLASSES
+from app.labels import CLASSES, DETECTION_CLASSES
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [train_vastai] %(message)s")
 log = logging.getLogger(__name__)
@@ -73,21 +73,26 @@ def read_state() -> dict:
         return {"status": "idle"}
 
 
-def start_training_async(api_key: str) -> bool:
+def start_training_async(api_key: str, collapse_identity: bool = False) -> bool:
     """Lance l'entraînement en arrière-plan si aucun n'est déjà en cours.
     Renvoie False (no-op) si un run est déjà actif - jamais deux
     entraînements vast.ai en parallèle (double facturation, et le
-    wait_for_result de l'un pourrait récupérer le résultat de l'autre)."""
+    wait_for_result de l'un pourrait récupérer le résultat de l'autre).
+
+    29.10, plan de scission détection/identité : collapse_identity=True
+    entraîne le Modèle 1 (Cat+Prey) au lieu du modèle combiné actuel."""
     if not _run_lock.acquire(blocking=False):
         return False
-    thread = threading.Thread(target=_run_training_locked, args=(api_key,), daemon=True)
+    thread = threading.Thread(
+        target=_run_training_locked, args=(api_key,), kwargs={"collapse_identity": collapse_identity}, daemon=True
+    )
     thread.start()
     return True
 
 
-def _run_training_locked(api_key: str):
+def _run_training_locked(api_key: str, collapse_identity: bool = False):
     try:
-        run_training(api_key)
+        run_training(api_key, collapse_identity=collapse_identity)
     except Exception as e:
         log.exception("Entraînement échoué")
         _write_state({"status": "error", "message": str(e)})
@@ -100,7 +105,16 @@ PAWS_REVIEW_URL = os.environ.get("PAWS_REVIEW_PUBLIC_URL", "https://kittyreview.
 UPLOAD_TOKEN = os.environ.get("MODEL_UPLOAD_TOKEN", "")
 
 GPU_NAME = os.environ.get("VAST_GPU_NAME", "RTX 3090")
-MAX_PRICE_PER_HOUR = float(os.environ.get("VAST_MAX_PRICE", "0.40"))
+# 25.10, Sid ("tant que ça coûte moins de 1 franc par entraînement, moi ça
+# me va" / "je préfère un peu plus cher mais que ça marche") - après deux
+# runs à ~0.14$/h (l'offre la moins chère de la soirée) bloqués 80 min
+# chacun pour zéro résultat : 0.40$/h ne laissait pas de marge pour des
+# offres plus fiables mais un peu plus chères. 0.75$/h couvre même le pire
+# cas (TIMEOUT_S = 80 min complet) sous 1 CHF (~1$), tout en restant très
+# au-dessus du palier ~0.13-0.15$/h qui a posé problème ce soir. Le tri
+# des offres (voir find_cheapest_offer) privilégie maintenant la
+# fiabilité, pas juste le prix, dans cette enveloppe.
+MAX_PRICE_PER_HOUR = float(os.environ.get("VAST_MAX_PRICE", "0.75"))
 # 19.10 (nuit), Sid ("je te laisse tester tout seul") - vrai échec en
 # direct, diagnostiqué par SSH sur l'instance : "OSError: [Errno 28] No
 # space left on device" pendant `pip install ultralytics`. L'image de base
@@ -151,7 +165,14 @@ TIMEOUT_S = 80 * 60  # au-delà, quelque chose s'est mal passé - on arrête les
 # un statut "running" côté vast.ai. Passe le contrôle de santé (pas
 # d'erreur OCI, juste injoignable) - exclu à la main, pas détectable
 # automatiquement avec la logique actuelle.
-PERMANENTLY_EXCLUDED_HOSTS = {85323, 155385}
+# 25.10 : hôte 135723 vu échouer 2 fois d'affilée avec la même erreur OCI
+# ("could not apply required modification to OCI specification") sur DEUX
+# instances différentes (57707153 puis 57709330) - même offre la moins
+# chère relouée à chaque nouveau run (confirmé dans les logs : même host_id
+# aux deux horodatages). exclude_host_ids (en mémoire, par run) ne protège
+# pas contre ça puisque chaque appel à /app-api/train/start repart d'un
+# set vide - seule cette liste persiste entre deux runs séparés.
+PERMANENTLY_EXCLUDED_HOSTS = {85323, 155385, 135723}
 
 # 19.10, Sid ("si on peut, par principe, exclure chine, russie, israel etc
 # ca m'arrange") - préférence personnelle, pas une question de fiabilité :
@@ -180,8 +201,14 @@ EXCLUDED_COUNTRIES = {"CN", "RU", "IL"}
 PREFERRED_HOSTS: set[int] = set()
 
 
-def _build_onstart_script() -> str:
-    names_yaml = "[" + ", ".join(CLASSES) + "]"
+def _build_onstart_script(collapse_identity: bool = False) -> str:
+    # 29.10, plan de scission détection/identité - collapse_identity=True
+    # entraîne le Modèle 1 (détection Cat+Prey) sur l'export à classes
+    # réduites (voir build_full_training_zip) au lieu des 5 classes
+    # actuelles. Défaut False : comportement inchangé, le bouton
+    # d'entraînement existant de Sid continue de produire le modèle
+    # combiné actuel tant qu'elle ne bascule pas explicitement.
+    names_yaml = "[" + ", ".join(DETECTION_CLASSES if collapse_identity else CLASSES) + "]"
     # 19.10 : clé API vast.ai jamais déposée ici - cette machine n'est pas
     # à moi, pas de raison qu'elle puisse s'auto-détruire ou agir en mon
     # nom sur mon compte. Elle pousse juste son résultat et s'arrête là ;
@@ -191,6 +218,16 @@ set -ex
 cd /workspace
 curl -sL -H "X-Upload-Token: {UPLOAD_TOKEN}" {PAWS_REVIEW_URL}/app-api/model/training-data -o data.zip
 mkdir -p data && cd data && unzip -q ../data.zip && cd ..
+# 25.10, Sid ("regarde sur le net besoin pourquoi ça marche pas") - deux
+# runs bloqués 80 min à gpu_util=0% sans la moindre erreur : Ultralytics
+# télécharge {YOLO_BASE_MODEL} depuis les releases GitHub au premier
+# `yolo train`, et les IP datacenter de vast.ai sont des candidates
+# plausibles à un rate-limit GitHub silencieux (pas d'erreur, juste un
+# blocage - exactement le symptôme observé, alors que le téléchargement
+# direct depuis FUNMEDIA a pris 1s). Le récupérer nous-mêmes avant - si le
+# fichier {YOLO_BASE_MODEL} existe déjà dans le dossier courant,
+# Ultralytics ne retente jamais son propre téléchargement.
+curl -sL -H "X-Upload-Token: {UPLOAD_TOKEN}" {PAWS_REVIEW_URL}/app-api/model/yolo-base-weights/{YOLO_BASE_MODEL} -o {YOLO_BASE_MODEL}
 pip install -q --no-cache-dir ultralytics
 cat > data.yaml << 'YAML'
 path: /workspace/data
@@ -240,6 +277,14 @@ def find_cheapest_offer(api_key: str, exclude_host_ids: set | None = None) -> di
     # fois de suite la même machine physique défaillante (confirmé en
     # vrai : host_id 85323 à chaque tentative). exclude_host_ids permet
     # de vraiment changer de machine, pas juste de numéro d'instance.
+    # 25.10, Sid ("je préfère un peu plus cher mais que ça marche") - le nom
+    # de la fonction ment un peu maintenant : parmi toutes les offres sous
+    # MAX_PRICE_PER_HOUR (déjà remonté pour laisser de la marge, voir sa
+    # propre définition), le tri privilégie la fiabilité d'abord
+    # (reliability2 desc), le prix seulement en départage. Avant ce soir
+    # c'était l'inverse (prix d'abord) - exactement ce qui a fait choisir
+    # deux fois de suite l'offre la moins chère de la soirée (~0.14$/h),
+    # qui s'est avérée mauvaise les deux fois.
     exclude_host_ids = (exclude_host_ids or set()) | PERMANENTLY_EXCLUDED_HOSTS
     resp = requests.post(
         f"{VAST_BASE}/bundles/",
@@ -250,7 +295,7 @@ def find_cheapest_offer(api_key: str, exclude_host_ids: set | None = None) -> di
             "reliability2": {"gte": 0.98},
             "dph_total": {"lte": MAX_PRICE_PER_HOUR},
             "rentable": {"eq": True},
-            "order": [["dph_total", "asc"]],
+            "order": [["reliability2", "desc"], ["dph_total", "asc"]],
         },
         timeout=30,
     )
@@ -274,7 +319,7 @@ def find_cheapest_offer(api_key: str, exclude_host_ids: set | None = None) -> di
     return best
 
 
-def create_instance(api_key: str, offer_id: int) -> int:
+def create_instance(api_key: str, offer_id: int, collapse_identity: bool = False) -> int:
     resp = requests.put(
         f"{VAST_BASE}/asks/{offer_id}/",
         headers=_headers(api_key),
@@ -287,7 +332,7 @@ def create_instance(api_key: str, offer_id: int) -> int:
             # propre image officielle (vastai/pytorch) est faite pour.
             "image": "vastai/pytorch:latest",
             "disk": DISK_GB,
-            "onstart": _build_onstart_script(),
+            "onstart": _build_onstart_script(collapse_identity=collapse_identity),
             "runtype": "ssh",
             # 19.10 : sans ça, l'instance reste créée mais à l'arrêt - vrai
             # bug trouvé en vrai (confirmé par Sid : "État prévu : arrêté"
@@ -382,11 +427,16 @@ def wait_for_result(
     return None
 
 
-def run_training(api_key: str) -> dict:
+def run_training(api_key: str, collapse_identity: bool = False) -> dict:
     """Cœur partagé entre l'usage CLI (__main__ plus bas) et le bouton web
     (main.py:/app-api/train/start, via start_training_async) - écrit son
     état dans STATE_PATH à chaque étape pour que le frontend puisse suivre
-    sans dépendre des logs serveur."""
+    sans dépendre des logs serveur.
+
+    29.10, plan de scission détection/identité : collapse_identity=True
+    entraîne le Modèle 1 (Cat+Prey) au lieu du modèle combiné actuel à 5
+    classes. Défaut False - le bouton web existant de Sid n'est pas
+    affecté tant qu'il n'est pas explicitement rebranché dessus."""
     if not UPLOAD_TOKEN:
         msg = "MODEL_UPLOAD_TOKEN non configuré côté serveur, abandon."
         log.error(msg)
@@ -395,7 +445,7 @@ def run_training(api_key: str) -> dict:
 
     _write_state({"status": "running", "step": "export", "started_at": time.time()})
     log.info("Construction du zip d'entraînement complet...")
-    stats = build_full_training_zip(TRAINING_DATA_PATH)
+    stats = build_full_training_zip(TRAINING_DATA_PATH, collapse_identity=collapse_identity)
     log.info("Zip prêt : %s", stats)
     if stats["images"] == 0:
         msg = "Aucune capture validée/corrigée à entraîner, abandon."
@@ -418,7 +468,7 @@ def run_training(api_key: str) -> dict:
         })
         offer = find_cheapest_offer(api_key, exclude_host_ids=excluded_hosts)
         try:
-            instance_id = create_instance(api_key, offer["id"])
+            instance_id = create_instance(api_key, offer["id"], collapse_identity=collapse_identity)
         except requests.HTTPError as e:
             # 19.10, Sid (vrai échec en live, bouton) : "no_such_ask... not
             # available" - une offre vue dans la recherche peut être louée

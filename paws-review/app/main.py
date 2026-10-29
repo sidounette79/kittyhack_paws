@@ -672,10 +672,16 @@ VAST_API_KEY = os.environ.get("VAST_API_KEY", "")
 
 
 @app.post("/app-api/train/start")
-def train_start():
+def train_start(collapse_identity: bool = False):
+    # 29.10, plan de scission détection/identité - collapse_identity=True
+    # entraîne le Modèle 1 (Cat+Prey) au lieu du modèle combiné actuel à
+    # 5 classes. Défaut False : le bouton web existant de Sid continue de
+    # produire exactement le même modèle qu'avant, tant qu'elle n'appelle
+    # pas explicitement ce paramètre (pas encore de bouton dédié dans
+    # l'UI - à ajouter une fois le jalon de validation Phase 1 prêt).
     if not VAST_API_KEY:
         raise HTTPException(500, "VAST_API_KEY non configurée côté serveur")
-    started = start_training_async(VAST_API_KEY)
+    started = start_training_async(VAST_API_KEY, collapse_identity=collapse_identity)
     if not started:
         raise HTTPException(409, "Un entraînement est déjà en cours")
     return {"ok": True}

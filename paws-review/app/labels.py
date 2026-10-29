@@ -16,9 +16,27 @@ modèle actuel (lue depuis le classes.txt réel de LabelStudio le 18.10,
 n'en fait pas partie : c'est une étiquette de triage côté Paws Review, pas
 une classe du modèle - une boîte "Autre" est exclue de l'export (ni
 positif pour une classe qui n'existe pas, ni négatif).
+
+29.10, plan de scission détection/identité (voir
+/volume1/docker/claude-home-data/plans/twinkly-percolating-wombat.md) :
+CLASSES/canonicalize() restent INCHANGÉS - c'est ce que Sid voit et
+corrige à l'écran (elle continue de voir/choisir "Boubou", jamais
+"Cat"). DETECTION_CLASSES/IDENTITY_CLASSES sont une vue dérivée, utilisée
+uniquement par l'export vers le Modèle 1 (export_training.py, mode
+collapse_identity) - jamais par l'UI de révision ni par
+rebalance_counts()/review_queue() ci-dessus, qui continuent de raisonner
+avec les 4 identités de chat réelles.
 """
 
 CLASSES = ["Pookie", "Patoune", "Nala", "Boubou", "Prey"]
+
+# Classes que le Modèle 1 (détection pure) apprend réellement - toute
+# identité de chat se remappe vers "Cat" à l'export, "Prey" reste "Prey".
+DETECTION_CLASSES = ["Cat", "Prey"]
+
+# Classes que le Modèle 2 (identité par embeddings) doit distinguer -
+# jamais "Prey" (pas une identité de chat).
+IDENTITY_CLASSES = ["Pookie", "Patoune", "Nala", "Boubou"]
 
 _SYNONYMS = {
     "prey": "Prey",
