@@ -111,7 +111,16 @@ def rebalance_counts():
     de 200 : le lot 'kept' pas encore promu + tout ce qui est déjà
     confirmed/corrected, quel que soit le chemin pris pour y arriver -
     mutuellement exclusif par review_status, pas de double-compte
-    possible."""
+    possible.
+    29.10, Sid ("99.9% du temps c'est Patoune qui rapporte des proies,
+    ça a fait gonflé mon chiffre") - une capture "Patoune" qui a AUSSI
+    une boîte Prey compte réellement vers ce total (utile au Modèle 1),
+    mais ne doit jamais compter vers le lot propre destiné au futur
+    modèle d'identité (Modèle 2) - voir le plan de scission détection/
+    identité. `kittyflap_no_prey`/`reolink_manual_no_prey` reproduisent
+    le même compte en excluant toute capture où 'Prey' coexiste dans
+    `classes_here` - champs ajoutés, les clés existantes ne changent
+    pas de sens."""
     with get_conn() as conn:
         rows = conn.execute(
             """SELECT c.id, c.source, c.detected_objects_json
@@ -119,16 +128,22 @@ def rebalance_counts():
                WHERE (c.review_status = 'pending' AND c.rebalance_bucket = 'kept')
                   OR c.review_status IN ('confirmed', 'corrected')"""
         ).fetchall()
-        groups = {c: {"kittyflap": 0, "reolink_manual": 0} for c in list(CLASSES) + ["Negatif"]}
+        groups = {
+            c: {"kittyflap": 0, "reolink_manual": 0, "kittyflap_no_prey": 0, "reolink_manual_no_prey": 0}
+            for c in list(CLASSES) + ["Negatif"]
+        }
         for row in rows:
             boxes = effective_boxes(conn, row["id"], row["detected_objects_json"])
             classes_here = {canonicalize(b.get("label")) for b in boxes} - {None}
             if not classes_here:
                 classes_here = {"Negatif"}
             bucket = "kittyflap" if row["source"] == "kittyflap" else "reolink_manual"
+            has_prey = "Prey" in classes_here
             for cls in classes_here:
                 if cls in groups:
                     groups[cls][bucket] += 1
+                    if not has_prey:
+                        groups[cls][f"{bucket}_no_prey"] += 1
     return groups
 
 
@@ -168,7 +183,8 @@ def rebalance_promote():
 def review_queue(
     cat_name: str | None = None, source: str | None = None,
     status_group: str | None = None, prey_only: bool = False,
-    negative_only: bool = False, in_model: str | None = None,
+    negative_only: bool = False, exclude_prey: bool = False,
+    in_model: str | None = None,
     training_mode: bool = False, rebalance: bool = False, limit: int = 100,
 ):
     query = """SELECT c.* FROM captures c"""
@@ -280,7 +296,14 @@ def review_queue(
     # ci-dessus faisait planter "Validées"/"Écartées"/"Archivées" en 500
     # (params.append(limit) tournait quand même, sans "?" correspondant
     # dans la requête, confirmé en testant "Archivées" juste après coup).
-    needs_python_filter = negative_only or filter_prey_label
+    # 29.10, Sid ("comment je rajoute les 84 patoune sans proie pour que ca
+    # ne se mélange pas avec les photos utilisées pour modele 1") - inverse
+    # de prey_only : exclut toute capture dont une boîte Prey coexiste,
+    # pour confirmer spécifiquement des captures "chat seul" destinées au
+    # lot propre du futur Modèle 2 (identité). Même mécanisme Python que
+    # negative_only/filter_prey_label - nécessite effective_boxes, pas
+    # filtrable en SQL pur.
+    needs_python_filter = negative_only or filter_prey_label or exclude_prey
     if not needs_python_filter:
         query += " LIMIT ?"
         params.append(limit)
@@ -295,6 +318,8 @@ def review_queue(
             if negative_only and classes_here:
                 continue
             if filter_prey_label and "Prey" not in classes_here:
+                continue
+            if exclude_prey and "Prey" in classes_here:
                 continue
             result.append(dict(row))
             if len(result) >= limit:
