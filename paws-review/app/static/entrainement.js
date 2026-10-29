@@ -39,6 +39,7 @@ async function init() {
   await loadQueue();
   await checkExportStatus();
   await checkTrainStatus();
+  await checkIdentityTrainStatus();
 }
 
 // --- Export ----------------------------------------------------------
@@ -143,6 +144,52 @@ function renderTrainBar(state) {
       ${bothButtons}`;
   } else {
     bar.innerHTML = bothButtons;
+  }
+}
+
+// --- Entraînement identité (Modèle 2) -----------------------------------
+// 29.10, plan de scission détection/identité (Phase 2) - entraînement
+// complètement indépendant du Modèle 1 (état séparé côté serveur, voir
+// train_vastai_identity.py), peut tourner en même temps ou pas.
+let identityTrainPollTimer = null;
+
+async function checkIdentityTrainStatus() {
+  const state = await api('/app-api/identity-train/status');
+  renderIdentityTrainBar(state);
+  if (state.status === 'running') {
+    if (!identityTrainPollTimer) identityTrainPollTimer = setInterval(checkIdentityTrainStatus, 10000);
+  } else if (identityTrainPollTimer) {
+    clearInterval(identityTrainPollTimer);
+    identityTrainPollTimer = null;
+  }
+}
+
+async function startIdentityTraining() {
+  try {
+    await api('/app-api/identity-train/start', { method: 'POST' });
+  } catch (e) {
+    // 409 = déjà en cours - pas une vraie erreur, juste resynchroniser l'affichage
+  }
+  await checkIdentityTrainStatus();
+}
+
+function renderIdentityTrainBar(state) {
+  const bar = document.getElementById('identity-train-bar');
+  const button = `<button onclick="startIdentityTraining()" title="Backbone MobileNetV3 + tête ArcFace sur les crops recadrés, voir le plan de scission détection/identité - pas encore testé sur une vraie machine louée">Lancer un entraînement Modèle 2 (identité)</button>`;
+  if (state.status === 'running') {
+    bar.innerHTML = `<span class="export-msg">🧠 Entraînement identité en cours (${state.elapsed ?? 0}s)...</span>
+      <button onclick="resetStuckState('identity_train', checkIdentityTrainStatus)" title="Si ça semble bloqué après un redéploiement">Réinitialiser</button>`;
+  } else if (state.status === 'success') {
+    const when = state.finished_at ? new Date(state.finished_at * 1000).toLocaleString('fr-CH') : '';
+    bar.innerHTML = `
+      <span class="export-msg">✓ Modèle identité entraîné (${state.crops} crops, ${when}) - pas encore branché à Kittyhack (Phase 3 du plan)</span>
+      ${button}`;
+  } else if (state.status === 'error') {
+    bar.innerHTML = `
+      <span class="export-msg export-error">Échec de l'entraînement identité : ${state.message || 'erreur inconnue'}</span>
+      ${button}`;
+  } else {
+    bar.innerHTML = button;
   }
 }
 

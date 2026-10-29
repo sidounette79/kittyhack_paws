@@ -23,6 +23,9 @@ from app.model_review import STATE_PATH as MODEL_REVIEW_STATE_PATH
 from app.train_vastai import read_state as read_training_state
 from app.train_vastai import start_training_async
 from app.train_vastai import STATE_PATH as TRAIN_STATE_PATH
+from app.train_vastai_identity import read_state as read_identity_training_state
+from app.train_vastai_identity import start_identity_training_async
+from app.train_vastai_identity import STATE_PATH as IDENTITY_TRAIN_STATE_PATH
 
 app = FastAPI(title="Paws Review")
 
@@ -718,6 +721,75 @@ async def model_upload(file: UploadFile = File(...), x_upload_token: str = Heade
     return {"ok": True, "installed_as": ts}
 
 
+# 29.10, plan de scission détection/identité (Phase 2) - mêmes patrons
+# que /model/training-data et /model/upload juste au-dessus, pour le
+# Modèle 2 (identité). Jamais les mêmes constantes/répertoires que le
+# Modèle 1 - voir train_vastai_identity.py pour la raison (les deux
+# entraînements ne doivent jamais pouvoir se marcher dessus).
+IDENTITY_TRAINED_MODELS_DIR = os.path.join(STORAGE_ROOT, "trained_identity_models")
+IDENTITY_MODELS_DIR = os.environ.get("KITTYHACK_IDENTITY_MODELS_DIR", os.path.join(STORAGE_ROOT, "identity_models"))
+IDENTITY_TRAINING_DATA_PATH = os.path.join(STORAGE_ROOT, "identity_training_data.zip")
+REQUIRED_IDENTITY_MODEL_FILES = ["identity_model.onnx", "identity_labels.txt", "info.json"]
+
+
+@app.get("/app-api/identity-model/training-data")
+def identity_model_training_data(x_upload_token: str = Header(default="")):
+    if MODEL_UPLOAD_TOKEN and x_upload_token != MODEL_UPLOAD_TOKEN:
+        raise HTTPException(403, "jeton invalide")
+    if not os.path.isfile(IDENTITY_TRAINING_DATA_PATH):
+        raise HTTPException(404, "Pas de zip d'entraînement identité prêt")
+    return FileResponse(IDENTITY_TRAINING_DATA_PATH, filename="identity_training_data.zip", media_type="application/zip")
+
+
+@app.post("/app-api/identity-model/upload")
+async def identity_model_upload(file: UploadFile = File(...), x_upload_token: str = Header(default="")):
+    if MODEL_UPLOAD_TOKEN and x_upload_token != MODEL_UPLOAD_TOKEN:
+        raise HTTPException(403, "jeton invalide")
+
+    os.makedirs(IDENTITY_TRAINED_MODELS_DIR, exist_ok=True)
+    ts = time.strftime("%Y%m%d_%H%M%S")
+    zip_path = os.path.join(IDENTITY_TRAINED_MODELS_DIR, f"identity_model_{ts}.zip")
+    with open(zip_path, "wb") as f:
+        f.write(await file.read())
+
+    try:
+        with zipfile.ZipFile(zip_path) as zf:
+            names = zf.namelist()
+            missing = [r for r in REQUIRED_IDENTITY_MODEL_FILES if r not in names]
+            if missing:
+                raise HTTPException(400, f"fichiers manquants dans le zip : {missing}")
+            os.makedirs(IDENTITY_MODELS_DIR, exist_ok=True)
+            target_dir = os.path.join(IDENTITY_MODELS_DIR, ts)
+            os.makedirs(target_dir, exist_ok=True)
+            zf.extractall(target_dir)
+    except zipfile.BadZipFile:
+        raise HTTPException(400, "zip invalide")
+
+    return {"ok": True, "installed_as": ts}
+
+
+@app.post("/app-api/identity-train/start")
+def identity_train_start():
+    # 29.10 - même garde-fou que /train/start (Modèle 1) : verrou propre
+    # (start_identity_training_async a son propre _run_lock, voir
+    # train_vastai_identity.py), jamais le même que le Modèle 1 - les deux
+    # peuvent en théorie tourner en parallèle (budgets Vast.ai séparés,
+    # résultats dans des répertoires séparés), pas une nécessité de les
+    # rendre mutuellement exclusifs comme c'est le cas pour les 2 modes du
+    # Modèle 1 (qui partagent le même script/état).
+    if not VAST_API_KEY:
+        raise HTTPException(500, "VAST_API_KEY non configurée côté serveur")
+    started = start_identity_training_async(VAST_API_KEY)
+    if not started:
+        raise HTTPException(409, "Un entraînement identité est déjà en cours")
+    return {"ok": True}
+
+
+@app.get("/app-api/identity-train/status")
+def identity_train_status():
+    return read_identity_training_state()
+
+
 # 20.10, Sid ("je peux toujours faire une modif en live sur la vidéo...
 # qu'elle parte dans paws review") - LabelStudio (décommissionné ce soir)
 # était la destination de l'action "send" de la page Parcours (Kittyhack),
@@ -945,6 +1017,7 @@ def model_review_reset():
 _RESETTABLE_STATES = {
     "compare": COMPARE_STATE_PATH,
     "train": TRAIN_STATE_PATH,
+    "identity_train": IDENTITY_TRAIN_STATE_PATH,
     "model_review": MODEL_REVIEW_STATE_PATH,
     "export": EXPORT_STATE_PATH,
 }
