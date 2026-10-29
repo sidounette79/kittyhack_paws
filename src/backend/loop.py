@@ -1689,6 +1689,23 @@ def backend_main(
                                 f"open for '{current_name}'. Finalizing that block now instead of "
                                 "merging this cat's motion into it."
                             )
+                            # 29.10, Sid ("je vois aucune proie indiquée sur la
+                            # vidéo" alors que les logs [MODEL] montraient bien
+                            # Patoune+Prey juste avant) - ce chemin de split
+                            # était le SEUL des 4 appelant _finalize_motion_block()
+                            # sans d'abord rafraîchir last_motion_outside_tm (les
+                            # 3 autres le font juste avant leur propre appel).
+                            # Conséquence vérifiée en prod: cette valeur restait
+                            # celle d'un événement bien antérieur (écart >1h
+                            # observé), donc plus ancienne que first_motion_outside_tm
+                            # - la fenêtre (log_start_tm, last_motion_outside_tm)
+                            # passée à image_buffer.get_filtered_ids() était donc
+                            # inversée et ne pouvait jamais matcher une image.
+                            # Résultat: "Writing 0 images" à chaque split par
+                            # identité vidéo (confirmé sur 20 blocs consécutifs
+                            # d'affilée le 28.10 07h10-07h12) - perte silencieuse
+                            # des frames réellement détectées, proies incluses.
+                            last_motion_outside_tm = _wall()
                             _finalize_motion_block("different_cat_detected_video")
                             # Same safety net as the MAX_MOTION_BLOCK_SECONDS fix above: if
                             # outside motion is still active, immediately start a new block
