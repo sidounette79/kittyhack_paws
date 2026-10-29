@@ -154,6 +154,7 @@ def conclude_motion_event_type(
     first_motion_outside_mono: float,
     first_motion_inside_raw_mono: float,
     unlock_inside_tm: float,
+    unlock_outside_tm: float,
     tag_id,
     no_mouse_detected: bool,
 ) -> str:
@@ -179,12 +180,36 @@ def conclude_motion_event_type(
     # 0.0 guard was added earlier today to loop.py's own, SEPARATE log-only
     # "Motion event conclusion" message, which only fixed what got printed,
     # never this one.
+    #
+    # 29.10, Sid ("Boubou est entré" alors qu'il était assis dehors, à
+    # distance - "le message doit venir du RFID + aimants, la caméra en
+    # backup si les deux aimants ont bougé mais RFID pas scanné") - this
+    # branch used to conclude a full confirmed CAT_WENT_INSIDE/OUTSIDE from
+    # bare PIR timing correlation alone, no chip read or magnet movement
+    # required. Confirmed via a live false positive: Boubou seen outside
+    # once at 09:13:16 (video-only, no chip), a lone/spurious inside PIR
+    # blip somewhere in the next 60s - 'tag_id_valid': False and
+    # 'inside_locked': True logged continuously the whole time, the magnet
+    # never actually unlocked. Now requires real evidence of an actual
+    # passage - a chip read for this block, or the corresponding magnet
+    # having genuinely unlocked - before claiming a confirmed crossing;
+    # falls back to the existing motion-only outcome otherwise (same
+    # outcome space as the branch above, nothing new to teach the
+    # frontend/notifications about).
     if first_motion_outside_mono != 0.0 and first_motion_outside_mono < first_motion_inside_raw_mono:
+        if tag_id is not None or unlock_inside_tm > first_motion_outside_mono:
+            if no_mouse_detected:
+                return EventType.CAT_WENT_INSIDE
+            return EventType.CAT_WENT_INSIDE_WITH_MOUSE
         if no_mouse_detected:
-            return EventType.CAT_WENT_INSIDE
-        return EventType.CAT_WENT_INSIDE_WITH_MOUSE
+            return EventType.MOTION_OUTSIDE_ONLY
+        return EventType.MOTION_OUTSIDE_WITH_MOUSE
 
-    return EventType.CAT_WENT_OUTSIDE
+    if tag_id is not None or unlock_outside_tm > first_motion_inside_raw_mono:
+        return EventType.CAT_WENT_OUTSIDE
+    if no_mouse_detected:
+        return EventType.MOTION_OUTSIDE_ONLY
+    return EventType.MOTION_OUTSIDE_WITH_MOUSE
 
 
 def time_in_exit_ranges(

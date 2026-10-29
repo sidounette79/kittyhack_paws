@@ -523,6 +523,7 @@ def backend_main(
             first_motion_outside_mono=first_motion_outside_mono,
             first_motion_inside_raw_mono=first_motion_inside_raw_mono,
             unlock_inside_tm=unlock_inside_tm,
+            unlock_outside_tm=unlock_outside_tm,
             tag_id=tag_id,
             no_mouse_detected=mouse_check_conditions["no_mouse_detected"],
         )
