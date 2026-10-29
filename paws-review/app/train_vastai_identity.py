@@ -139,7 +139,7 @@ mkdir -p data && cd data && unzip -q ../data.zip && cd ..
 # disponibles via le python3 par défaut malgré le nom de l'image (même
 # piège que ultralytics côté Modèle 1, qui s'installe explicitement lui
 # aussi - jamais supposer qu'une dépendance est déjà là).
-pip install -q --no-cache-dir torch torchvision numpy
+pip install -q --no-cache-dir torch torchvision numpy onnx onnxscript
 cat > train_identity.py << 'PYEOF'
 import json, math, datetime, os
 import numpy as np
