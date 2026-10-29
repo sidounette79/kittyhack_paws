@@ -134,6 +134,12 @@ set -ex
 cd /workspace
 curl -sL -H "X-Upload-Token: {UPLOAD_TOKEN}" {PAWS_REVIEW_URL}/app-api/identity-model/training-data -o data.zip
 mkdir -p data && cd data && unzip -q ../data.zip && cd ..
+# 29.10, premier run réel : "ModuleNotFoundError: No module named 'torch'"
+# sur l'image vastai/pytorch - torch/torchvision ne sont PAS garantis
+# disponibles via le python3 par défaut malgré le nom de l'image (même
+# piège que ultralytics côté Modèle 1, qui s'installe explicitement lui
+# aussi - jamais supposer qu'une dépendance est déjà là).
+pip install -q --no-cache-dir torch torchvision numpy
 cat > train_identity.py << 'PYEOF'
 import json, math, datetime, os
 import numpy as np
