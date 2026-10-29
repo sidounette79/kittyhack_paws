@@ -1116,7 +1116,38 @@ def backend_main(
                         f"block '{motion_block_id}' was still open for tag '{current_block_rfid}'. "
                         "Finalizing that block now instead of merging this cat's motion into it."
                     )
+                    # 29.10, Sid ("fais les correctifs qu'ils soient majeurs ou
+                    # mineurs") - ce split RFID avait les deux mêmes bugs que
+                    # celui par identité vidéo (plus bas, "different_cat_
+                    # detected_video") : (1) last_motion_outside_tm jamais
+                    # rafraîchi avant ce _finalize_motion_block(), donc la
+                    # fenêtre passée à image_buffer.get_filtered_ids() pouvait
+                    # s'inverser et perdre les images en silence si ce chemin
+                    # se déclenche alors que le mouvement extérieur dure
+                    # depuis un moment ; (2) aucun redémarrage de bloc après
+                    # coup - si le mouvement reste continu (le "standoff à
+                    # deux chats" déjà documenté), plus aucun bloc ne se
+                    # rouvrait avant un vrai front montant 0→1, qui ne vient
+                    # jamais tant que les deux chats restent présents (et gèle
+                    # au passage le garde-fou MAX_MOTION_BLOCK_SECONDS, lui
+                    # aussi conditionné par motion_block_active). Les deux
+                    # corrigés en miroir exact du chemin vidéo.
+                    last_motion_outside_tm = _wall()
                     _finalize_motion_block("different_cat_detected")
+                    if motion_outside == 1:
+                        motion_block_id += 1
+                        _timeline_start_motion_block(start_with_inside=False)
+                        if use_camera_for_motion:
+                            first_motion_outside_tm = _wall() - 0.5
+                            first_motion_outside_mono = _mono() - 0.5
+                        else:
+                            first_motion_outside_tm = _wall()
+                            first_motion_outside_mono = _mono()
+                        current_block_rfid = tag_id
+                        logging.info(
+                            "[BACKEND] Motion still active outside after RFID-based split; "
+                            f"immediately starting a new block (Block ID: {motion_block_id})."
+                        )
                 elif motion_block_active and current_block_rfid is None:
                     current_block_rfid = tag_id
 
@@ -2201,12 +2232,26 @@ def backend_main(
                 with door_unlock_source_lock:
                     door_unlock_source["inside"] = None
 
-        if (unlock_inside and not _motion_processing_suspended()) or manual_door_override['unlock_inside']:
-            logging.info(f"[BACKEND] Door unlock requested {'(manual override)' if manual_door_override['unlock_inside'] else ''}")
+        # 29.10, Sid ("fais les correctifs qu'ils soient majeurs ou mineurs")
+        # - les 4 flags ci-dessous (lu puis remis à False en fin de bloc,
+        # parfois après pas mal de logique) étaient lus et modifiés depuis
+        # plusieurs threads (API REST/webui, pont MQTT, Presence) sans
+        # aucune synchronisation. Fenêtre de course réelle mais très étroite
+        # : une deuxième commande arrivant exactement entre la lecture en
+        # haut du bloc et le `= False` en bas aurait été silencieusement
+        # écrasée/perdue au lieu d'être traitée au tour suivant. Capturer
+        # puis effacer le flag en deux lignes adjacentes, tout en haut,
+        # avant tout traitement, ramène cette fenêtre au strict minimum
+        # (la logique ci-dessous utilise désormais l'instantané local, plus
+        # jamais une relecture du dict partagé).
+        override_unlock_inside = manual_door_override['unlock_inside']
+        manual_door_override['unlock_inside'] = False
+        if (unlock_inside and not _motion_processing_suspended()) or override_unlock_inside:
+            logging.info(f"[BACKEND] Door unlock requested {'(manual override)' if override_unlock_inside else ''}")
             logging.debug(f"[BACKEND] Motion outside: {motion_outside}, Motion inside: {motion_inside}, Tag ID: {tag_id}, Tag valid: {tag_id_valid}, Motion block ID: {motion_block_id}, Images with mouse: {len(ids_with_mouse)}, Images in current block: {len(ids_of_current_motion_block)} ({ids_of_current_motion_block})")
-            if manual_door_override['unlock_inside'] and magnets.get_inside_state():
+            if override_unlock_inside and magnets.get_inside_state():
                 logging.info("[BACKEND] Manual override: Inside door is already open.")
-            elif manual_door_override['unlock_inside'] and (magnets.get_outside_state() or magnets.check_queued("unlock_outside")):
+            elif override_unlock_inside and (magnets.get_outside_state() or magnets.check_queued("unlock_outside")):
                 # 09.10, Sid (Pi crashes repeatedly correlated with using the
                 # manual Presence-page buttons, confirmed via a live timeline:
                 # "Extérieur ouvert" immediately followed by "Intérieur ouvert
@@ -2223,10 +2268,10 @@ def backend_main(
                 magnets.empty_queue()
                 magnets.queue_command("unlock_inside")
                 unlock_inside_tm = _mono()
-                _timeline_log_inside_open(manual=bool(manual_door_override['unlock_inside']))
+                _timeline_log_inside_open(manual=bool(override_unlock_inside))
                 with door_unlock_source_lock:
-                    door_unlock_source["inside"] = "manual" if manual_door_override['unlock_inside'] else "auto"
-                if manual_door_override['unlock_inside']:
+                    door_unlock_source["inside"] = "manual" if override_unlock_inside else "auto"
+                if override_unlock_inside:
                     inside_manually_unlocked = True
                     # Only annotate if a real motion event is currently active.
                     if first_motion_outside_mono > 0.0:
@@ -2240,10 +2285,10 @@ def backend_main(
                     # entry-passage detection so the cat finishing its entry is not mistaken for an exit.
                     entry_unlocked_in_block = True
                     entry_unlocked_mono = _mono()
-            
-            manual_door_override['unlock_inside'] = False
 
-        if manual_door_override['unlock_outside']:
+        override_unlock_outside = manual_door_override['unlock_outside']
+        manual_door_override['unlock_outside'] = False
+        if override_unlock_outside:
             if magnets.get_outside_state():
                 logging.info("[BACKEND] Manual override: Outside door is already open.")
                 outside_manually_unlocked = True
@@ -2264,14 +2309,14 @@ def backend_main(
                 with door_unlock_source_lock:
                     door_unlock_source["outside"] = "manual"
 
-            manual_door_override['unlock_outside'] = False
-
         # 07.09, Sid: manual_door_override['lock_outside'] was set by the REST
         # API/MQTT (src/api.py's door_lock_outside) but never read anywhere in
         # this loop - the flag was set and silently forgotten, so "lock
         # outside" from the UI/API never actually reached the magnet. Only
         # the automatic max-unlock-time timeout (below) ever locked it.
-        if manual_door_override['lock_outside']:
+        override_lock_outside = manual_door_override['lock_outside']
+        manual_door_override['lock_outside'] = False
+        if override_lock_outside:
             if magnets.get_outside_state():
                 logging.info("[BACKEND] Manual override: Locking outside door")
                 magnets.empty_queue()
@@ -2283,9 +2328,9 @@ def backend_main(
                 logging.info("[BACKEND] Manual override: Outside door is already locked.")
             outside_manually_unlocked = False
 
-            manual_door_override['lock_outside'] = False
-
-        if manual_door_override['lock_inside']:
+        override_lock_inside = manual_door_override['lock_inside']
+        manual_door_override['lock_inside'] = False
+        if override_lock_inside:
             if magnets.get_inside_state():
                 logging.info("[BACKEND] Manual override: Locking inside door")
                 magnets.empty_queue()
@@ -2297,7 +2342,6 @@ def backend_main(
                 logging.info("[BACKEND] Manual override: Inside door is already locked.")
             inside_manually_unlocked = False
             inside_manually_locked_tm = _mono()  # Set the timestamp when manually locked
-            manual_door_override['lock_inside'] = False
             # Only annotate if a real motion event is currently active.
             if first_motion_outside_mono > 0.0:
                 flag = str(EventType.MANUALLY_LOCKED)

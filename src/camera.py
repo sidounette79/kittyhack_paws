@@ -818,115 +818,134 @@ class ImageBuffer:
         """Initialize an empty buffer."""
         self._buffer: List[ImageBufferElement] = []
         self._next_id = 0
+        # 29.10, Sid ("fais les correctifs qu'ils soient majeurs ou mineurs")
+        # - ce buffer est un singleton module-level réellement partagé entre
+        # le thread caméra/modèle (model_handler.py, append() en continu,
+        # y compris l'éviction FIFO ci-dessous) et la boucle principale de
+        # loop.py (lecture/mutation en continu) - deux threads concurrents
+        # pour de vrai, pas juste en théorie. Le GIL empêche un crash, mais
+        # pas une course au même instant (ex: pop(0) d'un côté pendant une
+        # itération de l'autre) qui pourrait sauter ou compter un élément en
+        # double de façon intermittente. RLock (pas Lock) car
+        # get_filtered_ids_recent() appelle get_filtered_ids_mono(), un autre
+        # méthode déjà verrouillée, depuis le même thread appelant.
+        self._lock = threading.RLock()
 
-    def append(self, timestamp: float, original_image: bytes | None, modified_image: bytes | None, 
+    def append(self, timestamp: float, original_image: bytes | None, modified_image: bytes | None,
                mouse_probability: float, no_mouse_probability: float, own_cat_probability: float, detected_objects: List[DetectedObject] = None,
                timestamp_mono: float | None = None):
         """Append a new inference frame (drops oldest when full)."""
-        # --- Periodic logging for discarded elements ---
-        if not hasattr(self, '_last_log_time'):
-            self._last_log_time = timestamp
-            self._appended_count = 0
-            self._max_mouse_prob = 0.0
-            self._max_no_mouse_prob = 0.0
-            self._max_own_cat_prob = 0.0
-            self._discarded_count = 0
-            self._last_discard_log_time = timestamp
-
-        if len(self._buffer) >= self.MAX_IMAGE_BUFFER_SIZE:
-            self._buffer.pop(0)
-            self._discarded_count += 1
-
-        element = ImageBufferElement(
-            self._next_id,
-            0,
-            timestamp,
-            original_image,
-            modified_image,
-            mouse_probability,
-            no_mouse_probability,
-            own_cat_probability,
-            detected_objects=detected_objects,
-            timestamp_mono=timestamp_mono,
-        )
-        self._buffer.append(element)
-
-        self._appended_count += 1
-        self._max_mouse_prob = max(self._max_mouse_prob, mouse_probability)
-        self._max_no_mouse_prob = max(self._max_no_mouse_prob, no_mouse_probability)
-        self._max_own_cat_prob = max(self._max_own_cat_prob, own_cat_probability)
-
-        # Periodic combined log for appended images, max probabilities and discarded elements
-        if (timestamp - self._last_log_time >= 60) or (timestamp - self._last_discard_log_time >= 60):
-            parts = []
-
-            if timestamp - self._last_log_time >= 60:
-                parts.append(
-                    f"{self._appended_count} images appended in last 60s. "
-                    f"Max Mouse prob: {self._max_mouse_prob}, "
-                    f"Max No-mouse prob: {self._max_no_mouse_prob}, "
-                    f"Max Own-cat prob: {self._max_own_cat_prob}."
-                )
-
-            if timestamp - self._last_discard_log_time >= 60:
-                if self._discarded_count > 0:
-                    parts.append(
-                        f"{self._discarded_count} oldest elements discarded from buffer in last 60s."
-                    )
-                else:
-                    parts.append("No discarded elements in last 60s.")
-
-            logging.info("[IMAGEBUFFER] " + " ".join(parts))
-
-            # Reset counters/timestamps only for the sections we just logged
-            if timestamp - self._last_log_time >= 60:
+        with self._lock:
+            # --- Periodic logging for discarded elements ---
+            if not hasattr(self, '_last_log_time'):
                 self._last_log_time = timestamp
                 self._appended_count = 0
                 self._max_mouse_prob = 0.0
                 self._max_no_mouse_prob = 0.0
                 self._max_own_cat_prob = 0.0
-
-            if timestamp - self._last_discard_log_time >= 60:
-                self._last_discard_log_time = timestamp
                 self._discarded_count = 0
+                self._last_discard_log_time = timestamp
 
-        self._next_id += 1
+            if len(self._buffer) >= self.MAX_IMAGE_BUFFER_SIZE:
+                self._buffer.pop(0)
+                self._discarded_count += 1
+
+            element = ImageBufferElement(
+                self._next_id,
+                0,
+                timestamp,
+                original_image,
+                modified_image,
+                mouse_probability,
+                no_mouse_probability,
+                own_cat_probability,
+                detected_objects=detected_objects,
+                timestamp_mono=timestamp_mono,
+            )
+            self._buffer.append(element)
+
+            self._appended_count += 1
+            self._max_mouse_prob = max(self._max_mouse_prob, mouse_probability)
+            self._max_no_mouse_prob = max(self._max_no_mouse_prob, no_mouse_probability)
+            self._max_own_cat_prob = max(self._max_own_cat_prob, own_cat_probability)
+
+            # Periodic combined log for appended images, max probabilities and discarded elements
+            if (timestamp - self._last_log_time >= 60) or (timestamp - self._last_discard_log_time >= 60):
+                parts = []
+
+                if timestamp - self._last_log_time >= 60:
+                    parts.append(
+                        f"{self._appended_count} images appended in last 60s. "
+                        f"Max Mouse prob: {self._max_mouse_prob}, "
+                        f"Max No-mouse prob: {self._max_no_mouse_prob}, "
+                        f"Max Own-cat prob: {self._max_own_cat_prob}."
+                    )
+
+                if timestamp - self._last_discard_log_time >= 60:
+                    if self._discarded_count > 0:
+                        parts.append(
+                            f"{self._discarded_count} oldest elements discarded from buffer in last 60s."
+                        )
+                    else:
+                        parts.append("No discarded elements in last 60s.")
+
+                logging.info("[IMAGEBUFFER] " + " ".join(parts))
+
+                # Reset counters/timestamps only for the sections we just logged
+                if timestamp - self._last_log_time >= 60:
+                    self._last_log_time = timestamp
+                    self._appended_count = 0
+                    self._max_mouse_prob = 0.0
+                    self._max_no_mouse_prob = 0.0
+                    self._max_own_cat_prob = 0.0
+
+                if timestamp - self._last_discard_log_time >= 60:
+                    self._last_discard_log_time = timestamp
+                    self._discarded_count = 0
+
+            self._next_id += 1
 
     def pop(self) -> Optional[ImageBufferElement]:
         """Remove and return the last element, or None if empty."""
-        if self._buffer:
-            logging.info(f"[IMAGEBUFFER] Popped element with ID {self._buffer[-1].id} from the buffer.")
-            return self._buffer.pop()
-        return None
+        with self._lock:
+            if self._buffer:
+                logging.info(f"[IMAGEBUFFER] Popped element with ID {self._buffer[-1].id} from the buffer.")
+                return self._buffer.pop()
+            return None
 
     def clear(self):
         """Clear all elements in the buffer."""
-        self._buffer.clear()
+        with self._lock:
+            self._buffer.clear()
 
     def size(self) -> int:
         """Return the number of elements in the buffer."""
-        return len(self._buffer)
+        with self._lock:
+            return len(self._buffer)
 
     def get_all(self) -> List[ImageBufferElement]:
         """Return a shallow copy of all buffered elements."""
-        return self._buffer[:]
-    
+        with self._lock:
+            return self._buffer[:]
+
     def get_by_id(self, id: int) -> Optional[ImageBufferElement]:
         """Return the element with ``id``, or None."""
-        for element in self._buffer:
-            if element.id == id:
-                return element
-        return None
-    
+        with self._lock:
+            for element in self._buffer:
+                if element.id == id:
+                    return element
+            return None
+
     def delete_by_id(self, id: int) -> bool:
         """Delete the element with ``id``. Returns True if removed."""
-        for i, element in enumerate(self._buffer):
-            if element.id == id:
-                self._buffer.pop(i)
-                logging.debug(f"[IMAGEBUFFER] Deleted element with ID {id} from the buffer.")
-                return True
-        logging.warning(f"[IMAGEBUFFER] Element with ID {id} not found in the buffer. Nothing was deleted.")
-        return False
+        with self._lock:
+            for i, element in enumerate(self._buffer):
+                if element.id == id:
+                    self._buffer.pop(i)
+                    logging.debug(f"[IMAGEBUFFER] Deleted element with ID {id} from the buffer.")
+                    return True
+            logging.warning(f"[IMAGEBUFFER] Element with ID {id} not found in the buffer. Nothing was deleted.")
+            return False
     
     def get_filtered_ids(self, min_timestamp=0.0, 
                          max_timestamp=float('inf'), 
@@ -937,11 +956,12 @@ class ImageBuffer:
                          min_own_cat_probability=0.0,
                          max_own_cat_probability=100.0) -> List[int]:
         """Return IDs matching wall-clock time and probability filters."""
-        return [element.id for element in self._buffer if 
-                (min_timestamp <= element.timestamp <= max_timestamp) and 
-                (min_mouse_probability <= element.mouse_probability <= max_mouse_probability) and 
-                (min_no_mouse_probability <= element.no_mouse_probability <= max_no_mouse_probability) and
-                (min_own_cat_probability <= element.own_cat_probability <= max_own_cat_probability)]
+        with self._lock:
+            return [element.id for element in self._buffer if
+                    (min_timestamp <= element.timestamp <= max_timestamp) and
+                    (min_mouse_probability <= element.mouse_probability <= max_mouse_probability) and
+                    (min_no_mouse_probability <= element.no_mouse_probability <= max_no_mouse_probability) and
+                    (min_own_cat_probability <= element.own_cat_probability <= max_own_cat_probability)]
 
     def get_filtered_ids_mono(self, min_timestamp_mono=0.0,
                               max_timestamp_mono=float('inf'),
@@ -952,14 +972,15 @@ class ImageBuffer:
                               min_own_cat_probability=0.0,
                               max_own_cat_probability=100.0) -> List[int]:
         """Like ``get_filtered_ids``, but filter by monotonic timestamps."""
-        return [
-            element.id
-            for element in self._buffer
-            if (min_timestamp_mono <= float(getattr(element, "timestamp_mono", 0.0) or 0.0) <= max_timestamp_mono)
-            and (min_mouse_probability <= element.mouse_probability <= max_mouse_probability)
-            and (min_no_mouse_probability <= element.no_mouse_probability <= max_no_mouse_probability)
-            and (min_own_cat_probability <= element.own_cat_probability <= max_own_cat_probability)
-        ]
+        with self._lock:
+            return [
+                element.id
+                for element in self._buffer
+                if (min_timestamp_mono <= float(getattr(element, "timestamp_mono", 0.0) or 0.0) <= max_timestamp_mono)
+                and (min_mouse_probability <= element.mouse_probability <= max_mouse_probability)
+                and (min_no_mouse_probability <= element.no_mouse_probability <= max_no_mouse_probability)
+                and (min_own_cat_probability <= element.own_cat_probability <= max_own_cat_probability)
+            ]
 
     def get_filtered_ids_recent(self, seconds: float,
                                 min_mouse_probability=0.0,
@@ -987,12 +1008,13 @@ class ImageBuffer:
     
     def update_block_id(self, id: int, block_id: int) -> bool:
         """Set ``block_id`` on the element with ``id``. Returns True if found."""
-        for element in self._buffer:
-            if element.id == id:
-                element.block_id = block_id
-                return True
-        return False
-    
+        with self._lock:
+            for element in self._buffer:
+                if element.id == id:
+                    element.block_id = block_id
+                    return True
+            return False
+
     def update_tag_id(self, id: int, tag_id: str, is_real: bool = True) -> bool:
         """Set RFID ``tag_id`` on the element with ``id``. Returns True if found.
 
@@ -1000,16 +1022,18 @@ class ImageBuffer:
         chip read (caller passes the real ``tag_id``) or from the video
         model's guess (caller passes ``tag_id_from_video``) - see
         loop.py's two call sites."""
-        for element in self._buffer:
-            if element.id == id:
-                element.tag_id = tag_id
-                element.tag_id_is_real = is_real
-                return True
-        return False
-    
+        with self._lock:
+            for element in self._buffer:
+                if element.id == id:
+                    element.tag_id = tag_id
+                    element.tag_id_is_real = is_real
+                    return True
+            return False
+
     def get_by_block_id(self, block_id: int) -> List[ImageBufferElement]:
         """Return all elements belonging to ``block_id``."""
-        return [element for element in self._buffer if element.block_id == block_id]
+        with self._lock:
+            return [element for element in self._buffer if element.block_id == block_id]
 
 # Global variable declarations
 image_buffer = ImageBuffer()
