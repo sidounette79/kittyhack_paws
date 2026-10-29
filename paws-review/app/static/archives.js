@@ -20,6 +20,11 @@ let catFilter = null;
 let sourceFilter = null;
 let preyFilter = false;
 let excludePreyFilter = false;
+// 29.10, Sid ("je dois mettre un filtre validées/écartées dans Archives")
+// - "Archivées" mélange à dessein les deux (export_training.py pose
+// exported_at sur les deux à la fois), sans way de les distinguer avant
+// ça - voir archived_status côté main.py:review_queue().
+let archivedStatusFilter = null;
 
 function renderSubNav() {
   const sub = currentSub();
@@ -34,6 +39,13 @@ function renderFilterBar() {
   const catOptions = ['', ...cats.map(c => c.name), 'Prey'].map(n =>
     `<option value="${n}" ${catFilter === (n || null) ? 'selected' : ''}>${n || 'Tous les chats'}</option>`
   ).join('');
+  const sub = currentSub();
+  const archivedStatusSelect = sub.statusGroup === 'archived' ? `
+    <select onchange="setFilter('archivedStatus', this.value || null)" title="Archivées mélange validées et écartées au moment de l'export - filtre ici pour les distinguer">
+      <option value="" ${!archivedStatusFilter ? 'selected' : ''}>Validées + Écartées</option>
+      <option value="validated" ${archivedStatusFilter === 'validated' ? 'selected' : ''}>Validées seulement</option>
+      <option value="rejected" ${archivedStatusFilter === 'rejected' ? 'selected' : ''}>Écartées seulement</option>
+    </select>` : '';
   bar.innerHTML = `
     <select onchange="setFilter('cat', this.value || null)">${catOptions}</select>
     <select onchange="setFilter('source', this.value || null)">
@@ -41,6 +53,7 @@ function renderFilterBar() {
       <option value="kittyflap" ${sourceFilter === 'kittyflap' ? 'selected' : ''}>HK</option>
       <option value="reolink_or_manual" ${sourceFilter === 'reolink_or_manual' ? 'selected' : ''}>Reolink+Manuel</option>
     </select>
+    ${archivedStatusSelect}
     <label style="margin-left:8px"><input type="checkbox" ${preyFilter ? 'checked' : ''}
       onchange="setFilter('prey', this.checked)"> Proies suspectées seulement</label>
     <label style="margin-left:8px" title="Exclut toute capture où une proie coexiste avec le chat - pour retrouver, parmi les écartées, des captures 'chat seul' réutilisables pour le lot propre du futur modèle d'identité">
@@ -54,6 +67,7 @@ function setFilter(key, value) {
   else if (key === 'source') sourceFilter = value;
   else if (key === 'prey') preyFilter = value;
   else if (key === 'excludePrey') excludePreyFilter = value;
+  else if (key === 'archivedStatus') archivedStatusFilter = value;
   loadQueue();
 }
 
@@ -71,6 +85,7 @@ async function loadQueue() {
   if (sourceFilter) params.set('source', sourceFilter);
   if (preyFilter) params.set('prey_only', '1');
   if (excludePreyFilter) params.set('exclude_prey', '1');
+  if (archivedStatusFilter) params.set('archived_status', archivedStatusFilter);
   currentQueue = await api(`/app-api/queue?${params}`);
   renderQueue();
 }
@@ -110,17 +125,37 @@ function renderBulkBar() {
   // lot depuis cette vue (seulement une par une via le détail). Même
   // endpoint générique que "Écarter la sélection" ci-dessous
   // (/app-api/captures/bulk-review accepte déjà confirmed/corrected/
-  // rejected), juste exposé ici aussi - uniquement utile sur "Écartées",
-  // pas sur "Archivées" (déjà exportées, repêcher ne changerait rien).
+  // rejected), juste exposé ici aussi - uniquement utile sur "Écartées".
   const confirmButton = sub.statusGroup === 'rejected'
     ? `<button class="btn-confirm" onclick="bulkReview('confirmed')">Confirmer la sélection</button>`
+    : '';
+  // 29.10, Sid ("un nouveau bouton pour relancer ces images-là dans le
+  // nouveau pipeline") - CORRECTIF du commentaire précédent ("repêcher ne
+  // changerait rien" - FAUX, voir relaunchCaptures()) : sur "Archivées",
+  // une capture écartée-puis-archivée doit repartir avec exported_at
+  // remis à NULL pour redevenir "nouvelle", pas juste review_status.
+  const relaunchButton = sub.statusGroup === 'archived'
+    ? `<button class="btn-confirm" onclick="relaunchCaptures()" title="Remet ces captures en 'Validées', prêtes pour le prochain export/entraînement">Relancer dans le nouveau pipeline</button>`
     : '';
   bar.innerHTML = `
     <span>${label}</span>
     <button onclick="selectAllVisible(currentQueue, renderQueue)">Tout sélectionner</button>
     <button onclick="clearSelection(renderQueue)">Annuler</button>
     <button class="btn-reject" onclick="bulkReview('rejected')">Écarter la sélection</button>
-    ${confirmButton}`;
+    ${confirmButton}
+    ${relaunchButton}`;
+}
+
+async function relaunchCaptures() {
+  const ids = [...selectedIds];
+  if (ids.length === 0) return;
+  await api('/app-api/captures/relaunch', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ids }),
+  });
+  selectedIds.clear();
+  await loadQueue();
 }
 
 async function bulkReview(status) {

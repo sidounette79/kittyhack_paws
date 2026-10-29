@@ -188,6 +188,7 @@ def review_queue(
     cat_name: str | None = None, source: str | None = None,
     status_group: str | None = None, prey_only: bool = False,
     negative_only: bool = False, exclude_prey: bool = False,
+    archived_status: str | None = None,
     in_model: str | None = None,
     training_mode: bool = False, rebalance: bool = False, limit: int = 100,
 ):
@@ -222,6 +223,17 @@ def review_queue(
         query += " WHERE c.review_status = 'rejected' AND c.exported_at IS NULL"
     elif status_group == "archived":
         query += " WHERE c.exported_at IS NOT NULL"
+        # 29.10, Sid ("j'ai donc dû en écarter certaines qui rentreraient
+        # maintenant parfaitement dans le nouveau projet en cours... je ne
+        # sais pas lesquelles c'est") - "archived" mélange à dessein
+        # validées et écartées (voir commentaire juste en dessous), mais
+        # sans way de les distinguer une fois ici. `archived_status`
+        # restreint à l'un ou l'autre sans changer le comportement par
+        # défaut (toutes les deux) quand absent.
+        if archived_status == "rejected":
+            query += " AND c.review_status = 'rejected'"
+        elif archived_status == "validated":
+            query += " AND c.review_status IN ('confirmed', 'corrected')"
     elif status_group == "exported":
         # 26.10, Sid ("archivées correspond à tout ce qui a été traité lors
         # d'un export... soit tout ce qui a été validé mais également tout
@@ -506,6 +518,32 @@ def bulk_review_captures(payload: dict = Body(...)):
         conn.executemany(
             "UPDATE captures SET review_status = ?, reviewed_at = datetime('now') WHERE id = ?",
             [(status, cid) for cid in ids],
+        )
+    return {"ok": True, "count": len(ids)}
+
+
+@app.post("/app-api/captures/relaunch")
+def relaunch_captures(payload: dict = Body(...)):
+    # 29.10, Sid ("j'ai dû en écarter certaines qui rentreraient maintenant
+    # parfaitement dans le nouveau projet... il faudrait un nouveau bouton
+    # pour relancer ces images-là dans le nouveau pipeline") - distinct
+    # d'un simple bulk-review(confirmed) : une capture déjà archivée garde
+    # son `exported_at` figé au dernier export, donc resterait invisible
+    # dans "Validées" (qui exige exported_at IS NULL, voir status_group=
+    # "validated") et ne serait jamais reprise par le prochain export
+    # incrémental (_run_export ne reprend que exported_at IS NULL). Cet
+    # endpoint remet aussi exported_at à NULL - la capture redevient
+    # "nouvelle" pour de vrai, visible dans Validées, reprise par le
+    # prochain export ET par train_vastai.py (qui repart de zéro de toute
+    # façon, voir build_full_training_zip).
+    ids = payload.get("ids") or []
+    if not ids:
+        return {"ok": True, "count": 0}
+    with get_conn() as conn:
+        conn.executemany(
+            """UPDATE captures SET review_status = 'confirmed', exported_at = NULL,
+                                    reviewed_at = datetime('now') WHERE id = ?""",
+            [(cid,) for cid in ids],
         )
     return {"ok": True, "count": len(ids)}
 
