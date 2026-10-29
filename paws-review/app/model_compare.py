@@ -176,7 +176,12 @@ def _draw_boxes(img: Image.Image, boxes: list[tuple[str, float, float, float, fl
     # (14px) illisible une fois l'image affichée à sa vraie résolution (les
     # caméras Reolink/Kittyflap sont en 1440p+) - mise à l'échelle sur la
     # hauteur réelle de l'image plutôt qu'une constante.
-    font_size = max(20, H // 24)
+    # 26.10, Sid ("c'est encore petit... mets 3 de plus") - texte gravé
+    # dans l'image (pas un overlay CSS), donc un +3px se perdrait à peine
+    # visible une fois l'image à 3 volets réduite à la largeur de l'écran -
+    # augmentation réelle (H//24 -> H//16, planché 20 -> 28) plutôt qu'un
+    # ajustement cosmétique.
+    font_size = max(28, H // 16)
     line_width = max(3, H // 300)
     try:
         font = ImageFont.truetype("DejaVuSans-Bold.ttf", font_size)
@@ -189,8 +194,19 @@ def _draw_boxes(img: Image.Image, boxes: list[tuple[str, float, float, float, fl
         draw.rectangle([x1, y1, x2, y2], outline=color, width=line_width)
         text = f"{label} {prob:.0f}%" if prob is not None else label
         tw = draw.textlength(text, font=font)
-        draw.rectangle([x1, max(0, y1 - label_h), x1 + tw + 10, y1], fill=color)
-        draw.text((x1 + 5, max(0, y1 - label_h) + 2), text, fill=(255, 255, 255), font=font)
+        # 26.10, Sid ("l'étiquette est beaucoup beaucoup trop petite") -
+        # pas un souci de taille de police (déjà mise à l'échelle depuis le
+        # 20.10), mais un vrai bug : max(0, y1 - label_h) ne préservait pas
+        # label_h quand la boîte touche le haut de l'image (y1 petit) -
+        # juste capé à 0, donc la bande d'étiquette se retrouvait haute de
+        # y1 pixels seulement au lieu de label_h, écrasant le texte en un
+        # éclat illisible. Même hauteur toujours garantie : au-dessus de la
+        # boîte normalement, ou juste sous son bord haut si ça déborderait
+        # de l'image.
+        label_y1 = y1 - label_h if y1 - label_h >= 0 else y1
+        label_y2 = label_y1 + label_h
+        draw.rectangle([x1, label_y1, x1 + tw + 10, label_y2], fill=color)
+        draw.text((x1 + 5, label_y1 + 2), text, fill=(255, 255, 255), font=font)
     return out
 
 
@@ -255,7 +271,21 @@ def _recent_event_groups(
     ordered_keys = sorted(groups, key=lambda k: max(r["created_at"] for r in groups[k]), reverse=True)
     ordered_keys = [k for k in ordered_keys if k not in scanned]
 
-    if class_filter:
+    # 26.10, Sid ("un filtre sur négatif... on était souvent tagué comme
+    # boubou au lieu de rien") - "Negatif" garde un groupe seulement si
+    # AUCUNE de ses captures n'a de boîte classifiable (vérité terrain
+    # réellement vide partout), pas juste "une boîte classe X" comme les
+    # autres filtres.
+    if class_filter == "Negatif":
+        kept_keys = []
+        for key in ordered_keys:
+            if all(
+                not any(canonicalize(b.get("label")) for b in effective_boxes(conn, row["id"], row["detected_objects_json"]))
+                for row in groups[key]
+            ):
+                kept_keys.append(key)
+        ordered_keys = kept_keys
+    elif class_filter:
         kept_keys = []
         for key in ordered_keys:
             for row in groups[key]:
@@ -278,6 +308,15 @@ def _recent_event_groups(
             is_prey, was_prey = label == "Prey", best_label == "Prey"
             if best_row is None or (is_prey and not was_prey) or (is_prey == was_prey and prob > best_prob):
                 best_row, best_label, best_prob = row, label, prob
+        # 26.10, Sid ("ça me dit qu'il y en a mais ça me sort rien dans la
+        # galerie") - un groupe réellement vide (filtre Negatif, par
+        # définition aucune boîte nulle part) ne fixait jamais best_row
+        # (boucle ci-dessus : "if label is None: continue" sur CHAQUE
+        # ligne) - le groupe passait le filtre, comptait dans total_events,
+        # puis disparaissait silencieusement ici, jamais ajouté à reps.
+        # Première photo du groupe comme représentante dans ce cas.
+        if best_row is None and groups[key]:
+            best_row = groups[key][0]
         if best_row is not None:
             reps.append(best_row)
             rep_keys.append(key)
@@ -361,13 +400,30 @@ def run_recent_events(
 
             fname = f"capture_{row['id']}.jpg"
             combined.save(os.path.join(out_dir, fname), quality=90)
+            gt_set = {canonicalize(l) for l, *_ in gt} - {None}
+            old_set = {canonicalize(l) for l, *_ in old_pred} - {None}
+            new_set = {canonicalize(l) for l, *_ in new_pred} - {None}
+            # 26.10, Sid ("un filtre sur négatif... on était souvent tagué
+            # comme boubou au lieu de rien") - une vérité terrain réellement
+            # vide devient sa propre pseudo-classe "Negatif", avec la même
+            # logique rattrapé/identique/régression que les autres classes
+            # (voir _write_recent_gallery_html) : un modèle qui invente
+            # quelque chose sur du vide EST un faux positif, celui qui ne
+            # prédit rien EST correct ici - réutilise la machinerie de tags/
+            # résumé existante sans la dupliquer.
+            if not gt_set:
+                gt_set = {"Negatif"}
+                if not old_set:
+                    old_set = {"Negatif"}
+                if not new_set:
+                    new_set = {"Negatif"}
             new_entries.append({
                 "filename": fname,
                 "capture_id": row["id"],
                 "created_at": row["created_at"],
-                "gt_classes": sorted({canonicalize(l) for l, *_ in gt} - {None}),
-                "old_classes": sorted({canonicalize(l) for l, *_ in old_pred} - {None}),
-                "new_classes": sorted({canonicalize(l) for l, *_ in new_pred} - {None}),
+                "gt_classes": sorted(gt_set),
+                "old_classes": sorted(old_set),
+                "new_classes": sorted(new_set),
             })
         conn.commit()
 
@@ -388,7 +444,50 @@ def run_recent_events(
     return result
 
 
+# 26.10, Sid ("un résumé : éléments rattrapés, identiques et régression
+# avec le nombre de chaque") - même logique que les tags par ligne
+# juste en dessous (win/regress/"miss" ou rien), agrégée par classe vérité
+# terrain. "Identiques" regroupe les deux cas sans tag (les deux modèles
+# d'accord, qu'ils aient raison ou qu'ils loupent tous les deux) - elle n'a
+# demandé que 3 catégories, pas une 4e séparant "toujours loupé" de "les
+# deux ont raison".
+def _compute_recent_summary(entries: list[dict]) -> dict:
+    summary: dict[str, dict[str, int]] = {}
+    for e in entries:
+        for cls in e["gt_classes"]:
+            had_old, had_new = cls in e["old_classes"], cls in e["new_classes"]
+            s = summary.setdefault(cls, {"win": 0, "regress": 0, "identical": 0})
+            if not had_old and had_new:
+                s["win"] += 1
+            elif had_old and not had_new:
+                s["regress"] += 1
+            else:
+                s["identical"] += 1
+    return summary
+
+
 def _write_recent_gallery_html(out_dir: str, entries: list[dict], old_dir: str, new_dir: str, total_events: int, class_filter: str | None):
+    summary = _compute_recent_summary(entries)
+    total = {"win": 0, "regress": 0, "identical": 0}
+    summary_rows = []
+    for cls in sorted(summary):
+        s = summary[cls]
+        for k in total:
+            total[k] += s[k]
+        summary_rows.append(
+            f'<tr><td>{cls}</td><td class="win">{s["win"]}</td>'
+            f'<td class="regress">{s["regress"]}</td><td>{s["identical"]}</td></tr>'
+        )
+    summary_html = f"""
+    <table class="summary">
+      <thead><tr><th>Classe</th><th>Rattrapés</th><th>Régression</th><th>Identiques</th></tr></thead>
+      <tbody>
+        {''.join(summary_rows)}
+        <tr class="total"><td>Total</td><td class="win">{total['win']}</td>
+            <td class="regress">{total['regress']}</td><td>{total['identical']}</td></tr>
+      </tbody>
+    </table>"""
+
     rows_html = []
     for e in entries:
         tags = []
@@ -419,10 +518,16 @@ h1{{font-size:16px}}
 .tag.win{{background:#27ae60}}
 .tag.miss{{background:#c0392b}}
 .tag.regress{{background:#8e44ad}}
+table.summary{{border-collapse:collapse;margin-bottom:20px;font-size:13px}}
+table.summary td,table.summary th{{padding:4px 10px;border:1px solid #333;text-align:center}}
+table.summary td.win{{background:#1e5a38}}
+table.summary td.regress{{background:#4a2a5a}}
+table.summary tr.total{{font-weight:bold}}
 img{{max-width:100%;border:1px solid #333}}
 </style></head><body>
 <h1>Vérité terrain (vert) / ancien modèle (orange, {os.path.basename(old_dir)}) / nouveau modèle (bleu, {os.path.basename(new_dir)})</h1>
 <div class="legend">{len(entries)} événements affichés sur {total_events} au total{filter_note} (les plus récents d'abord)</div>
+{summary_html}
 {''.join(rows_html)}
 </body></html>"""
     with open(os.path.join(out_dir, "index.html"), "w", encoding="utf-8") as f:

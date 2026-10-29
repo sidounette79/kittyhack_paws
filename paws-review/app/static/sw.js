@@ -2,8 +2,11 @@
 // (Chrome exige un vrai handler 'fetch' enregistré). Aucune mise en cache de
 // /app-api/* ni des photos : c'est un outil de revue en temps réel, des
 // données périmées seraient pires qu'une absence de cache.
-const SHELL_CACHE = "paws-review-shell-v1";
-const SHELL_FILES = ["/", "/style.css", "/app.js"];
+// 26.10 : version bumpée (v1 -> v2) pour purger l'ancien cache qui pointait
+// vers "/" et "/app.js" (4 vraies pages séparées désormais, plus de page
+// d'accueil unique à précharger - juste les fichiers partagés par toutes).
+const SHELL_CACHE = "paws-review-shell-v2";
+const SHELL_FILES = ["/style.css", "/common.js", "/nav.js"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(

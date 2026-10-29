@@ -9,11 +9,17 @@ watchdog.py sauvegarde déjà, en continu, un échantillon rare/filtré de
 frames spécifiquement "pour Label Studio" (TRAINING_SAMPLES_DIR, voir son
 propre commentaire côté Kittyhack : "séparé de EVENT_FRAMES_DIR exprès -
 celui-là reste sparse/gated pour Label Studio") mais rien ne les reprenait
-jusqu'ici. Contrairement au Kittyflap, ces fichiers n'ont AUCUNE boîte
-pré-remplie - le watchdog ne lance pas de détection dessus, juste une
-sauvegarde périodique/gated par caméra. Sid les dessine à la main (la
-fonctionnalité de dessin manuel existait déjà pour le Kittyflap, construite
-plus tôt ce soir).
+jusqu'ici. À l'origine (18.10), ces fichiers n'avaient effectivement AUCUNE
+boîte pré-remplie. Depuis le 21.10 côté watchdog.py (_save_training_sample),
+un sidecar JSON (même nom de fichier, extension .json) accompagne l'image
+quand le modèle local de chatiere a vu quelque chose - jamais lu ici
+jusqu'au 26.10 (Sid : "pourquoi les reolink ont pas les boîtes alors que
+[dans Parcours] j'ai ?") : la doc ci-dessus n'avait jamais été mise à jour
+avec le code, les boîtes existaient sur disque depuis une semaine sans
+jamais être reprises. Clé "name" côté sidecar, traduite ici en "object_name"
+pour matcher le schéma detected_objects_json attendu par effective_boxes()
+(voir boxes.py) - même traduction que journeys.py fait pour son propre
+import manuel, juste appliquée ici à l'import automatique.
 
 Pas de table SQL source => pas d'ID numérique naturel à utiliser comme
 checkpoint d'ingestion (contrairement à events.id côté Kittyflap) - on
@@ -22,6 +28,7 @@ captures, avec un ID dérivé de façon stable du nom de fichier.
 """
 
 import io
+import json
 import logging
 import os
 import re
@@ -68,6 +75,32 @@ def _make_thumbnail(image_bytes: bytes) -> bytes:
     buf = io.BytesIO()
     img.save(buf, format="JPEG", quality=85)
     return buf.getvalue()
+
+
+def _load_sidecar_boxes(jpg_filename: str) -> str:
+    """Lit le sidecar JSON de watchdog.py (_save_training_sample), s'il
+    existe, et traduit sa clé "name" en "object_name" pour matcher le
+    schéma attendu par effective_boxes() (boxes.py). '[]' si absent ou
+    illisible - jamais une raison de faire échouer l'ingestion de la photo
+    elle-même."""
+    sidecar_path = os.path.join(SOURCE_REOLINK_SAMPLES_DIR, jpg_filename[:-4] + ".json")
+    if not os.path.isfile(sidecar_path):
+        return "[]"
+    try:
+        with open(sidecar_path, "r", encoding="utf-8") as f:
+            raw = json.load(f)
+        boxes = [
+            {
+                "object_name": d["name"],
+                "probability": d.get("probability", 0),
+                "x": d["x"], "y": d["y"], "width": d["width"], "height": d["height"],
+            }
+            for d in raw
+        ]
+        return json.dumps(boxes)
+    except Exception as e:
+        log.warning("Sidecar illisible pour %s: %s", jpg_filename, e)
+        return "[]"
 
 
 def ingest_reolink_batch(limit: int = 2000) -> int:
@@ -130,6 +163,7 @@ def ingest_reolink_batch(limit: int = 2000) -> int:
             f.write(thumb_bytes)
 
         created_at = _parse_created_at(m.group("date"), m.group("time"))
+        detected_objects_json = _load_sidecar_boxes(filename)
 
         with get_conn() as conn:
             cursor = conn.execute(
@@ -137,14 +171,45 @@ def ingest_reolink_batch(limit: int = 2000) -> int:
                        source, source_event_id, created_at,
                        detected_objects_json, original_path, thumbnail_path,
                        review_status
-                   ) VALUES ('reolink', ?, ?, '[]', ?, ?, 'pending')""",
-                (source_event_id, created_at, dst_original, dst_thumb),
+                   ) VALUES ('reolink', ?, ?, ?, ?, ?, 'pending')""",
+                (source_event_id, created_at, detected_objects_json, dst_original, dst_thumb),
             )
             recompute_cat_labels(conn, cursor.lastrowid)
         ingested += 1
 
     log.info("Ingestion Reolink terminée : %d nouvelles captures", ingested)
+    backfilled = _backfill_missing_boxes()
+    if backfilled:
+        log.info("Boîtes comblées rétroactivement pour %d capture(s) Reolink déjà importées", backfilled)
     return ingested
+
+
+# 26.10, Sid ("pourquoi les reolink ont pas les boîtes") - les captures déjà
+# importées AVANT ce correctif sont restées avec detected_objects_json='[]'
+# pour de bon (l'ingestion normale ne revisite jamais un source_event_id
+# déjà vu). Un passage ciblé à chaque cycle : seulement les captures encore
+# review_status='pending' avec '[]' (jamais touché une capture déjà
+# tranchée par Sid) ET un sidecar réellement présent maintenant.
+def _backfill_missing_boxes() -> int:
+    with get_conn() as conn:
+        rows = conn.execute(
+            """SELECT id, source_event_id, created_at FROM captures
+               WHERE source = 'reolink' AND review_status = 'pending'
+                 AND (detected_objects_json IS NULL OR detected_objects_json = '[]')"""
+        ).fetchall()
+        backfilled = 0
+        for row in rows:
+            date_part, time_part = row["created_at"].split(" ")
+            filename = f"chatiere_{date_part.replace('-', '')}_{time_part.replace(':', '')}.jpg"
+            boxes_json = _load_sidecar_boxes(filename)
+            if boxes_json != "[]":
+                conn.execute(
+                    "UPDATE captures SET detected_objects_json = ? WHERE id = ?",
+                    (boxes_json, row["id"]),
+                )
+                recompute_cat_labels(conn, row["id"])
+                backfilled += 1
+        return backfilled
 
 
 if __name__ == "__main__":

@@ -55,22 +55,31 @@ const PREY_TAB = '__prey__';
 // Rouvrir une capture et recliquer Valider/Écarter change son statut
 // normalement - aucun bouton "annuler" séparé nécessaire.
 const REVIEWED_TABS = [
-  { key: '__validated__', label: 'Validées', statusGroup: 'validated', statKey: 'validated_total' },
-  { key: '__rejected__', label: 'Écartées', statusGroup: 'rejected', statKey: 'rejected_total', catFilterable: true },
+  // 25.10, Sid ("j'ai désormais mes 200 patoune HK mais plus de 300 reo à
+  // cause des proies... besoin d'un filtre chats+proie+HK/reo dans
+  // validées") - richFilterable (cat+source+proie, même trio que
+  // Rééquilibrage) sur les trois onglets, pas juste cat seul : trier un
+  // excédent déjà validé (trop de Patoune+Proie) demande exactement les
+  // mêmes combinaisons que pour construire le lot au départ.
+  { key: '__validated__', label: 'Validées', statusGroup: 'validated', statKey: 'validated_total', richFilterable: true },
+  { key: '__rejected__', label: 'Écartées', statusGroup: 'rejected', statKey: 'rejected_total', richFilterable: true },
   // 18.10, Sid ("fais un archives oui") - une fois exportée (export pour
   // entraînement), une capture sort de Validées/Écartées (la session est
   // close) mais reste accessible ici, réouvrable comme les autres, plutôt
   // que de devenir invisible partout.
-  { key: '__archived__', label: 'Archivées', statusGroup: 'archived', statKey: 'archived_total', catFilterable: true },
+  { key: '__archived__', label: 'Archivées', statusGroup: 'archived', statKey: 'archived_total', richFilterable: true },
 ];
 
-// 25.10, Sid ("Archivées et écartées : mettre aussi le filtre par chat")
-// - cat_name se combine déjà librement avec status_group côté backend
-// (/app-api/queue), rien à changer là-bas. Réinitialisé à chaque
+// 25.10, Sid ("Archivées et écartées : mettre aussi le filtre par chat",
+// puis "filtre chats+proie+HK/reo dans validées") - cat_name/source/
+// prey_only se combinent déjà librement avec status_group côté backend
+// (/app-api/queue), rien à changer là-bas. Réinitialisés à chaque
 // changement d'onglet, même logique que selectedIds.clear() juste en
 // dessous dans selectTab() - un filtre d'un autre onglet n'a plus de sens
 // ici.
 let reviewedCatFilter = null;
+let reviewedSourceFilter = null;
+let reviewedPreyFilter = false;
 
 // 20.10, Sid ("le module de revérification... je contrôle tout au même
 // endroit") - file à part (model_review_queue), pas un filtre sur
@@ -156,12 +165,28 @@ const TRAIN_STEP_LABELS = {
   training: 'Entraînement en cours',
 };
 
+// 26.10, Sid ("un petit bouton pour que je puisse rester directement la
+// comparaison ou autre chose si ça plante en cours de route") - vécu en
+// vrai avec Comparaison ce soir : un redéploiement pendant un scan tue le
+// thread, mais l'état JSON reste figé sur "running" pour toujours, et
+// aucune des 4 barres ne propose de bouton dans cette branche - aucune
+// échappatoire sans passer par SSH. Remet juste l'état à "idle" côté
+// serveur (le vrai verrou en mémoire est de toute façon déjà reparti à
+// zéro si le conteneur a redémarré) ; confirm() parce que si un scan
+// tournait VRAIMENT encore, cliquer perd sa progression pour rien.
+async function resetStuckState(which, reloadFn) {
+  if (!confirm("Réinitialiser : à utiliser seulement si ça semble bloqué (après un redéploiement, par exemple). Si quelque chose tournait vraiment, sa progression sera perdue. Continuer ?")) return;
+  await api(`/app-api/admin/reset-stuck-state/${which}`, { method: 'POST' });
+  await reloadFn();
+}
+
 function renderTrainBar(state) {
   const bar = document.getElementById('train-bar');
   if (state.status === 'running') {
     const label = TRAIN_STEP_LABELS[state.step] || 'En cours';
     const price = state.price ? ` - ${state.price.toFixed(3)}$/h` : '';
-    bar.innerHTML = `<span class="export-msg">🧠 ${label}${price}...</span>`;
+    bar.innerHTML = `<span class="export-msg">🧠 ${label}${price}...</span>
+      <button onclick="resetStuckState('train', checkTrainStatus)" title="Si ça semble bloqué après un redéploiement">Réinitialiser</button>`;
   } else if (state.status === 'success') {
     const when = state.finished_at ? new Date(state.finished_at * 1000).toLocaleString('fr-CH') : '';
     bar.innerHTML = `
@@ -202,7 +227,8 @@ function renderExportBar(state) {
   const bar = document.getElementById('export-bar');
   if (state.status === 'running') {
     const progress = state.total ? ` (${state.done ?? 0}/${state.total})` : '';
-    bar.innerHTML = `<span class="export-msg">Export en cours${progress}...</span>`;
+    bar.innerHTML = `<span class="export-msg">Export en cours${progress}...</span>
+      <button onclick="resetStuckState('export', checkExportStatus)" title="Si ça semble bloqué après un redéploiement">Réinitialiser</button>`;
   } else if (state.status === 'ready') {
     if (state.images === 0) {
       bar.innerHTML = `
@@ -224,9 +250,16 @@ function renderExportBar(state) {
 }
 
 function renderStats(stats) {
+  // 26.10, Sid ("j'ai tout traité mais le compteur de proies suspectées
+  // reste à 245") - prey_candidates est un total toutes époques confondues
+  // (jamais filtré sur review_status), affiché juste à côté de "à
+  // réviser" qui lui reflète le vrai travail restant - lecture naturelle
+  // "encore du travail" alors que c'était déjà à zéro. prey_pending (déjà
+  // utilisé par le badge de l'onglet Proies, voir plus bas) est la bonne
+  // mesure ici, cohérente avec le reste de cette barre.
   document.getElementById('stats').innerHTML = `
     <span><b>${stats.pending}</b> à réviser</span>
-    <span><b>${stats.prey_candidates}</b> proies suspectées</span>
+    <span><b>${stats.prey_pending}</b> proies suspectées</span>
     <span><b>${stats.model_disagreements}</b> désaccords modèle</span>
     <span><b>${stats.deduped}</b> dédoublonnées</span>
   `;
@@ -290,12 +323,14 @@ function selectTab(name) {
   currentTab = name;
   selectedIds.clear(); // une sélection d'un autre onglet n'a plus de sens ici
   reviewedCatFilter = null;
+  reviewedSourceFilter = null;
+  reviewedPreyFilter = false;
   renderTabs();
   document.getElementById('model-review-bar').hidden = currentTab !== MODEL_REVIEW_TAB;
   document.getElementById('compare-bar').hidden = currentTab !== COMPARE_TAB;
   document.getElementById('stats-bar').hidden = currentTab !== STATS_TAB;
   document.getElementById('rebalance-bar').hidden = currentTab !== REBALANCE_TAB;
-  const reviewedTabForFilter = REVIEWED_TABS.find(t => t.key === currentTab && t.catFilterable);
+  const reviewedTabForFilter = REVIEWED_TABS.find(t => t.key === currentTab && t.richFilterable);
   document.getElementById('reviewed-filter-bar').hidden = !reviewedTabForFilter;
   if (reviewedTabForFilter) renderReviewedFilterBar();
   if (currentTab === MODEL_REVIEW_TAB) {
@@ -331,7 +366,11 @@ async function loadQueue() {
   const reviewedTab = REVIEWED_TABS.find(t => t.key === currentTab);
   if (reviewedTab) {
     params.set('status_group', reviewedTab.statusGroup);
-    if (reviewedTab.catFilterable && reviewedCatFilter) params.set('cat_name', reviewedCatFilter);
+    if (reviewedTab.richFilterable) {
+      if (reviewedCatFilter) params.set('cat_name', reviewedCatFilter);
+      if (reviewedSourceFilter) params.set('source', reviewedSourceFilter);
+      if (reviewedPreyFilter) params.set('prey_only', '1');
+    }
   } else if (currentTab === PREY_TAB) {
     params.set('prey_only', '1');
   } else if (sourceTab) {
@@ -343,19 +382,34 @@ async function loadQueue() {
   renderQueue();
 }
 
+// 25.10, Sid ("besoin d'un filtre chats+proie+HK/reo dans validées, pour
+// trier mon excédent Patoune+Proie") - même trio combinable que
+// renderRebalanceBar(), appliqué ici à Validées/Écartées/Archivées.
+// "Prey" filtré via filter_prey_label côté /app-api/queue (absent de
+// `cats`, qui ne liste que les identités RFID), source via
+// 'reolink_or_manual' (voir SOURCE_TABS plus haut, fusion Reolink+Manuel
+// du 25.10 - jamais 'reolink_manual', qui regrouperait aussi labelstudio).
 function renderReviewedFilterBar() {
   const bar = document.getElementById('reviewed-filter-bar');
-  // 25.10 : même ajout que renderRebalanceBar() - "Prey" filtré via
-  // filter_prey_label côté /app-api/queue, absent de `cats` (identités
-  // RFID seulement).
   const catOptions = ['', ...cats.map(c => c.name), 'Prey'].map(n =>
     `<option value="${n}" ${reviewedCatFilter === (n || null) ? 'selected' : ''}>${n || 'Tous les chats'}</option>`
   ).join('');
-  bar.innerHTML = `<select onchange="reviewedSetCatFilter(this.value || null)">${catOptions}</select>`;
+  bar.innerHTML = `
+    <select onchange="reviewedSetFilter('cat', this.value || null)">${catOptions}</select>
+    <select onchange="reviewedSetFilter('source', this.value || null)">
+      <option value="" ${!reviewedSourceFilter ? 'selected' : ''}>Toute source</option>
+      <option value="kittyflap" ${reviewedSourceFilter === 'kittyflap' ? 'selected' : ''}>HK</option>
+      <option value="reolink_or_manual" ${reviewedSourceFilter === 'reolink_or_manual' ? 'selected' : ''}>Reolink+Manuel</option>
+    </select>
+    <label style="margin-left:8px"><input type="checkbox" ${reviewedPreyFilter ? 'checked' : ''}
+      onchange="reviewedSetFilter('prey', this.checked)"> Proies suspectées seulement</label>
+  `;
 }
 
-function reviewedSetCatFilter(value) {
-  reviewedCatFilter = value;
+function reviewedSetFilter(key, value) {
+  if (key === 'cat') reviewedCatFilter = value;
+  else if (key === 'source') reviewedSourceFilter = value;
+  else if (key === 'prey') reviewedPreyFilter = value;
   loadQueue();
 }
 
@@ -505,7 +559,8 @@ function renderModelReviewBar(state) {
   if (state.status === 'running') {
     const label = MR_STEP_LABELS[state.step] || 'En cours';
     const progress = state.total ? ` (${state.scanned ?? 0}/${state.total})` : '';
-    bar.innerHTML = `<span class="export-msg">Revérification : ${label}${progress}...</span>`;
+    bar.innerHTML = `<span class="export-msg">Revérification : ${label}${progress}...</span>
+      <button onclick="resetStuckState('model_review', checkModelReviewStatus)" title="Si ça semble bloqué après un redéploiement">Réinitialiser</button>`;
   } else if (state.status === 'success') {
     const when = state.finished_at ? new Date(state.finished_at * 1000).toLocaleString('fr-CH') : '';
     bar.innerHTML = `
@@ -672,7 +727,11 @@ let compareClassFilter = null;
 
 function renderCompareBar(state) {
   const bar = document.getElementById('compare-bar');
-  const options = ['', 'Prey', ...Object.keys(CAT_COLORS)]
+  // 26.10, Sid ("un filtre sur négatif... on était souvent tagué comme
+  // boubou au lieu de rien") - "Negatif" est une pseudo-classe gérée à
+  // part côté serveur (voir model_compare.py), pas une vraie classe du
+  // modèle comme les autres options ici.
+  const options = ['', 'Prey', 'Negatif', ...Object.keys(CAT_COLORS)]
     .map(c => `<option value="${c}" ${compareClassFilter === (c || null) ? 'selected' : ''}>${c === '' ? 'Tous' : (c === 'Prey' ? 'Proies' : c)}</option>`)
     .join('');
   const filterSelect = `
@@ -680,7 +739,8 @@ function renderCompareBar(state) {
   if (state && state.status === 'running') {
     const label = state.step === 'loading_model' ? 'Chargement des modèles' : 'Comparaison';
     const progress = state.total ? ` (${state.scanned ?? 0}/${state.total})` : '';
-    bar.innerHTML = filterSelect + `<span class="export-msg">${label}${progress}...</span>`;
+    bar.innerHTML = filterSelect + `<span class="export-msg">${label}${progress}...</span>
+      <button onclick="resetStuckState('compare', checkCompareStatus)" title="Si ça semble bloqué après un redéploiement">Réinitialiser</button>`;
     return;
   }
   if (state && state.status === 'error') {

@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Photos - Paws Review</title>
+<meta name="theme-color" content="#121316">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Paws Review">
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/icon-192.png">
+<link rel="apple-touch-icon" href="/icon-192.png">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;800&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<header>
+  <h1>Paws Review</h1>
+  <div class="tabs" id="page-nav"></div>
+  <div class="tabs" id="sub-nav"></div>
+  <div class="stats-bar" id="stats"></div>
+</header>
+
+<div id="queue" class="queue-grid"></div>
+<div id="empty" class="empty-state" hidden>Rien à réviser ici pour l'instant.</div>
+
+<!-- 18.10, Sid ("en sélectionner plusieurs d'un coup pour les écarter en
+     une fois") - barre flottante, visible seulement si au moins une
+     vignette est cochée. -->
+<div id="bulk-bar" class="bulk-bar" hidden></div>
+
+<div id="detail">
+  <div class="detail-top">
+    <button onclick="closeDetail()">&larr; retour</button>
+    <span class="mono" id="detail-meta" style="font-size:12px;color:var(--text-dim)"></span>
+  </div>
+  <div class="image-wrap" id="image-wrap">
+    <img id="detail-img" src="" alt="">
+  </div>
+  <div class="hint">Touche une boîte pour corriger son étiquette. Trace un rectangle sur une zone vide pour ajouter une détection manquée.</div>
+  <div class="box-list" id="box-list"></div>
+  <div class="actions">
+    <div class="actions-row">
+      <button class="btn-reject" onclick="submitReview('rejected')">Écarter</button>
+      <button class="btn-confirm" onclick="submitReview('confirmed')">Valider</button>
+    </div>
+    <!-- 18.10, Sid ("écarter une série à la suite, et quand y'en a une à
+         retraiter je fais suivant sans la traiter") - navigue dans la
+         queue chargée sans rien soumettre au serveur. -->
+    <div class="actions-row">
+      <button class="btn-nav" onclick="navigateDetail(-1)">&larr; Précédent</button>
+      <button class="btn-nav" onclick="navigateDetail(1)">Suivant &rarr;</button>
+    </div>
+  </div>
+</div>
+
+<script src="/common.js"></script>
+<script src="/nav.js"></script>
+<script src="/photos.js"></script>
+</body>
+</html>

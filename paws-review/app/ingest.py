@@ -204,7 +204,10 @@ def ingest_kittyflap_batch(limit: int = 2000) -> int:
             # normalement, ces cas-là restent utiles ailleurs. Vide ce set
             # pour reprendre l'import normal (aucune autre modification
             # nécessaire).
-            _hk_ingest_paused_solo_cats = {"boubou", "nala"}
+            # 25.10, Sid ("coupe l'arrivée des nouvelles photos pour pookie
+            # et patoune, excepté si pas tout seul ou proie") - même
+            # quota atteint (202/200 chacun), même mécanisme.
+            _hk_ingest_paused_solo_cats = {"boubou", "nala", "pookie", "patoune"}
             if (
                 not is_prey_candidate
                 and cat_name

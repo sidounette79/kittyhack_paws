@@ -5,7 +5,7 @@ import time
 import zipfile
 
 from fastapi import Body, FastAPI, File, Form, Header, HTTPException, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.types import Scope
 
@@ -14,11 +14,15 @@ from app.cat_labels import recompute_cat_labels
 from app.catalog_db import get_conn, init_db
 from app.config import RETENTION_DAYS, STORAGE_ROOT
 from app.export_training import EXPORTS_DIR, read_state, start_export_async
+from app.export_training import STATE_PATH as EXPORT_STATE_PATH
 from app.labels import CLASSES, canonicalize
+from app.model_compare import COMPARE_STATE_PATH
 from app.model_review import list_model_dirs, resolve_queue_items, start_model_review_async
 from app.model_review import read_state as read_model_review_state
+from app.model_review import STATE_PATH as MODEL_REVIEW_STATE_PATH
 from app.train_vastai import read_state as read_training_state
 from app.train_vastai import start_training_async
+from app.train_vastai import STATE_PATH as TRAIN_STATE_PATH
 
 app = FastAPI(title="Paws Review")
 
@@ -218,6 +222,17 @@ def review_queue(
         query += " WHERE c.review_status = 'rejected' AND c.exported_at IS NULL"
     elif status_group == "archived":
         query += " WHERE c.exported_at IS NOT NULL"
+    elif status_group == "exported":
+        # 26.10, Sid ("archivées correspond à tout ce qui a été traité lors
+        # d'un export... soit tout ce qui a été validé mais également tout
+        # ce qui a été écarté à ce moment-là") - "archived" ci-dessus
+        # mélange les deux à dessein (filet de sécurité générique côté
+        # Archives, jamais changé). Ici : uniquement ce qui est VRAIMENT
+        # dans le zip (export_training.py n'y met que confirmed/corrected,
+        # jamais rejected, même si rejected se fait aussi marquer
+        # exported_at au même moment - voir son commentaire "laisse
+        # exported_at à NULL" ligne ~213).
+        query += " WHERE c.exported_at IS NOT NULL AND c.review_status IN ('confirmed', 'corrected')"
     elif training_mode:
         # 21.10, Sid ("je repars encore une fois à zéro... trier reo vs
         # HK") - l'onglet "Tri 200+200" porte toujours sur des captures
@@ -243,6 +258,47 @@ def review_queue(
         query += " WHERE c.review_status = 'pending' AND c.rebalance_bucket = 'queued'"
     else:
         query += " WHERE c.review_status = 'pending' AND c.rebalance_bucket IS NULL"
+        # 26.10, Sid ("une fois que j'avais trié tous les chats, il me
+        # restait 2200 photos sur lesquels il n'y a aucun chat - les fins
+        # d'événements où il se passe plus rien") - uniquement sur "Toutes"
+        # sans aucun filtre actif (cat_name/source/prey_only tous absents) :
+        # une fin d'événement Kittyflap sans la moindre détection (jamais
+        # identifiée, zéro boîte) n'est pas un vrai travail de revue, rien à
+        # confirmer ni corriger dessus. Jamais appliqué sous un filtre -
+        # Reolink en particulier doit continuer à montrer ses captures non
+        # identifiées (c'est précisément leur rôle là-bas), et une capture
+        # qui matche déjà un chat ou "Proies suspectées" n'est de toute
+        # façon jamais concernée par cette condition.
+        # "AND c.is_prey_candidate = 0" : Sid ("une proie ne peut pas être
+        # toute seule sur l'image, ça devrait pas poser de souci") - presque
+        # vrai, sauf qu'is_prey_candidate peut être posé par le seul score
+        # mouse_probability (seuil de revue volontairement bas, voir
+        # PREY_REVIEW_THRESHOLD/ingest.py), sans qu'aucune boîte soit jamais
+        # dessinée - sans cette garde, une proie limite/mal détectée (zéro
+        # boîte malgré un vrai signal) aurait pu disparaître de "Toutes",
+        # exactement le risque qu'on protège depuis le 08.10 ("une proie non
+        # détectée qui passerait entre les gouttes").
+        if cat_name is None and source is None and not prey_only:
+            query += (
+                " AND NOT (c.source = 'kittyflap' AND c.cat_name IS NULL"
+                " AND c.is_prey_candidate = 0"
+                " AND (c.detected_objects_json IS NULL OR c.detected_objects_json = '[]'))"
+            )
+    # 26.10, Sid ("vu que reolink envoie maintenant les étiquettes, ça fait
+    # doublon entre ce qu'on reçoit par chat et ce qu'on reçoit dans
+    # l'onglet reolink+manuel") - à l'origine l'onglet Reolink existait
+    # PARCE QUE ces captures n'avaient aucune identité (pas de RFID sur
+    # cette caméra) ; maintenant que certaines en ont une (sidecar JSON du
+    # modèle local, voir ingest_reolink.py), les garder aussi ici créerait
+    # un vrai doublon de travail avec l'onglet du chat correspondant.
+    # Uniquement sur la file "à revoir" par défaut (jamais sous Validées/
+    # Écartées/Archivées, qui réutilisent ce même filtre de source pour
+    # trier des captures déjà tranchées, identité ou pas) - capture_cat_labels
+    # reflète l'identité EFFECTIVE (boîtes + corrections), pas seulement
+    # c.cat_name posé à l'ingestion.
+    pending_default_view = status_group is None and not training_mode and not rebalance
+    if source == "reolink_or_manual" and pending_default_view:
+        query += " AND c.id NOT IN (SELECT capture_id FROM capture_cat_labels)"
     if in_model is not None:
         current_ids = _current_model_capture_ids()
         if current_ids:
@@ -284,7 +340,7 @@ def review_queue(
     # en SQL pur - les corrections vivent dans box_annotations, pas
     # directement sur c.detected_objects_json (voir effective_boxes). Pas
     # de LIMIT SQL dans ce cas, filtré puis tronqué côté Python plus bas.
-    if status_group == "archived":
+    if status_group in ("archived", "exported"):
         query += " ORDER BY c.exported_at DESC"
     elif status_group or training_mode:
         query += " ORDER BY c.reviewed_at DESC"
@@ -569,6 +625,34 @@ def model_training_data(x_upload_token: str = Header(default="")):
     return FileResponse(TRAINING_DATA_PATH, filename="training_data.zip", media_type="application/zip")
 
 
+# 25.10, Sid ("regarde sur le net besoin pourquoi ça marche pas") - deux
+# runs YOLO26+640 bloqués à gpu_util=0%/cpu_util=0% pendant 80 min, sur
+# deux hôtes vast.ai complètement différents, jamais la moindre erreur.
+# Ultralytics télécharge automatiquement yolo26n.pt depuis les releases
+# GitHub au premier `yolo train` - testé en direct depuis FUNMEDIA (1s,
+# 5.3 Mo, aucun souci), mais les IP datacenter de vast.ai, très sollicitées
+# par toutes sortes de pipelines ML, sont des candidates plausibles à un
+# throttling/rate-limit GitHub invisible en status_msg (pas une erreur
+# franche, juste un blocage silencieux - exactement le symptôme observé).
+# Même principe que /model/training-data ci-dessus : héberger le poids de
+# base nous-mêmes plutôt que de dépendre du téléchargement GitHub depuis
+# un hôte vast.ai à chaque run.
+YOLO_BASE_WEIGHTS_DIR = os.path.join(STORAGE_ROOT, "yolo_base_weights")
+
+
+@app.get("/app-api/model/yolo-base-weights/{filename}")
+def model_yolo_base_weights(filename: str, x_upload_token: str = Header(default="")):
+    if MODEL_UPLOAD_TOKEN and x_upload_token != MODEL_UPLOAD_TOKEN:
+        raise HTTPException(403, "jeton invalide")
+    # Un seul segment de nom de fichier, jamais un chemin - voir
+    # model_compare_recent ci-dessous pour le même garde-fou.
+    safe_name = os.path.basename(filename)
+    path = os.path.join(YOLO_BASE_WEIGHTS_DIR, safe_name)
+    if not os.path.isfile(path):
+        raise HTTPException(404, f"Poids de base '{safe_name}' non mis en cache ici")
+    return FileResponse(path, filename=safe_name, media_type="application/octet-stream")
+
+
 @app.post("/app-api/model/upload")
 async def model_upload(file: UploadFile = File(...), x_upload_token: str = Header(default="")):
     if MODEL_UPLOAD_TOKEN and x_upload_token != MODEL_UPLOAD_TOKEN:
@@ -737,7 +821,11 @@ def model_compare_recent(payload: dict = Body(...)):
 
     limit = int(payload.get("limit") or 20)
     class_filter = payload.get("class_filter") or None
-    if class_filter and class_filter not in CLASSES:
+    # 26.10, Sid ("un filtre sur négatif... on était souvent tagué comme
+    # boubou au lieu de rien") - "Negatif" n'est pas une vraie classe du
+    # modèle (absente de CLASSES), c'est une pseudo-classe gérée à part
+    # dans model_compare.py (voir _recent_event_groups/run_recent_events).
+    if class_filter and class_filter not in CLASSES and class_filter != "Negatif":
         raise HTTPException(400, f"class_filter invalide : {class_filter}")
     # session_dir : uniquement une valeur qu'on a nous-mêmes renvoyée sur un
     # appel précédent (voir "out_dir" ci-dessous) - jamais un chemin arbitraire
@@ -804,6 +892,36 @@ def model_review_reset():
         return {"ok": True, "count": cur.rowcount}
 
 
+# 26.10, Sid ("un petit bouton pour que je puisse rester directement la
+# comparaison ou autre chose si ça plante en cours de route") - Comparaison,
+# Entraînement, Revérification et Export partagent tous le même schéma (un
+# thread en arrière-plan + un fichier d'état JSON persistant) : un
+# redéploiement du conteneur pendant qu'un thread tourne le tue, mais le
+# fichier d'état reste figé sur "running" pour toujours - le vrai verrou en
+# mémoire (threading.Lock), lui, repart à zéro au redémarrage, donc
+# relancer marcherait déjà, mais chaque barre de la page ne propose un
+# bouton que dans sa branche "error", jamais "running" : aucune échappatoire
+# visible sans passer par moi/SSH (vécu en vrai ce soir avec Comparaison).
+# Un seul endpoint générique plutôt que 4 copies - "which" limité à une
+# liste connue de fichiers, jamais un chemin arbitraire du client.
+_RESETTABLE_STATES = {
+    "compare": COMPARE_STATE_PATH,
+    "train": TRAIN_STATE_PATH,
+    "model_review": MODEL_REVIEW_STATE_PATH,
+    "export": EXPORT_STATE_PATH,
+}
+
+
+@app.post("/app-api/admin/reset-stuck-state/{which}")
+def reset_stuck_state(which: str):
+    path = _RESETTABLE_STATES.get(which)
+    if path is None:
+        raise HTTPException(400, f"'{which}' invalide, attendu l'un de {sorted(_RESETTABLE_STATES)}")
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump({"status": "idle"}, f)
+    return {"ok": True}
+
+
 class NoCacheStaticFiles(StaticFiles):
     # 18.10, Sid ("ça affiche toujours pookie au lieu de proie" - a fix
     # already live server-side, confirmed via curl, just not what her
@@ -841,5 +959,44 @@ app.mount(
     NoCacheStaticFiles(directory=EVENT_COMPARISONS_DIR, html=True),
     name="event_comparisons",
 )
+
+# 26.10, Sid ("l'idée serait d'avoir des vraies pages distinctes... quand je
+# rafraîchis ça me remet tout à zéro de mes filtres") - 4 vraies pages,
+# chacune son fichier HTML, chacune ses propres sous-URLs lues côté client
+# depuis location.pathname (voir photos.js/revision.js/archives.js) - un
+# rafraîchissement ou un lien partagé reste sur exactement le même état.
+# Routes déclarées AVANT le mount catch-all ci-dessous : FastAPI/Starlette
+# matche dans l'ordre d'enregistrement, donc elles sont essayées en premier.
+_STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
+
+
+@app.get("/")
+def root_redirect():
+    return RedirectResponse("/photos")
+
+
+@app.get("/photos")
+@app.get("/photos/{sub}")
+def page_photos(sub: str | None = None):
+    return FileResponse(os.path.join(_STATIC_DIR, "photos.html"))
+
+
+@app.get("/entrainement")
+@app.get("/entrainement/{sub}")
+def page_entrainement(sub: str | None = None):
+    return FileResponse(os.path.join(_STATIC_DIR, "entrainement.html"))
+
+
+@app.get("/revision")
+@app.get("/revision/{sub}")
+def page_revision(sub: str | None = None):
+    return FileResponse(os.path.join(_STATIC_DIR, "revision.html"))
+
+
+@app.get("/archives")
+@app.get("/archives/{sub}")
+def page_archives(sub: str | None = None):
+    return FileResponse(os.path.join(_STATIC_DIR, "archives.html"))
+
 
 app.mount("/", NoCacheStaticFiles(directory="app/static", html=True), name="static")
