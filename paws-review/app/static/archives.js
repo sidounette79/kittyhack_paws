@@ -68,6 +68,13 @@ function setFilter(key, value) {
   else if (key === 'prey') preyFilter = value;
   else if (key === 'excludePrey') excludePreyFilter = value;
   else if (key === 'archivedStatus') archivedStatusFilter = value;
+  // 29.10, Sid ("j'avais changé le titre pour prendre que les écartées"
+  // mais rien n'avait bougé) - vraie cause trouvée : une sélection faite
+  // AVANT de changer de filtre restait active après, donc "Relancer"/
+  // "Confirmer" s'appliquait à l'ancienne sélection (vue mélangée), pas
+  // aux captures du nouveau filtre affichées à l'écran. Changer un filtre
+  // doit toujours repartir d'une sélection vide.
+  selectedIds.clear();
   loadQueue();
 }
 

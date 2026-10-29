@@ -77,6 +77,10 @@ function renderSubNav() {
 
 function setExcludePrey(checked) {
   excludePreyFilter = checked;
+  // 29.10 - même bug que archives.js/revision.js : vider la sélection au
+  // changement de filtre, sinon une action en lot peut viser des captures
+  // qui ne sont plus affichées à l'écran.
+  selectedIds.clear();
   loadQueue();
 }
 

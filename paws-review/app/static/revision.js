@@ -318,6 +318,10 @@ async function loadRebalanceCounts() {
 
 function rebalanceSetFilter(key, value) {
   rebalanceFilters[key] = value;
+  // 29.10 - même bug que archives.js : une sélection faite avant de
+  // changer de filtre restait active, une action en lot pouvait alors
+  // s'appliquer à des captures qui n'étaient plus affichées à l'écran.
+  selectedIds.clear();
   loadRebalanceQueue();
   renderRebalanceBar();
 }
