@@ -8,6 +8,11 @@ let cats = [];
 let currentQueue = [];
 let currentIndex = 0;
 let lastStats = {};
+// 29.10, Sid ("comment je rajoute les 84 patoune sans proie") - les
+// candidates pour le lot identité du futur Modèle 2 sont ici, dans la
+// vraie file "jamais encore revue" (Archives ne contient QUE du déjà
+// traité - confirmé, ça ne peut jamais aider à combler ce manque).
+let excludePreyFilter = false;
 
 const SOURCE_SUBPAGES = [
   { slug: 'reolink', label: 'Reolink', source: 'reolink_or_manual', statKey: 'reolink_or_manual_pending' },
@@ -63,7 +68,16 @@ function renderSubNav() {
   const preyTab = `<a class="tab ${filter === PREY_SLUG ? 'active' : ''}"
        style="${filter === PREY_SLUG ? 'background:var(--danger)' : 'border-color:var(--danger)'}"
        href="/photos/${PREY_SLUG}">Proies suspectées<span class="count">${lastStats.prey_pending ?? 0}</span></a>`;
-  el.innerHTML = allTab + catTabs + sourceTabs + preyTab;
+  const excludePreyCheckbox = `<label style="margin-left:8px; white-space:nowrap"
+       title="Exclut les captures où une proie coexiste - pour trouver des captures 'chat seul' pour le lot identité">
+       <input type="checkbox" ${excludePreyFilter ? 'checked' : ''} onchange="setExcludePrey(this.checked)">
+       Exclure les proies (lot identité)</label>`;
+  el.innerHTML = allTab + catTabs + sourceTabs + preyTab + excludePreyCheckbox;
+}
+
+function setExcludePrey(checked) {
+  excludePreyFilter = checked;
+  loadQueue();
 }
 
 async function loadQueue() {
@@ -80,6 +94,7 @@ async function loadQueue() {
     const cat = cats.find(c => slugify(c.name) === filter);
     if (cat) params.set('cat_name', cat.name);
   }
+  if (excludePreyFilter) params.set('exclude_prey', '1');
   currentQueue = await api(`/app-api/queue?${params}`);
   renderQueue();
 }
