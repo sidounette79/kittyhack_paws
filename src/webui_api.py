@@ -1342,6 +1342,63 @@ async def get_event_timeline(block_id: int, _user: str = Depends(require_session
     return JSONResponse({"entries": formatted})
 
 
+# 30.10, Sid ("je veux qu'on cree une page ou je vois tout ce qui est
+# détecté tout le temps. Pas les videos ni les photos mais je veux voir
+# les Mouvement detecte / Ouverture / Etc"): the same raw backend-decision
+# timeline as get_event_timeline above (one line per motion/RFID/door
+# action), but as one continuous feed across the most recent motion
+# blocks instead of scoped to a single block_id - a live log view rather
+# than a per-capture detail. Same data source (motion_timeline table),
+# same formatting helpers, just merged across blocks and sorted by real
+# timestamp instead of by block.
+@webui_app.get("/app-api/v1/activity/recent")
+async def get_recent_activity(limit: int = 300, _user: str = Depends(require_session)):
+    from src.event_timeline import timeline_format_message, timeline_format_time
+
+    database = CONFIG["KITTYHACK_DATABASE_PATH"]
+    tz = CONFIG["TIMEZONE"]
+
+    if not DatabaseCore.check_if_table_exists(database, "motion_timeline"):
+        return JSONResponse({"entries": []})
+
+    # Recent block_ids first, not a time filter - block_id is assigned in
+    # creation order, cheap to sort/limit on, and doesn't require every
+    # block to carry a reliable timestamp of its own to be selected.
+    block_ids_df = DatabaseCore.read_df_from_database(
+        database, "SELECT block_id FROM motion_timeline ORDER BY block_id DESC LIMIT 80"
+    )
+    block_ids = [int(b) for b in block_ids_df["block_id"].tolist()] if not block_ids_df.empty else []
+
+    timelines_by_block = EventsRepo.db_get_motion_timelines(database, block_ids)
+    merged: list[dict] = []
+    for entries in timelines_by_block.values():
+        for e in entries:
+            if isinstance(e, dict) and e.get("at"):
+                merged.append(e)
+
+    # Newest first - this is a live feed, not a chronology to scroll down
+    # through from the start of the day.
+    merged.sort(key=lambda e: str(e.get("at", "")), reverse=True)
+    merged = merged[: max(1, min(limit, 1000))]
+
+    formatted = [
+        {
+            "at": e.get("at", ""),
+            "time": timeline_format_time(e.get("at", ""), tz),
+            "message": timeline_format_message(e),
+        }
+        for e in merged
+    ]
+    return JSONResponse({"entries": formatted})
+
+
+@webui_app.get("/activity")
+@webui_app.get("/activity/")
+@webui_app.get("/activity/{rest:path}")
+async def serve_activity_page(_user: str = Depends(require_session)):
+    return _serve_spa_index()
+
+
 @webui_app.get("/app-api/v1/events/{block_id}")
 async def get_event(block_id: int, _user: str = Depends(require_session)):
     database = CONFIG["KITTYHACK_DATABASE_PATH"]

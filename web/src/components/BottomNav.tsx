@@ -41,6 +41,18 @@ function ImageIcon() {
   );
 }
 
+// 30.10, Sid ("je veux qu'on cree une page ou je vois tout ce qui est
+// détecté tout le temps"): new "Activité" tab, FontAwesome "list" glyph -
+// distinct from RouteIcon (Parcours, grouped captures) since this one is
+// the raw continuous log, not a journey of events.
+function ListIcon() {
+  return (
+    <svg viewBox="0 0 512 512" className="h-5 w-5" fill="currentColor" aria-hidden="true">
+      <path d="M40 48C26.7 48 16 58.7 16 72v48c0 13.3 10.7 24 24 24h48c13.3 0 24-10.7 24-24V72c0-13.3-10.7-24-24-24H40zM192 64c-17.7 0-32 14.3-32 32s14.3 32 32 32H480c17.7 0 32-14.3 32-32s-14.3-32-32-32H192zm0 160c-17.7 0-32 14.3-32 32s14.3 32 32 32H480c17.7 0 32-14.3 32-32s-14.3-32-32-32H192zm0 160c-17.7 0-32 14.3-32 32s14.3 32 32 32H480c17.7 0 32-14.3 32-32s-14.3-32-32-32H192zM16 232v48c0 13.3 10.7 24 24 24h48c13.3 0 24-10.7 24-24V232c0-13.3-10.7-24-24-24H40c-13.3 0-24 10.7-24 24zM40 368c-13.3 0-24 10.7-24 24v48c0 13.3 10.7 24 24 24h48c13.3 0 24-10.7 24-24V392c0-13.3-10.7-24-24-24H40z" />
+    </svg>
+  );
+}
+
 function GearIcon() {
   return (
     <svg viewBox="0 0 512 512" className="h-5 w-5" fill="currentColor" aria-hidden="true">
@@ -82,6 +94,7 @@ const ALL_ITEMS: NavItem[] = [
   { value: "presence", href: "/presence/", label: "Chats", icon: PawIcon },
   { value: "live-view", href: "/live-view/", label: "Live", icon: TvIcon },
   { value: "journey", href: "/journey/", label: "Parcours", icon: RouteIcon },
+  { value: "activity", href: "/activity/", label: "Activité", icon: ListIcon },
   { value: "pictures", href: "/pictures/", label: "Photos", icon: ImageIcon },
   { value: "configuration", href: "/configuration/", label: "Configuration", icon: GearIcon },
 ];

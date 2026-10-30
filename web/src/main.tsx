@@ -4,6 +4,7 @@ import { BrowserRouter, Routes, Route } from "react-router";
 import "./index.css";
 import ErrorBoundary from "./components/ErrorBoundary";
 import WallpaperBackground from "./components/WallpaperBackground";
+import ActivityPage from "./pages/Activity";
 import ChronologyPage from "./pages/Chronology";
 import PresencePage from "./pages/Presence";
 import PresenceCatPage from "./pages/PresenceCat";
@@ -26,6 +27,7 @@ createRoot(document.getElementById("root")!).render(
       <BrowserRouter>
         <WallpaperBackground />
         <Routes>
+          <Route path="/activity" element={<ActivityPage />} />
           <Route path="/chronology" element={<ChronologyPage />} />
           <Route path="/presence" element={<PresencePage />} />
           <Route path="/presence/cat/:rfid" element={<PresenceCatPage />} />
