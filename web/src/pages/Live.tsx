@@ -277,6 +277,18 @@ export default function LivePage() {
             </div>
           )}
 
+          {/* 26.10, Sid ("ajouter date et heure sur l'image du live de
+              kittyflap") - les deux panneaux Reolink en dessous ont déjà
+              une horloge, mais incrustée par la caméra elle-même dans son
+              propre flux vidéo (OSD Reolink) - le flux Kittyflap n'a pas
+              ça, donc rien n'apparaissait côté client non plus. Réutilise
+              frameTick (déjà un Date.now() vivant, tick 2s, voir plus bas)
+              plutôt qu'un intervalle dédié rien que pour l'horloge. */}
+          <div className="absolute right-2 top-2 rounded-full bg-black/60 px-2 py-1 text-xs text-white/80">
+            {new Date(frameTick).toLocaleDateString("fr-CH")}{" "}
+            {new Date(frameTick).toLocaleTimeString("fr-CH")}
+          </div>
+
           {status?.forced_lock_due_prey && (
             <div className="absolute inset-x-2 top-2 rounded-md bg-amber-500/90 px-2 py-1 text-center text-xs font-medium text-black">
               Proie détectée — intérieur bloqué encore {Math.ceil(status.time_until_release ?? 0)}s

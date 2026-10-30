@@ -674,8 +674,14 @@ export default function EventModal({
                         backgroundColor: color.replace("rgb(", "rgba(").replace(")", ", 0.05)"),
                       }}
                     >
+                      {/* 26.10, Sid ("l'étiquette au-dessus de la boîte et
+                          pas dedans, ça masque le museau parfois") -
+                          bottom-full (top de l'étiquette collé au bas de
+                          cette positon = juste au-dessus de la boîte,
+                          hors de la zone de détection) au lieu de top-1
+                          (dans le coin haut de la boîte elle-même). */}
                       <span
-                        className="absolute left-0 top-1 whitespace-nowrap rounded px-1 text-[0.65rem] font-medium text-white"
+                        className="absolute left-0 bottom-full mb-0.5 whitespace-nowrap rounded px-1 text-[0.65rem] font-medium text-white"
                         style={{ backgroundColor: color.replace("rgb(", "rgba(").replace(")", ", 0.85)") }}
                       >
                         {label}
@@ -856,7 +862,7 @@ export default function EventModal({
                           }}
                         >
                           <span
-                            className="absolute left-0 top-1 whitespace-nowrap rounded px-1 text-[0.65rem] font-medium text-white"
+                            className="absolute left-0 bottom-full mb-0.5 whitespace-nowrap rounded px-1 text-[0.65rem] font-medium text-white"
                             style={{ backgroundColor: color.replace("rgb(", "rgba(").replace(")", ", 0.85)") }}
                           >
                             {label}

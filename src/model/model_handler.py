@@ -214,7 +214,17 @@ class ModelHandler:
                     # OpenVINO AUTO mode automatically selects the best available
                     # device (GPU if available, CPU as fallback).
                     # For CUDA, pass the device explicitly as usual.
-                    _predict_kwargs: dict = dict(stream=True, imgsz=input_size, verbose=False)
+                    # 26.10, Sid ("je pense qu'il y a une double détection
+                    # inutile... la boîte verte est très large mais c'est
+                    # la même frame") - confirmé dans les vraies données
+                    # (event_text) : deux boîtes "Patoune" quasi superposées
+                    # sur une même frame, coordonnées légèrement différentes
+                    # - le NMS interne d'Ultralytics ne les fusionnait pas,
+                    # son seuil iou par défaut (0.7) n'étant jamais réglé
+                    # ici. Resserré pour que deux boîtes de la même classe
+                    # qui se chevauchent franchement soient vraiment traitées
+                    # comme UNE détection, pas deux.
+                    _predict_kwargs: dict = dict(stream=True, imgsz=input_size, verbose=False, iou=0.5)
                     if _inference_device != 'cpu' and not _is_openvino:
                         _predict_kwargs['device'] = _inference_device
                     results = self._yolo_model(frame, **_predict_kwargs)
@@ -276,7 +286,10 @@ class ModelHandler:
                                 
                             job_id, frame, input_size, labels, cat_names, min_threshold = job
 
-                            _worker_kwargs: dict = dict(stream=True, imgsz=input_size)
+                            # 26.10 : même correctif que _predict_kwargs
+                            # ci-dessus (double détection de la même classe
+                            # sur une frame, iou par défaut trop permissif).
+                            _worker_kwargs: dict = dict(stream=True, imgsz=input_size, iou=0.5)
                             if inference_device != 'cpu':
                                 _worker_kwargs['device'] = inference_device
                             results = model(frame, **_worker_kwargs)

@@ -285,6 +285,30 @@ def _wake_kittyflap_camera(token: str, duration_s: float) -> None:
         log.debug("camera/wake API call failed: %s", e)
 
 
+def _send_reolink_prey_signal(token: str, probability: float) -> None:
+    """25.10, Sid ("on pourrait tirer profit de la détection... reolink
+    voit plus de trucs, typiquement patoune avec une souris que KH a même
+    pas vue") - PHASE 0 seulement : chatiere tourne déjà le même modèle
+    YOLO en continu (voir l'appelant ci-dessous), jusqu'ici son verdict
+    proie ne sert qu'aux captures d'entraînement. Relaie ce verdict vers
+    src/api.py POST /reolink/prey-signal, qui ne fait qu'un log comparatif
+    pour l'instant - aucune action sur les aimants (voir le docstring de
+    cette route pour le protocole complet). Best-effort, même pattern que
+    _wake_kittyflap_camera ci-dessus : un échec ici ne doit jamais
+    perturber la boucle de capture."""
+    try:
+        r = requests.post(
+            f"{API_BASE}/reolink/prey-signal",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"probability": probability},
+            timeout=5,
+        )
+        if not r.ok:
+            log.warning("reolink/prey-signal API call failed: %s %s", r.status_code, r.text)
+    except Exception as e:
+        log.debug("reolink/prey-signal API call failed: %s", e)
+
+
 def _grab_single_frame(rtsp_url: str, discard_reads: int = 2) -> np.ndarray | None:
     """Open a short-lived RTSP connection, read (and discard) a couple of
     initial frames - an RTSP decoder needs a moment to sync to a real
@@ -593,7 +617,19 @@ class MouseDetector:
             for cls_idx, conf, xyxy in zip(
                 r.boxes.cls.tolist(), r.boxes.conf.tolist(), r.boxes.xyxy.tolist()
             ):
-                label = str(names.get(int(cls_idx), "")).lower()
+                # 26.10, Sid ("reolink indexe systématiquement en
+                # minuscule... ça laisse penser à un risque de double
+                # détection") - vrai, même bug que loop.py (voir plus haut
+                # aujourd'hui) : .lower() ici n'était utile QUE pour la
+                # comparaison _PREY_LABELS juste en dessous, mais la même
+                # variable, déjà en minuscule, finissait aussi dans "name"
+                # stocké/affiché - jamais la vraie casse du modèle
+                # ("Patoune", confirmé identique dans metadata.yaml). Cette
+                # caméra alimente le panneau "Chatière ext (Reolink)" de
+                # Parcours/Presence - indépendant du bug déjà corrigé côté
+                # caméra interne, donc pas réglé par ce correctif-là.
+                label_cased = str(names.get(int(cls_idx), ""))
+                label = label_cased.lower()
                 probability = float(conf * 100)
                 if label in _PREY_LABELS and probability > prey_probability:
                     prey_probability = probability
@@ -602,7 +638,7 @@ class MouseDetector:
                 x1, y1, x2, y2 = xyxy
                 detections.append(
                     {
-                        "name": label,
+                        "name": label_cased,
                         "probability": round(probability, 1),
                         "x": round(100.0 * x1 / frame_w, 2),
                         "y": round(100.0 * y1 / frame_h, 2),
@@ -1258,6 +1294,14 @@ class CameraWatcher(threading.Thread):
                     # Lockdown trigger disabled - see class docstring above.
                     if mouse_probability >= WATCHDOG_MOUSE_THRESHOLD:
                         log.warning("[%s] Prey suspected (%.0f%%) - lockdown disabled, no action taken.", self.cam_name, mouse_probability)
+                        # 25.10, Sid : Phase 0 du signal proie Reolink → KH,
+                        # observation seule - voir _send_reolink_prey_signal.
+                        # Seulement chatiere (le bon angle, le vrai modèle) -
+                        # jamais chatiere_int (déjà la source du verdict KH
+                        # lui-même, comparer un signal à lui-même n'aurait
+                        # aucun sens).
+                        if self.cam_name == "chatiere":
+                            _send_reolink_prey_signal(self.api_token, mouse_probability)
             finally:
                 if hw_proc is not None:
                     _stop_hw_decoder(hw_proc)

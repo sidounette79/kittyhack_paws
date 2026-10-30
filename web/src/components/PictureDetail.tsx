@@ -260,8 +260,11 @@ export default function PictureDetail({
                   backgroundColor: color.replace("rgb(", "rgba(").replace(")", ", 0.05)"),
                 }}
               >
+                {/* 26.10, Sid ("l'étiquette au-dessus de la boîte... ça
+                    masque le museau parfois") - même correctif que
+                    EventModal.tsx : au-dessus de la boîte, pas dedans. */}
                 <span
-                  className="absolute left-0 top-1 whitespace-nowrap rounded px-1 text-[0.65rem] font-medium text-white"
+                  className="absolute left-0 bottom-full mb-0.5 whitespace-nowrap rounded px-1 text-[0.65rem] font-medium text-white"
                   style={{ backgroundColor: color.replace("rgb(", "rgba(").replace(")", ", 0.85)") }}
                 >
                   {objectLabel(obj)}

@@ -622,9 +622,20 @@ async def get_watchdog_frame(filename: str, _user: str = Depends(require_session
     path = os.path.join(FRAME_SNAPSHOT_DIR, filename)
     if not os.path.abspath(path).startswith(os.path.abspath(FRAME_SNAPSHOT_DIR) + os.sep):
         raise HTTPException(status_code=404, detail="not found")
-    if not os.path.exists(path):
+    # 26.10, Sid ("j'aime pas quand il y a des erreurs"): watchdog.py
+    # overwrites this exact filename in place every 1-3s (live snapshot, not
+    # a new file per frame) - FileResponse stats the file for Content-Length
+    # THEN streams it in a separate read, so a request landing mid-overwrite
+    # could declare the old (often smaller) size and then send the new
+    # file's bytes, crashing with "Too much data for declared Content-Length"
+    # (confirmed in the logs, recurring every 20-90min). One atomic read
+    # instead - these snapshots are small, no reason to stream them anyway.
+    try:
+        with open(path, "rb") as f:
+            data = f.read()
+    except OSError:
         raise HTTPException(status_code=404, detail="not found")
-    return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+    return Response(content=data, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
 
 
 # 08.10, Sid ("pourquoi tout est vide?"): watchdog.py's training samples are

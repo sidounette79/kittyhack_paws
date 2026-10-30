@@ -10,10 +10,8 @@ import PresenceCatPage from "./pages/PresenceCat";
 import CatSettingsPage from "./pages/CatSettings";
 import JourneyPage from "./pages/Journey";
 import LivePage from "./pages/Live";
-import AppearancePage from "./pages/Appearance";
 import PhotosPage from "./pages/Photos";
 import ConfigurationPage from "./pages/Configuration";
-import AiTrainingPage from "./pages/AiTraining";
 import RemoteModeDocPage from "./pages/RemoteModeDoc";
 
 createRoot(document.getElementById("root")!).render(
@@ -34,10 +32,8 @@ createRoot(document.getElementById("root")!).render(
           <Route path="/presence/cat/:rfid/edit" element={<CatSettingsPage />} />
           <Route path="/journey" element={<JourneyPage />} />
           <Route path="/live-view" element={<LivePage />} />
-          <Route path="/appearance" element={<AppearancePage />} />
           <Route path="/pictures" element={<PhotosPage />} />
           <Route path="/configuration" element={<ConfigurationPage />} />
-          <Route path="/ai-training" element={<AiTrainingPage />} />
           <Route path="/remote-mode-doc" element={<RemoteModeDocPage />} />
         </Routes>
       </BrowserRouter>

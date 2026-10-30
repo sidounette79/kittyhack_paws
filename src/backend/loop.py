@@ -519,14 +519,34 @@ def backend_main(
         else:
             logging.info("[BACKEND] Motion event conclusion: Cat went outside.")
 
-        event_type = conclude_motion_event_type(
-            first_motion_outside_mono=first_motion_outside_mono,
-            first_motion_inside_raw_mono=first_motion_inside_raw_mono,
-            unlock_inside_tm=unlock_inside_tm,
-            unlock_outside_tm=unlock_outside_tm,
-            tag_id=tag_id,
-            no_mouse_detected=mouse_check_conditions["no_mouse_detected"],
-        )
+        # 30.10, Sid: a real bug (an extra keyword argument this function
+        # never accepted, see git history) made this call raise on every
+        # motion block over 90s - process_tick() propagated that straight
+        # out of backend_main()'s main loop, so EVERY following tick hit
+        # the same exception before any new motion could ever be
+        # processed. No new door decision landed for any cat for over 5
+        # hours (confirmed: last successful event in the DB was 21:52:48,
+        # nothing until the restart that picked up the actual fix), with
+        # nothing surfaced beyond a log line silently rotated away by the
+        # sheer volume of the repeated crash. A single bad call here
+        # should degrade one event's classification, never freeze the
+        # whole backend - this is defense in depth against the next
+        # mistake like this one, not a fix for the bug itself.
+        try:
+            event_type = conclude_motion_event_type(
+                first_motion_outside_mono=first_motion_outside_mono,
+                first_motion_inside_raw_mono=first_motion_inside_raw_mono,
+                unlock_inside_tm=unlock_inside_tm,
+                tag_id=tag_id,
+                no_mouse_detected=mouse_check_conditions["no_mouse_detected"],
+            )
+        except Exception:
+            logging.exception(
+                "[BACKEND] conclude_motion_event_type() failed - falling back to "
+                "MOTION_OUTSIDE_ONLY for this block so the backend keeps processing "
+                "new motion instead of getting stuck repeating this on every tick."
+            )
+            event_type = EventType.MOTION_OUTSIDE_ONLY
 
         timeline_append(
             motion_timeline_entries,
@@ -632,7 +652,21 @@ def backend_main(
             # database, so what she reviews/corrects already reflects the
             # smarter block-level answer instead of the per-frame noise.
             winning_tag = tag_id if tag_id is not None else tag_id_from_video
-            winning_name = cat_rfid_name_dict.get(winning_tag, "").lower() if winning_tag else ""
+            # 26.10, Sid ("j'ai toujours des identifications avec p et pas
+            # que P... ça m'en fait deux, comme si c'était deux détections
+            # différentes") - vrai bug, confirmé dans les données brutes
+            # (detected_objects_json alternant "Patoune"/"patoune" au sein
+            # du même passage) : winning_name ci-dessous ne servait QU'à la
+            # comparaison insensible à la casse (obj_name aussi en
+            # minuscule, ligne suivante), mais la correction écrivait cette
+            # même version minuscule directement dans la base au lieu de la
+            # vraie casse du nom enregistré - une frame jamais corrigée
+            # garde "Patoune", une frame corrigée devient "patoune", d'où
+            # l'alternance exacte observée. winning_name_cased distinct de
+            # winning_name (toujours en minuscule, pour la comparaison
+            # seule) règle ça.
+            winning_name_cased = cat_rfid_name_dict.get(winning_tag, "") if winning_tag else ""
+            winning_name = winning_name_cased.lower()
             for element in img_ids_for_motion_block:
                 image_buffer.update_block_id(element, motion_block_id)
                 if tag_id is not None:
@@ -647,7 +681,7 @@ def backend_main(
                             if not obj_name or obj_name in ("prey", "beute"):
                                 continue
                             if obj_name != winning_name:
-                                obj.object_name = winning_name
+                                obj.object_name = winning_name_cased
             logging.info(f"[BACKEND] Minimal threshold exceeded or tag ID detected. Images will be written to the database. Updated block ID for {len(img_ids_for_motion_block)} elements to '{motion_block_id}' and tag ID to '{tag_id if tag_id is not None else ''}'")
             # 08.10, Sid ("forcer le systeme a ecrire... en forcant
             # l'utilisation du vrai RFID"): this block just got written

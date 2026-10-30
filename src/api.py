@@ -396,6 +396,49 @@ async def camera_wake(request: Request):
     return _ok({"action": "camera_wake", "duration_s": duration_s})
 
 
+async def reolink_prey_signal(request: Request):
+    """POST /api/v1/reolink/prey-signal — PHASE 0 (observation pure, voir
+    conversation du 25.10 avec Sid sur un second canal aimants via Reolink).
+
+    chatiere-Reolink tourne déjà le même modèle YOLO que la caméra interne,
+    en continu (voir watchdog.py CameraWatcher._run_continuous(), juste
+    avant l'appel ici) - jusqu'ici son verdict proie ne sert qu'à capturer
+    des échantillons d'entraînement (le vieux déclencheur de verrouillage
+    independant, `on_prey_detected`, a été désactivé le 08.10 pour LES 3
+    AUTRES caméras, mal placées, sans vrai modèle - jamais testé sur
+    chatiere elle-même avec son vrai modèle).
+
+    Phase 0 : AUCUNE action sur les aimants, juste un log comparable au
+    "Mouse check condition 'no_mouse_detected' changed to False" que loop.py
+    émet déjà pour sa propre détection locale (voir loop.py ~ligne 2070) -
+    pour pouvoir, après quelques jours/semaines réels, comparer les deux
+    verdicts (proies ratées par KH mais vues par Reolink, vs fausses
+    alertes) avant de décider si ce signal mérite un vrai pouvoir de
+    décision (Phase 2 : prolonger la fenêtre de blocage post-proie
+    existante, jamais un verrou indépendant - voir no_prey_within_timeout
+    dans backend/decisions.py)."""
+    _, err = await _auth_or_fail(request)
+    if err:
+        return err
+    probability = None
+    try:
+        body = await request.json()
+        if isinstance(body, dict) and "probability" in body:
+            probability = float(body["probability"])
+    except Exception:
+        pass
+
+    from src.backend.loop import backend_main
+    from src.clock import monotonic_time
+
+    now_mono = monotonic_time()
+    backend_main.reolink_prey_signal_mono = now_mono
+    backend_main.reolink_prey_signal_probability = probability
+    prob_str = f"{probability:.0f}%" if probability is not None else "?"
+    logging.info(f"[BACKEND] Reolink chatiere prey signal received ({prob_str}) - observation seule, aucune action.")
+    return _ok({"action": "reolink_prey_signal", "probability": probability})
+
+
 async def mode_get(request: Request):
     """GET /api/v1/mode — current entry/exit mode."""
     _, err = await _auth_or_fail(request)
@@ -590,6 +633,9 @@ def build_router() -> Router:
 
         # Camera - wake the internal flap camera's model (PIR-blind-spot backup)
         Route("/api/v1/camera/wake", camera_wake, methods=["POST"]),
+        # 25.10, Sid : Phase 0 du signal proie Reolink-chatiere, observation
+        # seule - voir reolink_prey_signal() ci-dessus.
+        Route("/api/v1/reolink/prey-signal", reolink_prey_signal, methods=["POST"]),
 
         # Mode / settings — independent entry and exit direction
         Route("/api/v1/mode", mode_get, methods=["GET"]),

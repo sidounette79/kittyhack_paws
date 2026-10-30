@@ -59,6 +59,28 @@ interface ModelOption {
   label: string;
 }
 
+interface YoloModelInfo {
+  unique_id: string;
+  display_name: string;
+  creation_date: string;
+  is_active: boolean;
+  fps: number | null;
+  model_image_size: number;
+  variant_letter: string;
+}
+
+interface WallpaperImage {
+  filename: string;
+  url: string;
+}
+
+interface WallpaperState {
+  active: string | null;
+  images: WallpaperImage[];
+}
+
+const MAX_WALLPAPERS = 4;
+
 interface LiveViewConfig {
   refresh_interval: number;
 }
@@ -310,6 +332,85 @@ export default function ConfigurationPage() {
     if (!doorControl) return;
     const ranges = doorControl.exit_ranges.map((r, i) => (i === idx ? { ...r, ...patch } : r));
     setDoorControl({ ...doorControl, exit_ranges: ranges });
+  };
+
+  // 26.10, Sid ("on supprime complètement l'onglet IA, un truc dans
+  // configuration, avec lien vers paws review et gestion du modèle") -
+  // ported 1:1 from AiTraining.tsx's own "Gestion des modèles" section
+  // (same endpoints), the only part of that page still in real use once
+  // the retroactive-review/RFID tools (redundant with Paws Review, and the
+  // direct cause of tonight's db_write_lock contention incident) and the
+  // unused upstream fk-cloud.de training submission form were retired.
+  const [aiModels, setAiModels] = useState<YoloModelInfo[] | null>(null);
+  const [editingAiModel, setEditingAiModel] = useState<YoloModelInfo | null>(null);
+  const [editAiModelName, setEditAiModelName] = useState("");
+  const [aiModelActionMsg, setAiModelActionMsg] = useState<string | null>(null);
+  const [aiModelActionBusy, setAiModelActionBusy] = useState(false);
+
+  const loadAiModels = () => {
+    fetchJson<{ models: YoloModelInfo[] }>("/app-api/v1/ai-training/models")
+      .then((d) => setAiModels(d.models))
+      .catch(() => {});
+  };
+
+  useEffect(loadAiModels, []);
+
+  const activateAiModel = async (unique_id: string) => {
+    setAiModelActionBusy(true);
+    setAiModelActionMsg(null);
+    try {
+      const result = await fetchJson<{ ok: boolean; already_active?: boolean; live_reload?: boolean }>(
+        `/app-api/v1/ai-training/models/${unique_id}/activate`,
+        { method: "POST" }
+      );
+      if (result.already_active) setAiModelActionMsg("Ce modèle est déjà actif.");
+      else if (result.live_reload) setAiModelActionMsg("Modèle changé avec succès.");
+      else setAiModelActionMsg("Modèle sélectionné, mais le rechargement à chaud a échoué — redémarre pour l'appliquer.");
+      loadAiModels();
+    } catch (err) {
+      setAiModelActionMsg(err instanceof Error ? err.message : "Échec de l'activation.");
+    } finally {
+      setAiModelActionBusy(false);
+    }
+  };
+
+  const openEditAiModel = (m: YoloModelInfo) => {
+    setEditingAiModel(m);
+    setEditAiModelName(m.display_name);
+    setAiModelActionMsg(null);
+  };
+
+  const saveAiModelName = async () => {
+    if (!editingAiModel) return;
+    setAiModelActionBusy(true);
+    try {
+      await fetchJson(`/app-api/v1/ai-training/models/${editingAiModel.unique_id}/rename`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: editAiModelName }),
+      });
+      setEditingAiModel(null);
+      loadAiModels();
+    } catch (err) {
+      setAiModelActionMsg(err instanceof Error ? err.message : "Échec du renommage.");
+    } finally {
+      setAiModelActionBusy(false);
+    }
+  };
+
+  const deleteAiModel = async () => {
+    if (!editingAiModel) return;
+    if (!confirm("Supprimer définitivement ce modèle ?")) return;
+    setAiModelActionBusy(true);
+    try {
+      await fetchJson(`/app-api/v1/ai-training/models/${editingAiModel.unique_id}`, { method: "DELETE" });
+      setEditingAiModel(null);
+      loadAiModels();
+    } catch (err) {
+      setAiModelActionMsg(err instanceof Error ? err.message : "Échec de la suppression.");
+    } finally {
+      setAiModelActionBusy(false);
+    }
   };
 
   const [liveView, setLiveView] = useState<LiveViewConfig | null>(null);
@@ -595,6 +696,94 @@ export default function ConfigurationPage() {
     }
   };
 
+  // 26.10, Sid ("apparence on peut aussi en faire un chapitre dans
+  // configuration, ca ne mérite pas un onglet, on y va deux fois dans
+  // l'année") - ported 1:1 from Appearance.tsx (same endpoints/state),
+  // same reasoning as the AI-training section above: a tab is only worth
+  // its own bottom-nav slot when it's actually used often.
+  const [wallpaperState, setWallpaperState] = useState<WallpaperState | null>(null);
+  const [wallpaperBusy, setWallpaperBusy] = useState(false);
+  const [wallpaperMsg, setWallpaperMsg] = useState<string | null>(null);
+  const [blurPx, setBlurPx] = useState(10);
+  const wallpaperFileRef = useRef<HTMLInputElement | null>(null);
+
+  const loadWallpaper = () => {
+    fetchJson<WallpaperState>("/app-api/v1/wallpaper")
+      .then(setWallpaperState)
+      .catch(() => {});
+  };
+
+  useEffect(() => {
+    loadWallpaper();
+    fetchJson<{ blur_px: number }>("/app-api/v1/appearance/photo-blur")
+      .then((d) => setBlurPx(d.blur_px))
+      .catch(() => {});
+  }, []);
+
+  const onBlurChange = (value: number) => {
+    setBlurPx(value);
+    fetchJson("/app-api/v1/appearance/photo-blur", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ blur_px: value }),
+    }).catch(() => {});
+  };
+
+  const onChooseWallpaper = () => wallpaperFileRef.current?.click();
+
+  const onWallpaperFileSelected = async (file: File) => {
+    const form = new FormData();
+    form.append("image", file);
+    setWallpaperBusy(true);
+    setWallpaperMsg(null);
+    try {
+      await fetchJson("/app-api/v1/wallpaper", { method: "POST", body: form });
+      loadWallpaper();
+    } catch (err) {
+      setWallpaperMsg(err instanceof Error ? err.message : "Échec de l'envoi.");
+    } finally {
+      setWallpaperBusy(false);
+    }
+  };
+
+  const onSelectWallpaper = async (filename: string) => {
+    setWallpaperBusy(true);
+    try {
+      await fetchJson("/app-api/v1/wallpaper/active", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ filename }),
+      });
+      loadWallpaper();
+    } finally {
+      setWallpaperBusy(false);
+    }
+  };
+
+  const onClearWallpaper = async () => {
+    setWallpaperBusy(true);
+    try {
+      await fetchJson("/app-api/v1/wallpaper/active", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ filename: "" }),
+      });
+      loadWallpaper();
+    } finally {
+      setWallpaperBusy(false);
+    }
+  };
+
+  const onRemoveWallpaper = async (filename: string) => {
+    setWallpaperBusy(true);
+    try {
+      await fetchJson(`/app-api/v1/wallpaper/${filename}`, { method: "DELETE" });
+      loadWallpaper();
+    } finally {
+      setWallpaperBusy(false);
+    }
+  };
+
   const changePassword = async () => {
     setSavingPw(true);
     setPwMsg(null);
@@ -839,6 +1028,99 @@ export default function ConfigurationPage() {
               {generalMsg && <p className="mt-2 text-center text-sm text-white/70">{generalMsg}</p>}
             </>
           )}
+        </Section>
+
+        <Section title="Apparence" description="Fond d'écran, flou de la photo chat, thème.">
+          <div className="mb-4 rounded-xl border border-white/10 bg-white/5 p-4">
+            <div className="mb-1 text-sm font-semibold text-white/80">Fond d'écran</div>
+            <p className="mb-3 text-xs text-white/65">
+              Choisis une photo parmi celles déjà envoyées, ou ajoutes-en une nouvelle depuis ton
+              téléphone (max {MAX_WALLPAPERS}).
+            </p>
+
+            <input
+              ref={wallpaperFileRef}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) onWallpaperFileSelected(file);
+                e.target.value = "";
+              }}
+            />
+
+            <div className="flex flex-wrap gap-3">
+              <button
+                onClick={onClearWallpaper}
+                disabled={wallpaperBusy}
+                className={`flex h-16 w-16 flex-col items-center justify-center rounded-lg border text-[0.65rem] ${
+                  wallpaperState && !wallpaperState.active
+                    ? "border-white bg-white/20"
+                    : "border-white/15 bg-white/5 hover:bg-white/10"
+                }`}
+              >
+                Aucun
+              </button>
+              {wallpaperState?.images.map((img) => (
+                <div key={img.filename} className="relative h-16 w-16">
+                  <button
+                    onClick={() => onSelectWallpaper(img.filename)}
+                    disabled={wallpaperBusy}
+                    className={`h-16 w-16 overflow-hidden rounded-lg border-2 ${
+                      wallpaperState.active === img.filename ? "border-white" : "border-transparent"
+                    }`}
+                  >
+                    <img src={img.url} alt="" className="h-full w-full object-cover" />
+                  </button>
+                  <button
+                    onClick={() => onRemoveWallpaper(img.filename)}
+                    disabled={wallpaperBusy}
+                    aria-label="Supprimer ce fond d'écran"
+                    className="absolute -right-1.5 -top-1.5 flex h-5 w-5 items-center justify-center rounded-full bg-neutral-900 text-xs"
+                  >
+                    ✕
+                  </button>
+                </div>
+              ))}
+              {(wallpaperState?.images.length ?? 0) < MAX_WALLPAPERS && (
+                <button
+                  onClick={onChooseWallpaper}
+                  disabled={wallpaperBusy}
+                  className="flex h-16 w-16 items-center justify-center rounded-lg border border-dashed border-white/25 text-xl text-white/60 hover:bg-white/5"
+                >
+                  +
+                </button>
+              )}
+            </div>
+
+            {wallpaperMsg && <p className="mt-3 text-sm text-red-300">{wallpaperMsg}</p>}
+          </div>
+
+          <div className="mb-4 rounded-xl border border-white/10 bg-white/5 p-4">
+            <div className="mb-1 text-sm font-semibold text-white/80">Flou de la photo (fiche chat)</div>
+            <p className="mb-3 text-xs text-white/65">
+              Netteté de la photo du chat en fond de la bande de dates.
+            </p>
+            <div className="flex items-center gap-3">
+              <span className="text-xs text-white/65">Net</span>
+              <input
+                type="range"
+                min={0}
+                max={30}
+                value={blurPx}
+                onChange={(e) => onBlurChange(Number(e.target.value))}
+                className="w-full accent-white"
+              />
+              <span className="text-xs text-white/65">Flou</span>
+            </div>
+            <div className="mt-1 text-center text-xs text-white/60">{blurPx}px</div>
+          </div>
+
+          <div className="rounded-xl border border-white/10 bg-white/5 p-4">
+            <div className="mb-1 text-sm font-semibold text-white/80">Thème</div>
+            <p className="text-xs text-white/65">Sombre uniquement — pas de mode clair sur cette app.</p>
+          </div>
         </Section>
 
         <Section title="Caméra" description="Réglages de la caméra interne et des caméras IP externes.">
@@ -1195,6 +1477,118 @@ export default function ConfigurationPage() {
               </button>
               {doorControlMsg && <p className="mt-2 text-center text-sm text-white/70">{doorControlMsg}</p>}
             </>
+          )}
+        </Section>
+        <Section
+          title="Entraînement IA"
+          description="Trier/équilibrer les photos et entraîner un modèle se fait sur Paws Review ; ici juste l'activation du modèle sur la chatière."
+        >
+          <a
+            href="https://kittyreview.sidounette.ch/entrainement"
+            target="_blank"
+            rel="noreferrer"
+            className="mb-4 flex items-center justify-between rounded-lg bg-white/5 p-3 text-sm hover:bg-white/10"
+          >
+            <span>Trier, équilibrer et entraîner (Paws Review)</span>
+            <span className="rounded-md border border-white/20 px-3 py-1.5">Ouvrir ↗</span>
+          </a>
+
+          <h3 className="mb-2 text-sm font-medium">Gestion des modèles</h3>
+          {aiModels && aiModels.length === 0 && (
+            <p className="text-sm text-white/65">Rien ici pour l'instant. Entraîne d'abord un modèle sur Paws Review.</p>
+          )}
+          {aiModels && aiModels.length > 0 && (
+            <div className="flex flex-col gap-2">
+              {aiModels.map((m) => (
+                <div
+                  key={m.unique_id}
+                  className="flex items-center justify-between gap-2 rounded-lg bg-white/5 p-3"
+                >
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      {m.is_active && (
+                        <span className="rounded bg-green-500/20 px-1.5 py-0.5 text-xs text-green-300">
+                          Actif
+                        </span>
+                      )}
+                      <span className="truncate font-medium">{m.display_name}</span>
+                    </div>
+                    <div className="mt-1 text-xs text-white/65">{m.creation_date}</div>
+                    <div className="mt-1 flex gap-1 text-xs text-white/60">
+                      <span className="rounded bg-white/10 px-1.5 py-0.5">{m.variant_letter}</span>
+                      <span className="rounded bg-white/10 px-1.5 py-0.5">{m.model_image_size}px</span>
+                      <span className="rounded bg-white/10 px-1.5 py-0.5">
+                        {m.fps != null ? `${m.fps.toFixed(1)} FPS` : "—"}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="flex shrink-0 gap-1">
+                    <button
+                      onClick={() => activateAiModel(m.unique_id)}
+                      disabled={aiModelActionBusy || m.is_active}
+                      title="Utiliser ce modèle maintenant"
+                      className="rounded-md border border-white/20 px-2 py-1.5 text-sm hover:bg-white/10 disabled:opacity-40"
+                    >
+                      {aiModelActionBusy ? "…" : "✓"}
+                    </button>
+                    <button
+                      onClick={() => openEditAiModel(m)}
+                      title="Modifier ou supprimer ce modèle"
+                      className="rounded-md border border-white/20 px-2 py-1.5 text-sm hover:bg-white/10"
+                    >
+                      ✏️
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+          {aiModelActionMsg && !editingAiModel && <p className="mt-2 text-sm text-white/70">{aiModelActionMsg}</p>}
+
+          {editingAiModel && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+              <div className="w-full max-w-sm rounded-xl bg-neutral-900 p-4">
+                <h3 className="mb-3 text-base font-semibold">Modifier la configuration du modèle</h3>
+                <Field label="Nom">
+                  <input
+                    value={editAiModelName}
+                    onChange={(e) => setEditAiModelName(e.target.value)}
+                    className={inputClass}
+                  />
+                </Field>
+                <p className="mb-3 text-xs text-white/65">
+                  Créé le : {editingAiModel.creation_date}
+                </p>
+                {editingAiModel.is_active && (
+                  <p className="mb-3 rounded bg-blue-500/10 p-2 text-xs text-blue-300">
+                    Ce modèle est actuellement utilisé. Tu ne peux pas le supprimer.
+                  </p>
+                )}
+                {aiModelActionMsg && <p className="mb-3 text-sm text-white/70">{aiModelActionMsg}</p>}
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    onClick={saveAiModelName}
+                    disabled={aiModelActionBusy}
+                    className="rounded-md border border-white/20 px-3 py-1.5 text-sm hover:bg-white/10 disabled:opacity-40"
+                  >
+                    {aiModelActionBusy ? "Enregistrement…" : "Enregistrer"}
+                  </button>
+                  <button
+                    onClick={() => setEditingAiModel(null)}
+                    className="rounded-md border border-white/20 px-3 py-1.5 text-sm hover:bg-white/10"
+                  >
+                    Annuler
+                  </button>
+                  <button
+                    onClick={deleteAiModel}
+                    disabled={aiModelActionBusy || editingAiModel.is_active}
+                    className="rounded-md border border-red-400/40 px-3 py-1.5 text-sm text-red-300 hover:bg-red-400/10 disabled:opacity-40"
+                  >
+                    {aiModelActionBusy ? "Suppression…" : "Supprimer"}
+                  </button>
+                </div>
+              </div>
+            </div>
           )}
         </Section>
         <Section title="Réglages Live view" description="Intervalle de rafraîchissement de la caméra en direct.">
