@@ -68,7 +68,7 @@ os.makedirs(path_watchdog_samples, exist_ok=True)
 # below and falls through to Shiny unmodified, which 404s on it ("Not
 # Found") - caught 07.10, build 16 testing.
 SHINY_TAB_PATHS = frozenset({
-    "presence", "live-view", "journey", "pictures", "manage-cats",
+    "presence", "live-view", "journey", "activity", "pictures", "manage-cats",
     "ai-training", "configuration", "wlan-configuration", "chronology",
     # 08.10, Sid ("je vois plus accès" after the configuration cutover):
     # temporary stopgap so the self-update flow and the remote-mode doc
@@ -92,6 +92,10 @@ FASTAPI_TAB_PATHS = (
             # 08.10, Sid ("tu peux créer une page et la conserver?"): React
             # port of doc/remote-mode.md - new slug, was never a Shiny tab.
             "remote-mode-doc",
+            # 30.10, Sid ("je veux qu'on cree une page ou je vois tout ce
+            # qui est détecté tout le temps"): new slug, same pattern as
+            # remote-mode-doc above - never existed on the Shiny side.
+            "activity",
             # 08.10, Sid ("entrainement terminé, on peut lancer la page
             # react"): AI Training cutover, held back until her own
             # Label-Studio-export + model-training round trip on the
