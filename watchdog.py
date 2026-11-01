@@ -26,6 +26,7 @@ Run as a second process alongside app.py (see compose.yaml).
 
 import json
 import logging
+from collections import Counter
 from logging.handlers import TimedRotatingFileHandler
 import os
 import select
@@ -577,6 +578,14 @@ def _resolve_active_identity_model() -> str | None:
 # same way here as it is for the flap's own camera.
 _PREY_LABELS = ("prey", "beute")
 
+# 01.11, scission détection/identité - même fenêtre que loop.py
+# (RECENT_WINDOW). Trou de silence au-delà duquel un nouveau "Cat" ne peut
+# plus être le même passage que le précédent (observé en vrai ce soir :
+# ~1-2s entre deux frames d'un même passage continu, jamais plus de
+# quelques secondes - 6s est une marge large, pas une mesure fine).
+IDENTITY_SMOOTHING_WINDOW = 8
+IDENTITY_SMOOTHING_RESET_GAP_S = 6.0
+
 
 class MouseDetector:
     """Loads the active model once; run() takes a BGR frame, returns prey% (0-100).
@@ -590,6 +599,17 @@ class MouseDetector:
         self.kind, self.model_path, self.imgsz = _resolve_active_model()
         self.identity = None
         self.identity_match_threshold = float(CONFIG.get("IDENTITY_MATCH_THRESHOLD", 60.0) or 60.0)
+        # 01.11, Sid ("on peut lisser aussi?") - même principe que le vote
+        # majoritaire déjà existant côté caméra interne (loop.py, RECENT_
+        # WINDOW=8) qu'une rafale isolée (1-2 frames) ne peut pas faire
+        # basculer une identité déjà établie sur le passage en cours -
+        # MAIS watchdog.py n'a pas d'équivalent "clôture de bloc" comme
+        # loop.py (chaque frame est écrite immédiatement, voir
+        # _save_event_frame) : vote glissant tenu en mémoire d'instance,
+        # réinitialisé après un trou sans détection (nouveau passage,
+        # jamais mélangé avec le précédent).
+        self._recent_identities: list[str] = []
+        self._last_identity_detection_wall: float = 0.0
         if self.kind == "yolo":
             from ultralytics import YOLO
             self.yolo = YOLO(self.model_path, task="detect", verbose=False)
@@ -599,7 +619,10 @@ class MouseDetector:
             # partage possible). None (no-op) tant qu'aucun Modèle 2 n'est
             # activé, ou si son chargement échoue - jamais fatal pour le
             # watchdog (load_identity_model() avale déjà ses erreurs).
-            self.identity = load_identity_model(_resolve_active_identity_model())
+            self.identity = load_identity_model(
+                _resolve_active_identity_model(),
+                inference_device=str(CONFIG.get("INFERENCE_DEVICE", "cpu") or "cpu"),
+            )
         else:
             with open(LABELS_PATH, "r", encoding="utf-8") as f:
                 self.labels = [line.strip() for line in f if line.strip()]
@@ -674,11 +697,35 @@ class MouseDetector:
                     cx1, cy1 = max(0, int(x1)), max(0, int(y1))
                     cx2, cy2 = min(frame_w, int(x2)), min(frame_h, int(y2))
                     if cx2 - cx1 >= 8 and cy2 - cy1 >= 8:
-                        label_cased, _score = self.identity.identify_crop(
+                        label_cased, score = self.identity.identify_crop(
                             frame[cy1:cy2, cx1:cx2], self.identity_match_threshold,
                         )
                     else:
-                        label_cased = UNKNOWN_CAT_LABEL
+                        label_cased, score = UNKNOWN_CAT_LABEL, 0.0
+                    # 01.11 : sans ça, "probability" restait la confiance
+                    # "il y a un chat ici" du Modèle 1 - avant la scission
+                    # ce nombre ÉTAIT la confiance d'identité (un seul
+                    # modèle faisait les deux), Parcours s'y attend encore.
+                    probability = score
+
+                    # Sid ("on peut lisser aussi?") - vote majoritaire sur
+                    # les dernières détections de CE passage continu (voir
+                    # le commentaire de __init__) : une rafale isolée de
+                    # 1-2 frames fausses au milieu d'un passage à l'identité
+                    # par ailleurs claire ne doit pas s'afficher telle
+                    # quelle. "Chat inconnu" participe au vote comme
+                    # n'importe quel nom - si la majorité récente est
+                    # inconnue, le lissé doit l'être aussi.
+                    now = time.time()
+                    if now - self._last_identity_detection_wall > IDENTITY_SMOOTHING_RESET_GAP_S:
+                        self._recent_identities.clear()
+                    self._last_identity_detection_wall = now
+                    self._recent_identities.append(label_cased)
+                    if len(self._recent_identities) > IDENTITY_SMOOTHING_WINDOW:
+                        self._recent_identities.pop(0)
+                    counts = Counter(self._recent_identities)
+                    smoothed_name, _n = counts.most_common(1)[0]
+                    label_cased = smoothed_name
                 detections.append(
                     {
                         "name": label_cased,

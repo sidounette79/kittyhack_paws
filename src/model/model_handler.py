@@ -87,7 +87,7 @@ class ModelHandler:
         # resolve_cat_identities) tant qu'aucun Modèle 2 n'est activé ;
         # chargé une fois ici, jamais par frame (voir identity.py).
         self._identity_model_dir = identity_model_dir
-        self.identity = load_identity_model(identity_model_dir)
+        self.identity = load_identity_model(identity_model_dir, inference_device=self.inference_device)
         self.identity_match_threshold = float(CONFIG.get('IDENTITY_MATCH_THRESHOLD', 60.0) or 60.0)
 
         self._fps_lock = threading.Lock()
@@ -264,7 +264,14 @@ class ModelHandler:
                         # le process principal (ni picklable ni souhaitable
                         # de le refaire à chaque frame).
                         from .identity import load_identity_model, resolve_cat_identities
-                        worker_identity = load_identity_model(identity_model_dir)
+                        # Cette branche (multiprocessing) ne tourne que
+                        # quand inference_device == 'cpu' (voir
+                        # using_all_cores plus haut - un device GPU y passe
+                        # toujours par direct_inference à la place), mais
+                        # transmis explicitement plutôt que supposé, pour
+                        # ne jamais désynchroniser les deux chemins si cette
+                        # condition change un jour.
+                        worker_identity = load_identity_model(identity_model_dir, inference_device=inference_device)
                         # Set CPU affinity for this process based on num_threads
                         import psutil
                         process = psutil.Process()

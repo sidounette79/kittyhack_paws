@@ -8,14 +8,39 @@ module referme l'écart pour que `DetectedObject.object_name` continue de
 porter un nom de chat exactement comme avant, invisible pour
 `loop.py`/Parcours/le stockage.
 
-Choix délibérés, assumés et volontairement PLUS SIMPLES que ce que le plan
-de départ esquissait :
-  - Backend d'inférence : onnxruntime, CPU uniquement. Le Modèle 1 a besoin
-    d'OpenVINO/NCNN pour tenir le flux vidéo temps réel ; l'identité ne
-    tourne qu'une fois par boîte "Cat" déjà détectée (quelques crops par
-    événement, pas un flux continu) - le gain GPU serait marginal, le coût
-    de raccorder le même pipeline d'export/pilotes Intel (déjà pénible
-    pour le Modèle 1, voir le Dockerfile) ne se justifie pas ici.
+Choix délibérés :
+  - Backend d'inférence : 01.11, Sid ("il faut toujours, au mieux, que
+    modèle 1 et modèle 2 tournent sur GPU") - OpenVINO quand
+    `inference_device` l'indique (même convention que ModelHandler/
+    watchdog._uses_openvino_backend : "gpu"/"intel:gpu"/"intel:cpu"/
+    "intel:npu"), EXACTEMENT le même `openvino==2023.3.0` déjà épinglé et
+    éprouvé pour le Modèle 1 - jamais une 2e dépendance GPU (pas
+    onnxruntime-openvino, un package séparé avec son propre pinning, qui
+    réintroduirait le genre d'enfer de drivers déjà documenté dans le
+    Dockerfile pour un gain qu'on n'a même pas besoin de redémontrer).
+    OpenVINO lit un .onnx directement (frontend ONNX natif depuis
+    2022.x) - pas d'étape d'export IR séparée comme pour le Modèle 1
+    (son .pt n'est pas un format qu'OpenVINO sait lire nativement, un
+    .onnx l'est déjà). PIÈGE VÉRIFIÉ EN VRAI le 01.11 : ceci ne marche
+    QUE si l'export ONNX a été fait avec `dynamo=False`
+    (`train_vastai_identity.py`) - le nouvel exporteur "dynamo" par
+    défaut de torch.onnx.export() produit un graphe qu'OpenVINO 2023.3.0
+    refuse de lire (testé : même erreur avec et sans dynamic_axes, donc
+    pas un souci de shape dynamique - un vrai conflit de version entre
+    l'exporteur PyTorch et ce frontend ONNX précis). Un modèle entraîné
+    AVANT ce correctif (ex. 20261029_221433) tombera sur l'exception
+    ci-dessous et retombera proprement en CPU, pas de modèle refait pour
+    lui - seuls les entraînements FUTURS en profitent. device_name="AUTO"
+    (jamais forcé), même choix que
+    model_handler.py pour Ultralytics - laisse OpenVINO retomber sur CPU
+    tout seul si le GPU n'est pas dispo, pas une logique à dupliquer ici.
+    onnxruntime (CPUExecutionProvider) reste le filet de secours : utilisé
+    quand `inference_device` est "cpu" (target-mode Pi, ou remote-mode
+    sans GPU), ET comme repli automatique si OpenVINO échoue pour
+    N'IMPORTE quelle raison (modèle introuvable, driver, etc.) - ne
+    jamais laisser un souci GPU rendre l'identité indisponible alors que
+    le CPU suffit très bien pour ce volume (quelques crops par passage,
+    pas un flux continu).
   - Métrique : similarité cosinus (naturelle pour un embedding ArcFace),
     PAS une distance - le seuil de config est donc "au-dessus duquel on
     accepte", pas "en-dessous" comme la première rédaction du plan le
@@ -47,11 +72,19 @@ import numpy as np
 
 UNKNOWN_CAT_LABEL = "Chat inconnu"
 
+# Même ensemble que ModelHandler._uses_openvino_backend() / watchdog.py's
+# _uses_openvino_backend() - une seule source de vérité pour "ce device
+# veut dire OpenVINO", dupliquée ici en constante plutôt qu'importée
+# (model_handler.py importe déjà identity.py - import circulaire si
+# l'inverse était tenté).
+_OPENVINO_DEVICES = {"gpu", "intel:gpu", "intel:cpu", "intel:npu"}
+
 
 class CatIdentity:
-    """Loaded identity model: one embedding session + one gallery per known cat."""
+    """Loaded identity model: one embedding session (OpenVINO or
+    onnxruntime CPU) + one gallery per known cat."""
 
-    def __init__(self, model_dir: str):
+    def __init__(self, model_dir: str, inference_device: str = "cpu"):
         self.model_dir = model_dir
 
         info_path = os.path.join(model_dir, "info.json")
@@ -62,11 +95,29 @@ class CatIdentity:
         # ici EST la valeur réelle, pas une supposition.
         self.input_size = 224
 
-        import onnxruntime as ort
-        self._session = ort.InferenceSession(
-            os.path.join(model_dir, "identity_model.onnx"), providers=["CPUExecutionProvider"]
-        )
-        self._input_name = self._session.get_inputs()[0].name
+        onnx_path = os.path.join(model_dir, "identity_model.onnx")
+        self._backend = "cpu"
+        self._ov_compiled = None
+        self._session = None
+
+        wants_gpu = str(inference_device or "cpu").strip().lower() in _OPENVINO_DEVICES
+        if wants_gpu:
+            try:
+                from openvino.runtime import Core
+                core = Core()
+                ov_model = core.read_model(onnx_path)
+                self._ov_compiled = core.compile_model(ov_model, "AUTO")
+                self._ov_input = self._ov_compiled.input(0)
+                self._ov_output = self._ov_compiled.output(0)
+                self._backend = "openvino"
+                logging.info(f"[IDENTITY] Loaded via OpenVINO (device=AUTO) from '{onnx_path}'.")
+            except Exception as e:
+                logging.warning(f"[IDENTITY] OpenVINO load failed ({e}), falling back to onnxruntime CPU.")
+
+        if self._backend == "cpu":
+            import onnxruntime as ort
+            self._session = ort.InferenceSession(onnx_path, providers=["CPUExecutionProvider"])
+            self._input_name = self._session.get_inputs()[0].name
 
         self.galleries: dict[str, np.ndarray] = {}
         galleries_dir = os.path.join(model_dir, "galleries")
@@ -102,7 +153,11 @@ class CatIdentity:
             [0.229, 0.224, 0.225], dtype=np.float32
         )
         tensor = np.transpose(normalized, (2, 0, 1))[np.newaxis, ...]
-        (embedding,) = self._session.run(None, {self._input_name: tensor})
+        if self._backend == "openvino":
+            result = self._ov_compiled([tensor])[self._ov_output]
+            embedding = np.asarray(result)
+        else:
+            (embedding,) = self._session.run(None, {self._input_name: tensor})
         vec = embedding[0].astype(np.float32)
         norm = np.linalg.norm(vec)
         return vec / norm if norm > 0 else vec
@@ -137,8 +192,13 @@ class CatIdentity:
         return UNKNOWN_CAT_LABEL, score
 
 
-def load_identity_model(model_dir: str | None) -> CatIdentity | None:
+def load_identity_model(model_dir: str | None, inference_device: str = "cpu") -> CatIdentity | None:
     """Load the identity model at `model_dir`, or None (logged) on any failure.
+
+    `inference_device` : même chaîne déjà résolue par l'appelant
+    (ModelHandler/watchdog.MouseDetector, post is_remote_mode()) - jamais
+    recalculée ici, une seule source de vérité pour "ce device veut dire
+    GPU/CPU" entre Modèle 1 et Modèle 2.
 
     Never raises - a broken/missing identity model must degrade to "no
     identity resolution" (boxes stay labelled 'Cat'), never take down the
@@ -147,7 +207,7 @@ def load_identity_model(model_dir: str | None) -> CatIdentity | None:
     if not model_dir:
         return None
     try:
-        return CatIdentity(model_dir)
+        return CatIdentity(model_dir, inference_device=inference_device)
     except Exception as e:
         logging.error(f"[IDENTITY] Failed to load identity model from '{model_dir}': {e}")
         return None
@@ -195,10 +255,17 @@ def resolve_cat_identities(
             # Boîte dégénérée (quasi nulle) - jamais assez de signal pour une
             # identité fiable, inutile de solliciter le modèle pour ça.
             obj["name"] = UNKNOWN_CAT_LABEL
+            obj["probability"] = 0.0
             continue
 
         name, score = identity.identify_crop(frame[y1:y2, x1:x2], match_threshold)
         obj["name"] = name
+        # 01.11 : sans ça, "probability" restait la confiance "il y a un
+        # chat ici" du Modèle 1 - avant la scission, ce nombre ÉTAIT la
+        # confiance d'identité (un seul modèle faisait les deux) ; Parcours
+        # et tout lecteur de detected_objects_json s'attendent à ce que ce
+        # soit toujours le cas.
+        obj["probability"] = round(score, 1)
         if name.lower() in cat_names:
             own_cat_probability = max(own_cat_probability, int(score))
 

@@ -261,11 +261,24 @@ def main():
         f.write("\\n".join(class_names) + "\\n")
 
     dummy = torch.randn(1, 3, 224, 224).to(DEVICE)
+    # 01.11, Sid ("il faut toujours, au mieux, que modèle 1 et modèle 2
+    # tournent sur GPU") - testé en vrai (pas une supposition) : le
+    # nouvel exporteur "dynamo" par défaut de torch.onnx.export() produit
+    # un graphe qu'OpenVINO 2023.3.0 (épinglé pour voir ce GPU Intel
+    # précis, voir le Dockerfile de kittyhack-remote) refuse de lire
+    # ("rank has to be known (static)" sur les Conv, "unsupported type"
+    # sur HardSigmoid) - confirmé reproductible sur un MobileNetV3-Small
+    # nu, AVEC ET SANS dynamic_axes (donc pas une histoire de shape
+    # dynamique). dynamo=False (l'ancien exporteur TorchScript) produit un
+    # graphe qu'OpenVINO 2023.3.0 lit sans erreur - testé et confirmé.
+    # Nécessite le paquet 'onnx' en plus d'onnxscript (déjà dans le
+    # pip install plus haut).
     torch.onnx.export(
         model, dummy, "/workspace/result/identity_model.onnx",
         input_names=["input"], output_names=["embedding"],
         dynamic_axes={{"input": {{0: "batch"}}, "embedding": {{0: "batch"}}}},
         opset_version=12,
+        dynamo=False,
     )
 
     json.dump({{
