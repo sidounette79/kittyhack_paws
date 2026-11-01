@@ -217,9 +217,23 @@ def main():
 
     model = EmbeddingNet().to(DEVICE)
     arc = ArcMarginProduct(EMBED_DIM, len(class_names)).to(DEVICE)
-    optimizer = torch.optim.Adam(list(model.parameters()) + list(arc.parameters()), lr=LR)
+
+    # 01.11, Sid + diagnostic en vrai ce soir (Boubou : 5/5 puis 2/5 d'un
+    # run à l'autre, MEMES donnees) - avec ~400 crops/chat, finetuner TOUT
+    # le backbone MobileNetV3 (deja pre-entraine ImageNet, plusieurs
+    # millions de parametres) est trop peu de donnees : ca perturbe ses
+    # features generiques un peu differemment a chaque run (ordre des
+    # batches, augmentation aleatoire), d'ou l'instabilite observee sans
+    # rien changer aux donnees. Gele : seule la petite tete (fc, ~74K
+    # parametres, + ArcFace) apprend encore - pratique standard de
+    # transfer learning avec peu de donnees par classe, beaucoup plus
+    # stable d'un run a l'autre.
+    for p in model.features.parameters():
+        p.requires_grad = False
+    optimizer = torch.optim.Adam(list(model.fc.parameters()) + list(arc.parameters()), lr=LR)
 
     model.train()
+    model.features.eval()  # backbone gele : jamais de mise a jour des stats BatchNorm non plus
     for epoch in range(EPOCHS):
         total_loss = 0.0
         n_batches = 0

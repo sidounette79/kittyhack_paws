@@ -53,6 +53,19 @@ IDENTITY_EXPORTS_DIR = os.path.join(STORAGE_ROOT, "identity_exports")
 # produisent le même lot (reproductible, auditable).
 TARGET_PER_SOURCE = 200
 
+# 01.11, Sid ("ça devrait reconnaître Boubou... il est quand même pas
+# comme les autres") - diagnostic en vrai ce soir : les confusions
+# Boubou (Reolink) venaient de boîtes "Cat" minuscules (chat loin de la
+# caméra extérieure), pas d'une histoire de couleur/pelage - aire
+# médiane mesurée 3,9% pour Boubou/Reolink contre 8-16% pour les 3
+# autres chats. Un crop de quelques pixels une fois agrandi à 224x224
+# n'apporte quasiment aucun signal utile - pire, ça peut polluer
+# l'apprentissage avec du bruit qui ressemble à n'importe quoi. Seuil
+# vérifié sur les vraies données avant de le fixer : à 2.0%, il reste
+# 155-202 crops par chat x source (sur 200 ciblés) - jamais un chat
+# qui tombe à sec, juste les pires crops écartés.
+MIN_BOX_AREA_PCT = 2.0
+
 
 def build_identity_training_zip(output_path: str, target_per_source: int = TARGET_PER_SOURCE) -> dict:
     """Construit un zip de crops étiquetés par chat (`<cat_name>/capture_<id>_<bucket>.jpg`),
@@ -65,6 +78,7 @@ def build_identity_training_zip(output_path: str, target_per_source: int = TARGE
 
     candidates: dict[tuple[str, str], list[tuple[int, str, dict]]] = {}
     skipped_prey_coexist = 0
+    skipped_too_small = 0
 
     with get_conn() as conn:
         rows = conn.execute(
@@ -82,6 +96,9 @@ def build_identity_training_zip(output_path: str, target_per_source: int = TARGE
             for box in boxes:
                 cat_name = canonicalize(box.get("label"))
                 if cat_name not in IDENTITY_CLASSES:
+                    continue
+                if box["width"] * box["height"] / 100.0 < MIN_BOX_AREA_PCT:
+                    skipped_too_small += 1
                     continue
                 candidates.setdefault((cat_name, bucket), []).append(
                     (row["id"], row["original_path"], box)
@@ -134,13 +151,14 @@ def build_identity_training_zip(output_path: str, target_per_source: int = TARGE
         os.rmdir(root)
 
     log.info(
-        "Export identité : %d crops (%d captures Patoune+Prey exclues, %d fichiers manquants, %d crops invalides)",
-        included, skipped_prey_coexist, skipped_missing_file, skipped_bad_crop,
+        "Export identité : %d crops (%d captures Patoune+Prey exclues, %d boîtes trop petites <%.1f%%, %d fichiers manquants, %d crops invalides)",
+        included, skipped_prey_coexist, skipped_too_small, MIN_BOX_AREA_PCT, skipped_missing_file, skipped_bad_crop,
     )
     return {
         "included": included,
         "counts": counts,
         "skipped_prey_coexist": skipped_prey_coexist,
+        "skipped_too_small": skipped_too_small,
         "skipped_missing_file": skipped_missing_file,
         "skipped_bad_crop": skipped_bad_crop,
     }
