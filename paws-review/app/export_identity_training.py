@@ -81,10 +81,33 @@ def build_identity_training_zip(output_path: str, target_per_source: int = TARGE
     skipped_too_small = 0
 
     with get_conn() as conn:
+        # 01.11, Sid ("le but c'est vraiment de la correction
+        # d'apprentissage... apprends ça en plus") - une correction
+        # enregistrée via la file de révision identité (identity_review.py)
+        # fait désormais entrer une capture dans l'export même si elle n'a
+        # jamais été formellement "confirmed"/"corrected" via le flux de
+        # révision générique : corriger une prédiction du Modèle 2 EST en
+        # soi la validation humaine qui compte ici.
+        corrections = {
+            (r["capture_id"], r["object_index"]): r["corrected_name"]
+            for r in conn.execute(
+                "SELECT capture_id, object_index, corrected_name FROM identity_corrections"
+            ).fetchall()
+        }
+        corrected_capture_ids = {capture_id for capture_id, _ in corrections}
+
         rows = conn.execute(
             """SELECT id, source, original_path, detected_objects_json FROM captures
                WHERE review_status IN ('confirmed', 'corrected')"""
         ).fetchall()
+        if corrected_capture_ids:
+            extra_placeholders = ",".join("?" * len(corrected_capture_ids))
+            rows += conn.execute(
+                f"""SELECT id, source, original_path, detected_objects_json FROM captures
+                    WHERE review_status NOT IN ('confirmed', 'corrected')
+                      AND id IN ({extra_placeholders})""",
+                tuple(corrected_capture_ids),
+            ).fetchall()
 
         for row in rows:
             boxes = effective_boxes(conn, row["id"], row["detected_objects_json"])
@@ -94,28 +117,33 @@ def build_identity_training_zip(output_path: str, target_per_source: int = TARGE
                 continue
             bucket = "kittyflap" if row["source"] == "kittyflap" else "reolink_manual"
             for box in boxes:
-                cat_name = canonicalize(box.get("label"))
+                correction = corrections.get((row["id"], box["object_index"]))
+                cat_name = correction or canonicalize(box.get("label"))
                 if cat_name not in IDENTITY_CLASSES:
                     continue
                 if box["width"] * box["height"] / 100.0 < MIN_BOX_AREA_PCT:
                     skipped_too_small += 1
                     continue
                 candidates.setdefault((cat_name, bucket), []).append(
-                    (row["id"], row["original_path"], box)
+                    (row["id"], row["original_path"], box, correction is not None)
                 )
 
     counts: dict[str, int] = {}
     included = 0
     skipped_missing_file = 0
     skipped_bad_crop = 0
+    exported_correction_keys: list[tuple[int, int]] = []
 
     for (cat_name, bucket), items in candidates.items():
-        # Id croissant = ordre de capture, reproductible (pas de tri aléatoire).
-        selected = sorted(items, key=lambda t: t[0])[:target_per_source]
+        # 01.11 : les corrections passent toujours en premier (jamais
+        # coupées par target_per_source) - une correction explicite de Sid
+        # ne doit jamais se faire éliminer par le plafond au profit d'une
+        # détection brute non revue. Id croissant ensuite, reproductible.
+        selected = sorted(items, key=lambda t: (not t[3], t[0]))[:target_per_source]
         counts[f"{cat_name} ({bucket})"] = len(selected)
         cat_dir = os.path.join(tmp_dir, cat_name)
         os.makedirs(cat_dir, exist_ok=True)
-        for capture_id, original_path, box in selected:
+        for capture_id, original_path, box, is_correction in selected:
             if not os.path.isfile(original_path):
                 skipped_missing_file += 1
                 continue
@@ -135,9 +163,19 @@ def build_identity_training_zip(output_path: str, target_per_source: int = TARGE
                         format="JPEG", quality=90,
                     )
                     included += 1
+                    if is_correction:
+                        exported_correction_keys.append((capture_id, box["object_index"]))
             except Exception as e:
                 log.warning("Crop échoué pour capture %s (%s): %s", capture_id, original_path, e)
                 skipped_bad_crop += 1
+
+    if exported_correction_keys:
+        with get_conn() as conn:
+            conn.executemany(
+                """UPDATE identity_corrections SET exported_at = datetime('now')
+                   WHERE capture_id = ? AND object_index = ?""",
+                exported_correction_keys,
+            )
 
     with zipfile.ZipFile(output_path, "w", zipfile.ZIP_DEFLATED) as zf:
         for root, _dirs, files in os.walk(tmp_dir):
@@ -151,12 +189,13 @@ def build_identity_training_zip(output_path: str, target_per_source: int = TARGE
         os.rmdir(root)
 
     log.info(
-        "Export identité : %d crops (%d captures Patoune+Prey exclues, %d boîtes trop petites <%.1f%%, %d fichiers manquants, %d crops invalides)",
-        included, skipped_prey_coexist, skipped_too_small, MIN_BOX_AREA_PCT, skipped_missing_file, skipped_bad_crop,
+        "Export identité : %d crops (%d corrections de Sid incluses, %d captures Patoune+Prey exclues, %d boîtes trop petites <%.1f%%, %d fichiers manquants, %d crops invalides)",
+        included, len(exported_correction_keys), skipped_prey_coexist, skipped_too_small, MIN_BOX_AREA_PCT, skipped_missing_file, skipped_bad_crop,
     )
     return {
         "included": included,
         "counts": counts,
+        "corrections_included": len(exported_correction_keys),
         "skipped_prey_coexist": skipped_prey_coexist,
         "skipped_too_small": skipped_too_small,
         "skipped_missing_file": skipped_missing_file,

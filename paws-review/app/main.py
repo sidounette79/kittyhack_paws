@@ -15,7 +15,8 @@ from app.catalog_db import get_conn, init_db
 from app.config import RETENTION_DAYS, STORAGE_ROOT
 from app.export_training import EXPORTS_DIR, read_state, start_export_async
 from app.export_training import STATE_PATH as EXPORT_STATE_PATH
-from app.labels import CLASSES, canonicalize
+from app.identity_review import get_identity_review_queue, pending_corrections_count, record_identity_correction
+from app.labels import CLASSES, IDENTITY_CLASSES, canonicalize
 from app.model_compare import COMPARE_STATE_PATH
 from app.model_review import list_model_dirs, resolve_queue_items, start_model_review_async
 from app.model_review import read_state as read_model_review_state
@@ -790,6 +791,33 @@ def identity_train_status():
     return read_identity_training_state()
 
 
+# 01.11, Sid ("le but c'est vraiment de la correction d'apprentissage,
+# lui dire là tu as mis ça, tu t'es trompé, apprends ça en plus") - Phase
+# 5 du plan de scission détection/identité. File des boîtes "Cat" déjà
+# résolues par le Modèle 2 (via kittyhack-remote, voir identity.py) pas
+# encore corrigées, triées par score croissant - les moins sûres en
+# premier, celles qui ont le plus de chances d'être fausses.
+@app.get("/app-api/identity/review-queue")
+def identity_review_queue(limit: int = 100):
+    with get_conn() as conn:
+        return {
+            "items": get_identity_review_queue(conn, limit),
+            "pending_corrections": pending_corrections_count(conn),
+        }
+
+
+@app.post("/app-api/identity/{capture_id}/{object_index}/correct")
+def identity_correct(capture_id: int, object_index: int, payload: dict = Body(...)):
+    corrected_name = payload.get("corrected_name")
+    if corrected_name not in IDENTITY_CLASSES:
+        raise HTTPException(400, f"nom de chat invalide, attendu l'un de {IDENTITY_CLASSES}")
+    predicted_name = payload.get("predicted_name") or ""
+    predicted_score = payload.get("predicted_score")
+    with get_conn() as conn:
+        record_identity_correction(conn, capture_id, object_index, predicted_name, predicted_score, corrected_name)
+    return {"ok": True}
+
+
 # 20.10, Sid ("je peux toujours faire une modif en live sur la vidéo...
 # qu'elle parte dans paws review") - LabelStudio (décommissionné ce soir)
 # était la destination de l'action "send" de la page Parcours (Kittyhack),
@@ -1108,6 +1136,12 @@ def page_revision(sub: str | None = None):
 @app.get("/archives/{sub}")
 def page_archives(sub: str | None = None):
     return FileResponse(os.path.join(_STATIC_DIR, "archives.html"))
+
+
+@app.get("/identite")
+@app.get("/identite/{sub}")
+def page_identite(sub: str | None = None):
+    return FileResponse(os.path.join(_STATIC_DIR, "identite.html"))
 
 
 app.mount("/", NoCacheStaticFiles(directory="app/static", html=True), name="static")

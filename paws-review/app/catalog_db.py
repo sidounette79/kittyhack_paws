@@ -162,6 +162,28 @@ CREATE TABLE IF NOT EXISTS model_review_queue_members (
     object_index INTEGER,  -- NULL si cette frame-ci n'avait aucune boîte existante
     PRIMARY KEY (queue_id, capture_id)
 );
+
+-- 01.11, Sid ("le but c'est vraiment de la correction d'apprentissage,
+-- lui dire là tu as mis ça, tu t'es trompé, apprends ça en plus") - Phase
+-- 5 du plan de scission détection/identité. Distincte de box_annotations
+-- (qui corrige la GÉOMÉTRIE/le label générique d'une capture) : ceci
+-- enregistre spécifiquement "le Modèle 2 a dit X, en vrai c'est Y" sur
+-- UNE boîte identité précise, pour réinjection dans le prochain
+-- entraînement (voir export_identity_training.py, qui préfère cette
+-- table au label brut détecté quand une correction existe).
+-- exported_at NULL = pas encore repris par un entraînement - même
+-- convention que captures.exported_at, sert de file d'attente.
+CREATE TABLE IF NOT EXISTS identity_corrections (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    capture_id INTEGER NOT NULL REFERENCES captures(id) ON DELETE CASCADE,
+    object_index INTEGER NOT NULL,
+    predicted_name TEXT NOT NULL,
+    predicted_score REAL,
+    corrected_name TEXT NOT NULL,
+    created_at DATETIME NOT NULL DEFAULT (datetime('now')),
+    exported_at DATETIME,
+    UNIQUE(capture_id, object_index)
+);
 """
 
 

@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Identité - Paws Review</title>
+<meta name="theme-color" content="#121316">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Paws Review">
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/icon-192.png">
+<link rel="apple-touch-icon" href="/icon-192.png">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;800&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="/style.css">
+<style>
+  /* 01.11, Sid ("apprends ça en plus") - file de correction d'identité
+     (Modèle 2) : propre à cette page, pas assez générique pour style.css. */
+  .id-tile { background: var(--surface-2); border-radius: 10px; overflow: hidden; }
+  .id-tile img { width: 100%; aspect-ratio: 1; object-fit: cover; display: block; }
+  .id-meta { padding: 6px 8px 2px; font-size: 12px; color: var(--text-dim); display: flex; justify-content: space-between; }
+  .id-score-low { color: var(--bad, #e35d5d); }
+  .id-buttons { display: grid; grid-template-columns: repeat(2, 1fr); gap: 4px; padding: 4px 8px 8px; }
+  .id-buttons button { padding: 6px 4px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface); color: var(--text); font-size: 12px; cursor: pointer; }
+  .id-buttons button.predicted { border-color: var(--accent); font-weight: 600; }
+  .id-buttons button.done { background: var(--good); color: #0a1a10; border-color: var(--good); }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Paws Review</h1>
+  <div class="tabs" id="page-nav"></div>
+  <div class="export-bar" id="identity-bar"></div>
+</header>
+
+<div id="id-grid" class="queue-grid"></div>
+<div id="id-empty" class="empty-state" hidden>Rien à corriger pour l'instant - le Modèle 2 n'a rien de peu sûr récemment.</div>
+
+<script src="/common.js"></script>
+<script src="/nav.js"></script>
+<script src="/identite.js"></script>
+</body>
+</html>
