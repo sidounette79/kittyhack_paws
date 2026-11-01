@@ -88,7 +88,6 @@ class ModelHandler:
         # chargé une fois ici, jamais par frame (voir identity.py).
         self._identity_model_dir = identity_model_dir
         self.identity = load_identity_model(identity_model_dir, inference_device=self.inference_device)
-        self.identity_match_threshold = float(CONFIG.get('IDENTITY_MATCH_THRESHOLD', 60.0) or 60.0)
 
         self._fps_lock = threading.Lock()
         self._last_effective_fps: float | None = None
@@ -249,7 +248,7 @@ class ModelHandler:
                         # nom brut YOLO "Cat" ne matche jamais cat_names) -
                         # remplacé ici par la confiance réelle du Modèle 2.
                         own_cat_probability = resolve_cat_identities(
-                            frame, detected_objects, self.identity, self.cat_names, self.identity_match_threshold,
+                            frame, detected_objects, self.identity, self.cat_names,
                         )
                     return mouse_probability, own_cat_probability, detected_objects
 
@@ -257,7 +256,7 @@ class ModelHandler:
                 self._model_worker = None
             else:
                 # Use the multiprocessing approach for limited CPU cores
-                def model_worker_process(model_path, input_queue, output_queue, num_threads=1, inference_device='cpu', identity_model_dir=None, identity_match_threshold=60.0):
+                def model_worker_process(model_path, input_queue, output_queue, num_threads=1, inference_device='cpu', identity_model_dir=None):
                     try:
                         # Processus séparé : sa propre copie du Modèle 2,
                         # chargée une seule fois ici - jamais partagée avec
@@ -333,7 +332,7 @@ class ModelHandler:
                             )
                             if worker_identity is not None:
                                 own_cat_probability = resolve_cat_identities(
-                                    frame, detected_objects, worker_identity, cat_names, identity_match_threshold,
+                                    frame, detected_objects, worker_identity, cat_names,
                                 )
 
                             output_queue.put((job_id, mouse_probability, own_cat_probability, detected_objects))
@@ -354,7 +353,7 @@ class ModelHandler:
                     target=model_worker_process,
                     args=(
                         self.modeldir, self._input_queue, self._output_queue, self.num_threads,
-                        resolved_inference_device, self._identity_model_dir, self.identity_match_threshold,
+                        resolved_inference_device, self._identity_model_dir,
                     )
                 )
                 self._model_worker.daemon = True

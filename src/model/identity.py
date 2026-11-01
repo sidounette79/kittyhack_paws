@@ -162,13 +162,17 @@ class CatIdentity:
         norm = np.linalg.norm(vec)
         return vec / norm if norm > 0 else vec
 
-    def identify_crop(self, crop_bgr: np.ndarray, match_threshold: float) -> tuple[str, float]:
-        """Return (nom_du_chat_ou_'Chat inconnu', score 0-100).
+    def identify_crop(self, crop_bgr: np.ndarray) -> tuple[str, float]:
+        """Return (nom_du_chat_le_plus_proche, score 0-100).
 
-        `match_threshold` is on the same 0-100 scale as the rest of
-        Kittyhack's confidence thresholds (CAT_THRESHOLD, MOUSE_THRESHOLD,
-        ...), even though the underlying metric here is a cosine
-        similarity (-1..1), rescaled to 0-100 for display/comparison.
+        01.11, Sid ("le seul chat étranger qui pourrissait ma vie est
+        mort, ça fait un an qu'aucun chat inconnu ne s'est approché de la
+        chatière") - plus de scénario réel à protéger en retombant sur
+        `UNKNOWN_CAT_LABEL` à partir d'un seuil de confiance arbitraire :
+        toujours le chat connu le plus proche, jamais "Chat inconnu" en
+        dessous d'un pourcentage. `UNKNOWN_CAT_LABEL` reste utilisé,
+        ailleurs, pour les cas structurellement dégénérés (aucune galerie
+        chargée, boîte quasi nulle) - jamais pour "pas assez confiant".
         """
         if crop_bgr is None or crop_bgr.size == 0 or not self.galleries:
             return UNKNOWN_CAT_LABEL, 0.0
@@ -187,9 +191,7 @@ class CatIdentity:
                 best_name, best_sim = cat_name, sim
 
         score = max(0.0, min(100.0, (best_sim + 1.0) / 2.0 * 100.0))
-        if score >= match_threshold:
-            return best_name, score
-        return UNKNOWN_CAT_LABEL, score
+        return best_name, score
 
 
 def load_identity_model(model_dir: str | None, inference_device: str = "cpu") -> CatIdentity | None:
@@ -218,7 +220,6 @@ def resolve_cat_identities(
     detected_objects: list[dict],
     identity: CatIdentity | None,
     cat_names: list[str],
-    match_threshold: float,
 ) -> int:
     """Mutate each 'Cat' box in `detected_objects` (percent coords, Kittyhack
     convention: 'x'/'y'/'w'/'h'/'name'/'probability') in place, replacing
@@ -258,7 +259,7 @@ def resolve_cat_identities(
             obj["probability"] = 0.0
             continue
 
-        name, score = identity.identify_crop(frame[y1:y2, x1:x2], match_threshold)
+        name, score = identity.identify_crop(frame[y1:y2, x1:x2])
         obj["name"] = name
         # 01.11 : sans ça, "probability" restait la confiance "il y a un
         # chat ici" du Modèle 1 - avant la scission, ce nombre ÉTAIT la

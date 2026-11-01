@@ -598,7 +598,6 @@ class MouseDetector:
     def __init__(self):
         self.kind, self.model_path, self.imgsz = _resolve_active_model()
         self.identity = None
-        self.identity_match_threshold = float(CONFIG.get("IDENTITY_MATCH_THRESHOLD", 60.0) or 60.0)
         # 01.11, Sid ("on peut lisser aussi?") - même principe que le vote
         # majoritaire déjà existant côté caméra interne (loop.py, RECENT_
         # WINDOW=8) qu'une rafale isolée (1-2 frames) ne peut pas faire
@@ -698,7 +697,7 @@ class MouseDetector:
                     cx2, cy2 = min(frame_w, int(x2)), min(frame_h, int(y2))
                     if cx2 - cx1 >= 8 and cy2 - cy1 >= 8:
                         label_cased, score = self.identity.identify_crop(
-                            frame[cy1:cy2, cx1:cx2], self.identity_match_threshold,
+                            frame[cy1:cy2, cx1:cx2],
                         )
                     else:
                         label_cased, score = UNKNOWN_CAT_LABEL, 0.0

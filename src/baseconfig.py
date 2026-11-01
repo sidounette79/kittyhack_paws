@@ -230,11 +230,6 @@ SETTINGS_SCHEMA: list[Setting] = [
     # inchangée par rapport à aujourd'hui) sans jamais forcer les deux à
     # avancer de concert. Voir src/model/identity.py.
     _S("IDENTITY_MODEL", ""),
-    # Échelle 0-100 comme CAT_THRESHOLD/MOUSE_THRESHOLD, même si la mesure
-    # sous-jacente est une similarité cosinus rescalée, pas une probabilité
-    # YOLO - sous ce seuil, une boîte "Cat" redevient "Chat inconnu" plutôt
-    # qu'une identité peu fiable.
-    _S("IDENTITY_MATCH_THRESHOLD", 60.0, "float"),
     _S("INFERENCE_DEVICE", "cpu"),
     _S("STARTUP_SHUTDOWN_FLAG", False, "bool"),
     _S("NOT_GRACEFUL_SHUTDOWNS", 0, "int"),
