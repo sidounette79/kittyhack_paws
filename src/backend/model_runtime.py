@@ -7,6 +7,7 @@ from threading import Lock
 from src.baseconfig import CONFIG
 from src.mode import is_remote_mode
 from src.model import ModelHandler, YoloModel
+from src.model.identity_model import IdentityModel
 
 
 def _get_model_threads() -> int:
@@ -33,6 +34,12 @@ def _create_model_handler_from_config() -> ModelHandler:
     yolo_model_path = YoloModel.get_model_path(CONFIG['YOLO_MODEL'])
     yolo_model_image_size = YoloModel.get_model_image_size(CONFIG['YOLO_MODEL'])
     logging.info(f"[BACKEND] Using YOLO model {yolo_model_path}")
+
+    identity_unique_id = (CONFIG.get('IDENTITY_MODEL') or '').strip()
+    identity_model_dir = IdentityModel.get_model_path(identity_unique_id) if identity_unique_id else None
+    if identity_unique_id and not identity_model_dir:
+        logging.warning(f"[BACKEND] Active IDENTITY_MODEL '{identity_unique_id}' not found on disk; 'Cat' boxes stay generic.")
+
     return ModelHandler(
         model="yolo",
         modeldir=yolo_model_path,
@@ -43,6 +50,7 @@ def _create_model_handler_from_config() -> ModelHandler:
         jpeg_quality=75,
         model_image_size=(yolo_model_image_size if yolo_model_image_size else 320),
         num_threads=threads,
+        identity_model_dir=identity_model_dir,
     )
 
 

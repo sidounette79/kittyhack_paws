@@ -41,6 +41,11 @@ def models_yolo_root() -> str:
     return os.path.join(install_base(), "models", "yolo")
 
 
+def models_identity_root() -> str:
+    """Directory for cat-identity (Modèle 2, embeddings) model files."""
+    return os.path.join(install_base(), "models", "identity")
+
+
 def wallpapers_dir() -> str:
     """07.10, Sid ("choisir parmi des wallpaper, ou télécharger depuis
     smartphone - comme pour meelo"): small gallery of uploaded background

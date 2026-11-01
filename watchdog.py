@@ -54,6 +54,8 @@ from src.baseconfig import CONFIG, load_config
 from src.mqtt import MQTTConfig
 from src.paths import kittyhack_root
 from src.model.yolo_model import YoloModel
+from src.model.identity_model import IdentityModel
+from src.model.identity import load_identity_model, UNKNOWN_CAT_LABEL
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [WATCHDOG] %(message)s")
 log = logging.getLogger("watchdog")
@@ -550,6 +552,25 @@ def _resolve_active_model() -> tuple[str, str, int]:
     return "tflite", MODEL_PATH, 0
 
 
+def _resolve_active_identity_model() -> str | None:
+    """Return the active Modèle 2 (identity) directory, or None - same source
+    of truth as Kittyflap's own side (`CONFIG['IDENTITY_MODEL']`), re-checked
+    on every MouseDetector() construction like `_resolve_active_model()`
+    above. No live hot-reload here either (same existing limitation as
+    Modèle 1 already has on this watchdog - not a regression introduced
+    by Modèle 2)."""
+    try:
+        unique_id = (CONFIG.get("IDENTITY_MODEL") or "").strip()
+        if unique_id:
+            model_dir = IdentityModel.get_model_path(unique_id)
+            if model_dir:
+                return model_dir
+            log.warning("Active identity model '%s' not found on disk; 'Cat' boxes stay generic.", unique_id)
+    except Exception as e:
+        log.warning("Could not resolve active identity model: %s", e)
+    return None
+
+
 # Same literal check as Kittyhack's own src/model/detection.py, so a custom
 # model trained through Kittyhack's own Label Studio pipeline (labels are
 # whatever the user typed - cat names, "Prey", "Beute", ...) is read the
@@ -567,10 +588,18 @@ class MouseDetector:
 
     def __init__(self):
         self.kind, self.model_path, self.imgsz = _resolve_active_model()
+        self.identity = None
+        self.identity_match_threshold = float(CONFIG.get("IDENTITY_MATCH_THRESHOLD", 60.0) or 60.0)
         if self.kind == "yolo":
             from ultralytics import YOLO
             self.yolo = YOLO(self.model_path, task="detect", verbose=False)
             log.info("Loaded custom YOLO model for prey detection: %s (imgsz=%d)", self.model_path, self.imgsz)
+            # 01.11, scission détection/identité - même modèle 2 que côté
+            # Kittyflap, chargé indépendamment ici (process séparé, aucun
+            # partage possible). None (no-op) tant qu'aucun Modèle 2 n'est
+            # activé, ou si son chargement échoue - jamais fatal pour le
+            # watchdog (load_identity_model() avale déjà ses erreurs).
+            self.identity = load_identity_model(_resolve_active_identity_model())
         else:
             with open(LABELS_PATH, "r", encoding="utf-8") as f:
                 self.labels = [line.strip() for line in f if line.strip()]
@@ -636,6 +665,20 @@ class MouseDetector:
                 if probability >= TRAINING_SAMPLE_MIN_CONFIDENCE:
                     any_detection = True
                 x1, y1, x2, y2 = xyxy
+                if label == "cat" and self.identity is not None:
+                    # Résolution d'identité : la boîte générique "Cat" du
+                    # Modèle 1 devient un nom de chat (ou UNKNOWN_CAT_LABEL)
+                    # - prey_probability/any_detection ci-dessus restent
+                    # calculés sur le label/la confiance BRUTS de Modèle 1,
+                    # l'identité ne change que ce qui est affiché/stocké.
+                    cx1, cy1 = max(0, int(x1)), max(0, int(y1))
+                    cx2, cy2 = min(frame_w, int(x2)), min(frame_h, int(y2))
+                    if cx2 - cx1 >= 8 and cy2 - cy1 >= 8:
+                        label_cased, _score = self.identity.identify_crop(
+                            frame[cy1:cy2, cx1:cx2], self.identity_match_threshold,
+                        )
+                    else:
+                        label_cased = UNKNOWN_CAT_LABEL
                 detections.append(
                     {
                         "name": label_cased,

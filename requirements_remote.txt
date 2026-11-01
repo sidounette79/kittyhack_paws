@@ -40,6 +40,10 @@ narwhals==1.13.5
 ncnn==1.0.20241226
 networkx==3.4.2
 numpy==1.26.4
+# 01.11, scission détection/identité (Modèle 2, src/model/identity.py) -
+# CPU uniquement (CPUExecutionProvider), voir la justification dans
+# identity.py - pas la peine de raccorder le pipeline GPU Intel d'YOLO ici.
+onnxruntime==1.20.1
 opencv-python-headless==4.11.0.86
 # 19.10, Sid ("on fait la bascule en privilégié") - version pinned
 # volontairement en dessous du minimum qu'Ultralytics réclame

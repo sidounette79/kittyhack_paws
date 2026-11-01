@@ -40,6 +40,9 @@ narwhals==1.13.5
 ncnn==1.0.20241226
 networkx==3.4.2
 numpy==1.26.4
+# 01.11, scission détection/identité (Modèle 2, src/model/identity.py) -
+# CPU uniquement, voir requirements_remote.txt pour la justification.
+onnxruntime==1.20.1
 opencv-python-headless==4.11.0.86
 orjson==3.10.11
 packaging==24.2

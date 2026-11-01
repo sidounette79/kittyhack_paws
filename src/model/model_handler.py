@@ -28,6 +28,7 @@ from .camera_config import (
     _is_remote_internal_proxy_stream,
 )
 from .detection import _parse_yolo_detection_results
+from .identity import load_identity_model, resolve_cat_identities
 
 if TYPE_CHECKING:
     from tflite_runtime.interpreter import Interpreter
@@ -44,7 +45,8 @@ class ModelHandler:
                  framerate=10,
                  jpeg_quality=75,
                  model_image_size=320,
-                 num_threads=4):
+                 num_threads=4,
+                 identity_model_dir: str | None = None):
         """Configure model paths, inference device, and live-frame cache."""
         self.labelfile = os.path.join(modeldir, labelfile)
         self.model = model
@@ -80,6 +82,13 @@ class ModelHandler:
         self.num_threads = num_threads
         self.cat_names = [cat_name.lower() for cat_name in CatsRepo.get_cat_names_list(CONFIG['KITTYHACK_DATABASE_PATH'])]
         self._stop_requested = threading.Event()
+
+        # 01.11, scission détection/identité - None (donc no-op dans
+        # resolve_cat_identities) tant qu'aucun Modèle 2 n'est activé ;
+        # chargé une fois ici, jamais par frame (voir identity.py).
+        self._identity_model_dir = identity_model_dir
+        self.identity = load_identity_model(identity_model_dir)
+        self.identity_match_threshold = float(CONFIG.get('IDENTITY_MATCH_THRESHOLD', 60.0) or 60.0)
 
         self._fps_lock = threading.Lock()
         self._last_effective_fps: float | None = None
@@ -228,19 +237,34 @@ class ModelHandler:
                     if _inference_device != 'cpu' and not _is_openvino:
                         _predict_kwargs['device'] = _inference_device
                     results = self._yolo_model(frame, **_predict_kwargs)
-                    return _parse_yolo_detection_results(
+                    mouse_probability, own_cat_probability, detected_objects = _parse_yolo_detection_results(
                         results,
                         self.labels,
                         self.cat_names,
                         CONFIG.get('MIN_THRESHOLD', 0),
                     )
-                
+                    if self.identity is not None:
+                        # Modèle 1 collapsed (labels = ["Cat", "Prey"]) :
+                        # own_cat_probability ci-dessus vaut toujours 0 (le
+                        # nom brut YOLO "Cat" ne matche jamais cat_names) -
+                        # remplacé ici par la confiance réelle du Modèle 2.
+                        own_cat_probability = resolve_cat_identities(
+                            frame, detected_objects, self.identity, self.cat_names, self.identity_match_threshold,
+                        )
+                    return mouse_probability, own_cat_probability, detected_objects
+
                 self._yolo = direct_inference
                 self._model_worker = None
             else:
                 # Use the multiprocessing approach for limited CPU cores
-                def model_worker_process(model_path, input_queue, output_queue, num_threads=1, inference_device='cpu'):
+                def model_worker_process(model_path, input_queue, output_queue, num_threads=1, inference_device='cpu', identity_model_dir=None, identity_match_threshold=60.0):
                     try:
+                        # Processus séparé : sa propre copie du Modèle 2,
+                        # chargée une seule fois ici - jamais partagée avec
+                        # le process principal (ni picklable ni souhaitable
+                        # de le refaire à chaque frame).
+                        from .identity import load_identity_model, resolve_cat_identities
+                        worker_identity = load_identity_model(identity_model_dir)
                         # Set CPU affinity for this process based on num_threads
                         import psutil
                         process = psutil.Process()
@@ -300,6 +324,10 @@ class ModelHandler:
                                 cat_names,
                                 min_threshold,
                             )
+                            if worker_identity is not None:
+                                own_cat_probability = resolve_cat_identities(
+                                    frame, detected_objects, worker_identity, cat_names, identity_match_threshold,
+                                )
 
                             output_queue.put((job_id, mouse_probability, own_cat_probability, detected_objects))
                             
@@ -317,7 +345,10 @@ class ModelHandler:
                 # Start the worker process with the specified number of threads
                 self._model_worker = multiprocessing.Process(
                     target=model_worker_process,
-                    args=(self.modeldir, self._input_queue, self._output_queue, self.num_threads, resolved_inference_device)
+                    args=(
+                        self.modeldir, self._input_queue, self._output_queue, self.num_threads,
+                        resolved_inference_device, self._identity_model_dir, self.identity_match_threshold,
+                    )
                 )
                 self._model_worker.daemon = True
                 self._model_worker.start()

@@ -3268,6 +3268,60 @@ async def delete_ai_training_model(unique_id: str, _user: str = Depends(require_
     return JSONResponse({"ok": bool(success)})
 
 
+# 01.11, scission détection/identité - Modèle 2 (identité par embeddings,
+# src/model/identity.py). Miroir volontairement minimal des endpoints YOLO
+# ci-dessus (list + activate seulement, pas de rename - pas encore de
+# besoin identifié) ; aucun modèle réel n'existe encore sous
+# models/identity/ au moment d'écrire ceci (Modèle 2 en entraînement sur
+# Vast.ai), donc ces routes sont prêtes mais invérifiées en bout en bout.
+@webui_app.get("/app-api/v1/ai-training/identity-models")
+async def get_ai_training_identity_models(_user: str = Depends(require_session)):
+    from src.model.identity_model import IdentityModel
+
+    active_id = CONFIG.get("IDENTITY_MODEL")
+    models = []
+    for m in IdentityModel.get_model_list() or []:
+        unique_id = m.get("unique_id")
+        if not unique_id:
+            continue
+        models.append({
+            "unique_id": unique_id,
+            "display_name": m.get("display_name", ""),
+            "creation_date": m.get("creation_date", ""),
+            "is_active": bool(unique_id == active_id),
+        })
+    return JSONResponse({"models": models})
+
+
+@webui_app.post("/app-api/v1/ai-training/identity-models/{unique_id}/activate")
+async def post_ai_training_identity_model_activate(unique_id: str, _user: str = Depends(require_session)):
+    from src.model.identity_model import IdentityModel
+    from src.backend import reload_model_handler_runtime
+
+    if CONFIG.get("IDENTITY_MODEL") == unique_id:
+        return JSONResponse({"ok": True, "already_active": True})
+
+    model_path = IdentityModel.get_model_path(unique_id)
+    if not model_path:
+        return JSONResponse({"ok": False, "error": "not_found"}, status_code=404)
+
+    CONFIG["IDENTITY_MODEL"] = unique_id
+    update_single_config_parameter("IDENTITY_MODEL")
+
+    reload_ok, _handler = await asyncio.to_thread(reload_model_handler_runtime)
+    return JSONResponse({"ok": True, "live_reload": bool(reload_ok)})
+
+
+@webui_app.delete("/app-api/v1/ai-training/identity-models/{unique_id}")
+async def delete_ai_training_identity_model(unique_id: str, _user: str = Depends(require_session)):
+    from src.model.identity_model import IdentityModel
+
+    if CONFIG.get("IDENTITY_MODEL") == unique_id:
+        return JSONResponse({"ok": False, "error": "in_use"}, status_code=400)
+    success = IdentityModel.delete_model(unique_id)
+    return JSONResponse({"ok": bool(success)})
+
+
 # Retroactive Model Review - re-run the active model on past events and
 # surface only the disagreements (model_review_modules.py + ai_training.py's
 # ui_model_review/on_run_model_review). The scan itself is the same blocking
