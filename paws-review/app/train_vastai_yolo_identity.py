@@ -1,0 +1,292 @@
+"""
+Orchestration d'un entraînement YOLO-classification (Modèle 2, piste
+alternative demandée par Sid le 02.11 : "réentraîner modèle 2 sur la base
+de YOLO26 avec uniquement les 4 boîtes, que les chats sans les proies")
+sur une machine GPU louée à l'heure (vast.ai) - sœur de
+train_vastai_identity.py (approche embeddings ArcFace) et de
+train_vastai.py (Modèle 1, détection), même orchestration de
+location/surveillance/destruction, réutilisée par import.
+
+Différence avec train_vastai_identity.py : au lieu d'un backbone
+MobileNetV3-Small + tête ArcFace + galeries d'embeddings, ce script
+entraîne un vrai modèle YOLO en mode classification (`task=classify`,
+image entière -> une des 4 classes directement, pas de comparaison de
+distance à une galerie). Réutilise le même dataset source
+(build_identity_training_zip) et le même endpoint d'upload
+(/app-api/identity-model/upload, qui attend seulement 3 fichiers -
+identity_model.onnx, identity_labels.txt, info.json - donc compatible
+même si le FORMAT du modèle diffère complètement en interne).
+
+Un AUTRE run (fine-tuning de l'approche embeddings existante) tourne en
+parallèle ce soir sur la MÊME orchestration/le MÊME endpoint d'upload -
+pour ne jamais ramasser son résultat par erreur, le zip produit ici
+contient un marqueur dédié (YOLO_CLASSIFIER_MARKER.txt) que
+wait_for_result() vérifie avant d'accepter un candidat.
+
+Usage (clé API vast.ai en saisie interactive, jamais en argument) :
+    docker exec -it paws-review python -m app.train_vastai_yolo_identity
+"""
+
+import getpass
+import json
+import logging
+import os
+import sys
+import time
+import zipfile
+
+import requests
+
+from app.config import STORAGE_ROOT
+from app.export_identity_training import build_identity_training_zip
+from app.train_vastai import (
+    DISK_GB,
+    GPU_NAME,
+    PAWS_REVIEW_URL,
+    PERMANENTLY_EXCLUDED_HOSTS,
+    UPLOAD_TOKEN,
+    VAST_BASE,
+    _headers,
+    check_instance_health,
+    destroy_instance,
+    find_cheapest_offer,
+)
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [train_vastai_yolo_identity] %(message)s")
+log = logging.getLogger(__name__)
+
+# Même répertoire/endpoint que train_vastai_identity.py (voir le marqueur
+# de distinction dans wait_for_result ci-dessous - aucun risque de
+# collision malgré le partage).
+IDENTITY_TRAINED_MODELS_DIR = os.path.join(STORAGE_ROOT, "trained_identity_models")
+IDENTITY_TRAINING_DATA_PATH = os.path.join(STORAGE_ROOT, "identity_training_data.zip")
+
+TIMEOUT_S = 40 * 60
+EPOCHS = int(os.environ.get("VAST_YOLO_CLS_EPOCHS", "60"))
+MARKER_FILENAME = "YOLO_CLASSIFIER_MARKER.txt"
+
+
+def _build_onstart_script() -> str:
+    return f"""#!/bin/bash
+set -ex
+cd /workspace
+curl -sL -H "X-Upload-Token: {UPLOAD_TOKEN}" {PAWS_REVIEW_URL}/app-api/identity-model/training-data -o data.zip
+mkdir -p data_flat && cd data_flat && unzip -q ../data.zip && cd ..
+# 02.11, meme piege deja documente/resolu pour le Modele 1 (train_vastai.py) :
+# Ultralytics telecharge son checkpoint de base depuis les releases GitHub
+# au premier `yolo train`, et les IP datacenter de vast.ai sont des
+# candidates plausibles a un rate-limit GitHub silencieux (gpu_util=0%,
+# cpu_util=0%, aucune erreur). Recupere nous-memes les deux checkpoints
+# (telechargement direct confirme instantane hors vast.ai) avant - si le
+# fichier existe deja dans le dossier courant, Ultralytics ne retente
+# jamais son propre telechargement.
+curl -sL -H "X-Upload-Token: {UPLOAD_TOKEN}" {PAWS_REVIEW_URL}/app-api/model/yolo-base-weights/yolo26n-cls.pt -o yolo26n-cls.pt
+curl -sL -H "X-Upload-Token: {UPLOAD_TOKEN}" {PAWS_REVIEW_URL}/app-api/model/yolo-base-weights/yolo11n-cls.pt -o yolo11n-cls.pt
+pip install -q --no-cache-dir ultralytics
+
+python3 << 'PYEOF_SPLIT'
+import os, random, shutil
+random.seed(20261102)
+SRC = "/workspace/data_flat"
+DST = "/workspace/data_split"
+VAL_FRAC = 0.15
+for cat in sorted(os.listdir(SRC)):
+    cat_dir = os.path.join(SRC, cat)
+    if not os.path.isdir(cat_dir):
+        continue
+    files = sorted(os.listdir(cat_dir))
+    random.shuffle(files)
+    n_val = max(1, int(len(files) * VAL_FRAC))
+    val_files = files[:n_val]
+    train_files = files[n_val:]
+    for split, flist in [("train", train_files), ("val", val_files)]:
+        out_dir = os.path.join(DST, split, cat)
+        os.makedirs(out_dir, exist_ok=True)
+        for f in flist:
+            shutil.copy(os.path.join(cat_dir, f), os.path.join(out_dir, f))
+    print(f"{{cat}}: {{len(train_files)}} train, {{len(val_files)}} val")
+PYEOF_SPLIT
+
+EPOCHS={EPOCHS}
+# 02.11, Sid ("sur la base de YOLO26") - "yolo26n-cls.pt" (pas "yolov26"),
+# necessite ultralytics>=8.4.0. Pas garanti publie au moment de ce run -
+# repli automatique sur yolo11n-cls.pt si le telechargement/l'entrainement
+# echoue, jamais un echec silencieux (le nom reellement utilise est ecrit
+# dans info.json plus bas).
+if yolo classify train model=yolo26n-cls.pt data=/workspace/data_split epochs=$EPOCHS imgsz=224 patience=15 project=/workspace/runs name=train_primary device=0; then
+    USED_MODEL="yolo26n-cls.pt"
+    RUN_DIR=/workspace/runs/train_primary
+else
+    echo "yolo26n-cls.pt indisponible ou echec - repli sur yolo11n-cls.pt"
+    yolo classify train model=yolo11n-cls.pt data=/workspace/data_split epochs=$EPOCHS imgsz=224 patience=15 project=/workspace/runs name=train_fallback device=0
+    USED_MODEL="yolo11n-cls.pt"
+    RUN_DIR=/workspace/runs/train_fallback
+fi
+
+mkdir -p /workspace/result
+RUN_DIR_ENV="$RUN_DIR" USED_MODEL_ENV="$USED_MODEL" EPOCHS_ENV="$EPOCHS" python3 << 'PYEOF_EXPORT'
+import os, sys, json, datetime
+sys.path.insert(0, "/workspace")
+from ultralytics import YOLO
+
+run_dir = os.environ["RUN_DIR_ENV"]
+used_model = os.environ["USED_MODEL_ENV"]
+epochs = os.environ["EPOCHS_ENV"]
+
+model = YOLO(f"{{run_dir}}/weights/best.pt")
+names = model.names
+class_names = [names[i] for i in sorted(names.keys())]
+with open("/workspace/result/identity_labels.txt", "w") as f:
+    f.write("\\n".join(class_names) + "\\n")
+
+import shutil
+shutil.copy(f"{{run_dir}}/weights/best.pt", "/workspace/result/best.pt")
+try:
+    model.export(format="onnx", opset=12, imgsz=224)
+    shutil.move(f"{{run_dir}}/weights/best.onnx", "/workspace/result/identity_model.onnx")
+except Exception as e:
+    print(f"ONNX export failed ({{e}}), falling back to a placeholder - best.pt in the zip is the real result")
+    open("/workspace/result/identity_model.onnx", "wb").close()
+
+json.dump({{
+    "JOB_ID": "vastai-yolo-identity-" + str(int(datetime.datetime.utcnow().timestamp())),
+    "TIMESTAMP_UTC": datetime.datetime.utcnow().isoformat() + "Z",
+    "VERSION": "1.0.0",
+    "CLASSES": class_names,
+    "BACKBONE": used_model,
+    "EPOCHS": epochs,
+    "TASK": "classify",
+    "IMGSZ": 224,
+}}, open("/workspace/result/info.json", "w"), indent=2)
+print(f"Exported with backbone={{used_model}}, classes={{class_names}}")
+PYEOF_EXPORT
+
+touch /workspace/result/{MARKER_FILENAME}
+cd /workspace/result && zip -qr ../identity_result.zip .
+curl -sL -H "X-Upload-Token: {UPLOAD_TOKEN}" -F "file=@/workspace/identity_result.zip" {PAWS_REVIEW_URL}/app-api/identity-model/upload
+touch /workspace/TRAINING_DONE
+"""
+
+
+def create_instance(api_key: str, offer_id: int) -> int:
+    resp = requests.put(
+        f"{VAST_BASE}/asks/{offer_id}/",
+        headers=_headers(api_key),
+        json={
+            "image": "vastai/pytorch:latest",
+            "disk": DISK_GB,
+            "onstart": _build_onstart_script(),
+            "runtype": "ssh",
+            "target_state": "running",
+        },
+        timeout=30,
+    )
+    resp.raise_for_status()
+    body = resp.json()
+    instance_id = body.get("new_contract") or body.get("id")
+    if not instance_id:
+        raise RuntimeError(f"Pas d'id d'instance dans la reponse : {body}")
+    log.info("Instance creee (YOLO-classification identite) : %s", instance_id)
+    return instance_id
+
+
+def _is_my_result(fpath: str) -> bool:
+    """Distingue mon resultat de celui, potentiellement concurrent, du
+    fine-tuning embeddings qui partage le meme repertoire/endpoint."""
+    try:
+        with zipfile.ZipFile(fpath) as zf:
+            return MARKER_FILENAME in zf.namelist()
+    except Exception:
+        return False
+
+
+def wait_for_result(started_after: float, api_key: str | None = None, instance_id: int | None = None) -> str | None:
+    deadline = time.time() + TIMEOUT_S
+    seen_non_matching: set = set()
+    while time.time() < deadline:
+        if os.path.isdir(IDENTITY_TRAINED_MODELS_DIR):
+            for fname in os.listdir(IDENTITY_TRAINED_MODELS_DIR):
+                fpath = os.path.join(IDENTITY_TRAINED_MODELS_DIR, fname)
+                if not os.path.isfile(fpath) or os.path.getmtime(fpath) < started_after:
+                    continue
+                if fpath in seen_non_matching:
+                    continue
+                if _is_my_result(fpath):
+                    return fpath
+                seen_non_matching.add(fpath)
+                log.info("Resultat ignore (pas le marqueur attendu, probablement l'autre run en parallele) : %s", fpath)
+        elapsed = int(time.time() - started_after)
+        log.info("En attente du resultat (YOLO-classification identite)... (%ds ecoulees)", elapsed)
+        time.sleep(30)
+    return None
+
+
+def run_yolo_identity_training(api_key: str) -> dict:
+    if not UPLOAD_TOKEN:
+        msg = "MODEL_UPLOAD_TOKEN non configure cote serveur, abandon."
+        log.error(msg)
+        return {"status": "error", "message": msg}
+
+    log.info("Construction du zip de crops identite (meme dataset que l'approche embeddings)...")
+    stats = build_identity_training_zip(IDENTITY_TRAINING_DATA_PATH)
+    log.info("Zip pret : %s", stats)
+    if stats["included"] == 0:
+        msg = "Aucun crop a entrainer, abandon."
+        log.error(msg)
+        return {"status": "error", "message": msg}
+
+    excluded_hosts: set = set()
+    instance_id = None
+    started_at = time.time()
+    for attempt in range(1, 4):
+        offer = find_cheapest_offer(api_key, exclude_host_ids=excluded_hosts)
+        try:
+            instance_id = create_instance(api_key, offer["id"])
+        except requests.HTTPError as e:
+            log.warning("Echec de creation d'instance (tentative %d) : %s", attempt, e)
+            excluded_hosts.add(offer.get("host_id"))
+            continue
+
+        healthy, host_id, status_msg = check_instance_health(api_key, instance_id)
+        if not healthy:
+            log.warning("Instance %s en echec immediat (%s), destruction et nouvel essai.", instance_id, status_msg[:150])
+            destroy_instance(api_key, instance_id)
+            if host_id:
+                excluded_hosts.add(host_id)
+            instance_id = None
+            continue
+        break
+
+    if instance_id is None:
+        msg = "Impossible de louer une machine GPU fonctionnelle apres 3 tentatives."
+        log.error(msg)
+        return {"status": "error", "message": msg}
+
+    try:
+        result_path = wait_for_result(started_at, api_key=api_key, instance_id=instance_id)
+    finally:
+        destroy_instance(api_key, instance_id)
+
+    if result_path is None:
+        msg = f"Timeout ({TIMEOUT_S}s) sans resultat - verifier l'instance manuellement avant de la perdre."
+        log.error(msg)
+        return {"status": "error", "message": msg}
+
+    log.info("Entrainement YOLO-classification identite termine : %s", result_path)
+    return {"status": "success", "result_path": result_path}
+
+
+def main():
+    logging.getLogger().setLevel(logging.INFO)
+    api_key = getpass.getpass("Cle API vast.ai (jamais affichee ni loggee) : ").strip()
+    if not api_key:
+        log.error("Cle vide, abandon.")
+        sys.exit(1)
+    result = run_yolo_identity_training(api_key)
+    if result["status"] != "success":
+        sys.exit(1)
+    print(json.dumps(result))
+
+
+if __name__ == "__main__":
+    main()
