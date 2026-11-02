@@ -57,7 +57,7 @@ from src.mqtt import MQTTConfig
 from src.paths import kittyhack_root
 from src.model.yolo_model import YoloModel
 from src.model.identity_model import IdentityModel
-from src.model.identity import load_identity_model, MIN_CROP_AREA_PCT, MAX_CROP_AREA_PCT, UNKNOWN_CAT_LABEL
+from src.model.identity import load_identity_model, MIN_CROP_AREA_PCT, UNKNOWN_CAT_LABEL
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [WATCHDOG] %(message)s")
 log = logging.getLogger("watchdog")
@@ -757,13 +757,8 @@ class MouseDetector:
                     # ensuite). % de l'aire de l'image, pas un nombre de
                     # pixels absolu - MIN_CROP_AREA_PCT importé directement,
                     # une seule valeur de référence entre les deux chemins.
-                    # 02.11 (round 2) : MAX_CROP_AREA_PCT symétrique, même
-                    # raison - voir son commentaire côté identity.py (chat
-                    # trop proche de l'objectif = flou macro illisible,
-                    # confirmé pire que les crops trop petits sur le jeu de
-                    # test figé).
                     area_pct = ((cx2 - cx1) / frame_w * 100) * ((cy2 - cy1) / frame_h * 100) / 100
-                    if cx2 - cx1 >= 8 and cy2 - cy1 >= 8 and MIN_CROP_AREA_PCT <= area_pct <= MAX_CROP_AREA_PCT:
+                    if cx2 - cx1 >= 8 and cy2 - cy1 >= 8 and area_pct >= MIN_CROP_AREA_PCT:
                         label_cased, score = self.identity.identify_crop(
                             frame[cy1:cy2, cx1:cx2],
                         )
