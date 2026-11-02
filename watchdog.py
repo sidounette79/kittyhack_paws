@@ -788,8 +788,29 @@ class MouseDetector:
                     if len(self._recent_identities) > IDENTITY_SMOOTHING_WINDOW:
                         self._recent_identities.pop(0)
                         self._recent_identity_scores.pop(0)
+                    # 02.11, Sid (screenshot "Chat inconnu (98.7%)" sur un
+                    # crop qu'un appel isolé d'identify_crop() identifie
+                    # correctement "Boubou (98.55%)") - root cause
+                    # confirmée : juste après un reset de fenêtre (ou en
+                    # tout début de rafale), un vote à 1-1 entre deux noms
+                    # différents était départagé par Counter.most_common()
+                    # via l'ORDRE D'INSERTION (le plus ancien gagne), sans
+                    # aucun égard au score - ici "Chat inconnu (0%, crop
+                    # minuscule 27s plus tôt)" battait "Boubou (98.55%,
+                    # cette frame)" simplement parce qu'il était entré en
+                    # premier dans la fenêtre. Même tie-break que loop.py
+                    # utilise déjà pour son propre vote vidéo (count
+                    # d'abord, meilleur score en département) :
+                    # max_best_score pré-calcule le meilleur score par nom
+                    # AVANT de choisir, donc le compte prime toujours mais
+                    # une égalité de compte se départage par confiance, pas
+                    # par qui est arrivé en premier.
                     counts = Counter(self._recent_identities)
-                    smoothed_name, _n = counts.most_common(1)[0]
+                    max_best_score: dict[str, float] = {}
+                    for n, s in zip(self._recent_identities, self._recent_identity_scores):
+                        if s > max_best_score.get(n, -1.0):
+                            max_best_score[n] = s
+                    smoothed_name = max(counts, key=lambda n: (counts[n], max_best_score[n]))
                     label_cased = smoothed_name
                     # 02.11, Sid - probability must describe the smoothed
                     # name actually shown, not this one frame's raw score
