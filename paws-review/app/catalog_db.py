@@ -163,27 +163,6 @@ CREATE TABLE IF NOT EXISTS model_review_queue_members (
     PRIMARY KEY (queue_id, capture_id)
 );
 
--- 01.11, Sid ("le but c'est vraiment de la correction d'apprentissage,
--- lui dire là tu as mis ça, tu t'es trompé, apprends ça en plus") - Phase
--- 5 du plan de scission détection/identité. Distincte de box_annotations
--- (qui corrige la GÉOMÉTRIE/le label générique d'une capture) : ceci
--- enregistre spécifiquement "le Modèle 2 a dit X, en vrai c'est Y" sur
--- UNE boîte identité précise, pour réinjection dans le prochain
--- entraînement (voir export_identity_training.py, qui préfère cette
--- table au label brut détecté quand une correction existe).
--- exported_at NULL = pas encore repris par un entraînement - même
--- convention que captures.exported_at, sert de file d'attente.
-CREATE TABLE IF NOT EXISTS identity_corrections (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    capture_id INTEGER NOT NULL REFERENCES captures(id) ON DELETE CASCADE,
-    object_index INTEGER NOT NULL,
-    predicted_name TEXT NOT NULL,
-    predicted_score REAL,
-    corrected_name TEXT NOT NULL,
-    created_at DATETIME NOT NULL DEFAULT (datetime('now')),
-    exported_at DATETIME,
-    UNIQUE(capture_id, object_index)
-);
 """
 
 
@@ -216,6 +195,13 @@ def init_db():
 
 
 def _migrate(conn: sqlite3.Connection):
+    # 01.11 : identity_corrections (Phase 5, 1ère version) retirée le
+    # même soir - redondante avec box_annotations, qui est déjà le
+    # mécanisme de vérité terrain consulté partout (effective_boxes()).
+    # Jamais eu de vraie donnée en prod (vérifié : 0 ligne avant ce
+    # retrait), DROP direct sans script de migration de données.
+    conn.execute("DROP TABLE IF EXISTS identity_corrections")
+
     # 18.10, Sid ("un bouton qui lance l'export des photos validées") -
     # CREATE TABLE IF NOT EXISTS (dans SCHEMA) ne touche jamais une table
     # déjà existante, donc une colonne ajoutée après coup a besoin de son

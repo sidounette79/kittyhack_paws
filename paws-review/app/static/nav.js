@@ -6,6 +6,7 @@ const PAGE_NAV_ITEMS = [
   { href: '/entrainement', label: 'Entraînement', match: '/entrainement' },
   { href: '/revision', label: 'Révision', match: '/revision' },
   { href: '/identite', label: 'Identité', match: '/identite' },
+  { href: '/detection', label: 'Détection', match: '/detection' },
   { href: '/archives', label: 'Archives', match: '/archives' },
 ];
 

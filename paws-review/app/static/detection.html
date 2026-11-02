@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Détection - Paws Review</title>
+<meta name="theme-color" content="#121316">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Paws Review">
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/icon-192.png">
+<link rel="apple-touch-icon" href="/icon-192.png">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;800&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<header>
+  <h1>Paws Review</h1>
+  <div class="tabs" id="page-nav"></div>
+  <div class="export-bar" id="review-bar"></div>
+</header>
+
+<!-- 01.11, Sid ("il me faudrait la même page mais pour chat/proie") -
+     même principe qu'Identité (Modèle 2), pour le Modèle 1 (détection
+     Cat/Prey) : les boîtes Proie en premier (triables par confiance,
+     jamais réécrite par la résolution d'identité - contrairement aux
+     boîtes de chat, voir identity_review.py). Même éditeur de boîtes. -->
+<div id="queue" class="queue-grid"></div>
+<div id="empty" class="empty-state" hidden>Rien à revoir pour l'instant.</div>
+
+<div id="detail">
+  <div class="detail-top">
+    <button onclick="backToQueue()">&larr; retour</button>
+    <span class="mono" id="detail-meta" style="font-size:12px;color:var(--text-dim)"></span>
+  </div>
+  <div class="image-wrap" id="image-wrap">
+    <img id="detail-img" src="" alt="">
+  </div>
+  <div class="hint">Touche la boîte pour corriger son étiquette ou l'écarter (fausse détection). Trace un rectangle sur une zone vide pour ajouter ce qui a été manqué.</div>
+  <div class="box-list" id="box-list"></div>
+  <div class="actions">
+    <div class="actions-row">
+      <button class="btn-nav" onclick="navigateDetail(-1)">&larr; Précédent</button>
+      <button class="btn-nav" onclick="navigateDetail(1)">Suivant &rarr;</button>
+    </div>
+  </div>
+</div>
+
+<script src="/common.js"></script>
+<script src="/nav.js"></script>
+<script src="/detection.js"></script>
+</body>
+</html>

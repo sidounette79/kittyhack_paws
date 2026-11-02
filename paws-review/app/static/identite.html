@@ -14,29 +14,43 @@
 <link rel="apple-touch-icon" href="/icon-192.png">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;800&family=JetBrains+Mono:wght@400;600&display=swap">
 <link rel="stylesheet" href="/style.css">
-<style>
-  /* 01.11, Sid ("apprends ça en plus") - file de correction d'identité
-     (Modèle 2) : propre à cette page, pas assez générique pour style.css. */
-  .id-tile { background: var(--surface-2); border-radius: 10px; overflow: hidden; }
-  .id-tile img { width: 100%; aspect-ratio: 1; object-fit: cover; display: block; }
-  .id-meta { padding: 6px 8px 2px; font-size: 12px; color: var(--text-dim); display: flex; justify-content: space-between; }
-  .id-score-low { color: var(--bad, #e35d5d); }
-  .id-buttons { display: grid; grid-template-columns: repeat(2, 1fr); gap: 4px; padding: 4px 8px 8px; }
-  .id-buttons button { padding: 6px 4px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface); color: var(--text); font-size: 12px; cursor: pointer; }
-  .id-buttons button.predicted { border-color: var(--accent); font-weight: 600; }
-  .id-buttons button.done { background: var(--good); color: #0a1a10; border-color: var(--good); }
-</style>
 </head>
 <body>
 
 <header>
   <h1>Paws Review</h1>
   <div class="tabs" id="page-nav"></div>
-  <div class="export-bar" id="identity-bar"></div>
+  <div class="export-bar" id="review-bar"></div>
 </header>
 
-<div id="id-grid" class="queue-grid"></div>
-<div id="id-empty" class="empty-state" hidden>Rien à corriger pour l'instant - le Modèle 2 n'a rien de peu sûr récemment.</div>
+<!-- 01.11, Sid ("je ne vois pas les boîtes... si la photo comporte une
+     boîte alors qu'il n'y a aucun chat je fais quoi ?") - même éditeur de
+     boîtes que Révision/Photos (common.js:renderDetail), pas une vue
+     maison : la boîte est dessinée sur l'image en vrai, son nom se
+     change via le menu déroulant (corrige l'identité), "supprimer"
+     l'écarte ("pas un chat"), tracer un rectangle sur une zone vide
+     ajoute un chat manqué. Cette page n'est qu'une file triée/filtrée
+     vers cet éditeur. -->
+<div id="queue" class="queue-grid"></div>
+<div id="empty" class="empty-state" hidden>Rien à revoir pour l'instant - le Modèle 2 n'a rien de peu sûr récemment.</div>
+
+<div id="detail">
+  <div class="detail-top">
+    <button onclick="backToQueue()">&larr; retour</button>
+    <span class="mono" id="detail-meta" style="font-size:12px;color:var(--text-dim)"></span>
+  </div>
+  <div class="image-wrap" id="image-wrap">
+    <img id="detail-img" src="" alt="">
+  </div>
+  <div class="hint">Touche la boîte pour corriger son nom ou l'écarter (pas un chat). Trace un rectangle sur une zone vide pour ajouter un chat manqué.</div>
+  <div class="box-list" id="box-list"></div>
+  <div class="actions">
+    <div class="actions-row">
+      <button class="btn-nav" onclick="navigateDetail(-1)">&larr; Précédent</button>
+      <button class="btn-nav" onclick="navigateDetail(1)">Suivant &rarr;</button>
+    </div>
+  </div>
+</div>
 
 <script src="/common.js"></script>
 <script src="/nav.js"></script>
