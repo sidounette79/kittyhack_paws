@@ -37,12 +37,12 @@ INSIDE_ENTRY_YIELD_FOR_EXIT_S = 10.0
 # confident-enough Reolink signal now feeds the SAME
 # backend_main.prey_detection_mono / LOCK_DURATION_AFTER_PREY_DETECTION
 # gate Kittyflap's own detection already uses, never a separate lock.
-# Threshold matches MOUSE_THRESHOLD's own default (70.0) - the real
-# incident's first signal (73%) would have cleared it with room to
-# spare, its second (65%) would not have (but didn't need to, the first
-# one already opened the 300s window well before the cat actually
-# crossed).
-REOLINK_PREY_SIGNAL_MIN_CONFIDENCE = 70.0
+# 02.11 update, Sid (after reviewing the "Patoune blocked on her own paw"
+# false positive, 18h44 - a single 78% signal on what was actually a paw,
+# not prey): raised from 70.0 (MOUSE_THRESHOLD's own default) to 80.0 -
+# a single signal now has to be more exceptional to act alone, repetition
+# (below) is the primary, more robust path.
+REOLINK_PREY_SIGNAL_MIN_CONFIDENCE = 80.0
 # 02.11, Sid ("Est-ce que ça peut aussi déclencher si y a une répétition
 # de détection même en dessous de 70 ? Si y a 3x 68% par exemple ? 1x si
 # supérieur mais aussi couvrir la quantité ?") - second path alongside
@@ -55,8 +55,14 @@ REOLINK_PREY_SIGNAL_MIN_CONFIDENCE = 70.0
 # (CHATIERE_BOOST_INTERVAL_S=0.3s in watchdog.py) without being so wide
 # it starts treating signals from genuinely separate, unrelated passages
 # as one streak.
+# 02.11 update, Sid: "80% unique et 3x45. On teste avec ça." - lowered
+# from 60.0 after confirming (zoomed x8 on a real missed-detection frame)
+# that the model can miss a genuinely visible prey on a single frame
+# (low contrast, not a distance/resolution issue) - repetition at a
+# fairly permissive floor is the primary defense against that kind of
+# single-frame miss, not just a fallback for borderline-confidence noise.
 REOLINK_PREY_SIGNAL_REPEAT_COUNT = 3
-REOLINK_PREY_SIGNAL_REPEAT_MIN_CONFIDENCE = 60.0
+REOLINK_PREY_SIGNAL_REPEAT_MIN_CONFIDENCE = 45.0
 REOLINK_PREY_SIGNAL_REPEAT_WINDOW_S = 15.0
 CAMERA_IDLE_RESUME_HOLD_S = 20.0  # PAUSE_CAMERA_WHEN_IDLE: keep the chatiere camera model running this long after the last real PIR edge
 GLANCE_NOTIFICATION_COOLDOWN_S = 600.0  # 05.10, Sid: "a regarde" push notification - per-RFID cooldown, far more frequent than entry/exit so needs one
