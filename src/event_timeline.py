@@ -38,6 +38,10 @@ class TimelineAction:
     INSIDE_CLOSED_MOTION_END = "inside_closed_motion_end"
     INSIDE_CLOSED_MAX_TIME = "inside_closed_max_time"
     INSIDE_CLOSED_MANUAL = "inside_closed_manual"
+    # 02.11, Sid ("Boubou dort dehors... empêche un chat dedans de sortir") -
+    # see INSIDE_ENTRY_YIELD_FOR_EXIT_S (src/backend/constants.py) for the
+    # full fairness-fix reasoning.
+    INSIDE_CLOSED_YIELD_TO_EXIT = "inside_closed_yield_to_exit"
     OUTSIDE_OPENED = "outside_opened"
     OUTSIDE_CLOSED = "outside_closed"
     EVENT_CONCLUSION = "event_conclusion"
@@ -103,6 +107,7 @@ def timeline_format_message(entry: dict) -> str:
         TimelineAction.INSIDE_CLOSED_MOTION_END: _("Inside closed (motion ended)"),
         TimelineAction.INSIDE_CLOSED_MAX_TIME: _("Inside closed (maximum unlock time exceeded)"),
         TimelineAction.INSIDE_CLOSED_MANUAL: _("Inside closed (manual)"),
+        TimelineAction.INSIDE_CLOSED_YIELD_TO_EXIT: _("Inside closed (yielding to a pending exit)"),
         TimelineAction.OUTSIDE_OPENED: _("Outside opened"),
         TimelineAction.OUTSIDE_CLOSED: _("Outside closed"),
         TimelineAction.EXIT_SKIPPED_ENTRY: _("Entry decision skipped (exit in progress)"),

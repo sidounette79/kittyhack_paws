@@ -10,6 +10,22 @@ LAZY_CAT_DELAY_CAM_MOTION = 12.0 # Keep the PIR active for an additional 12 seco
 FAST_EXIT_POST_CAPTURE_SECONDS = 6.0  # Extra recording after fast-lock exit crossing before finalizing the event
 EVENT_COOLDOWN_SECONDS = 3.0     # After an event is finalized, ignore all new motion triggers for this long (PIR settling)
 MAX_MOTION_BLOCK_SECONDS = 90.0  # Finalize a motion block after this time even if outside motion never falls cleanly
+# 02.11, Sid ("Boubou dort à 1m de la chatière dehors... un chat dedans ne
+# peut pas sortir car les mouvements de Boubou font que la chatière se met
+# en mode entrée"): confirmed structurally - unlock_inside is re-evaluated
+# every tick and stays claimed as long as a known cat keeps being detected
+# outside, and "only one magnet" (confirmed necessary even with the new
+# 36W/3A PSU - real crash reproduced 02.11, see CRASH_KITTYFLAP.md
+# Incident #3) then blocks any competing exit the whole time. Fairness
+# fix: if inside has been unlocked for entry for at least this long with
+# ZERO inside PIR motion recorded since the unlock (strong evidence no cat
+# is actually mid-crossing, just a lingering outside presence holding the
+# claim), a genuinely pending exit request is allowed to force a lock and
+# take the outside magnet instead. Deliberately generous (most real
+# entries resolve in a few seconds once a cat commits) and gated on "zero
+# inside motion since unlock" specifically so a cat actually walking
+# through can never be interrupted mid-passage.
+INSIDE_ENTRY_YIELD_FOR_EXIT_S = 10.0
 CAMERA_IDLE_RESUME_HOLD_S = 20.0  # PAUSE_CAMERA_WHEN_IDLE: keep the chatiere camera model running this long after the last real PIR edge
 GLANCE_NOTIFICATION_COOLDOWN_S = 600.0  # 05.10, Sid: "a regarde" push notification - per-RFID cooldown, far more frequent than entry/exit so needs one
 # 08.10, Sid ("forcer le systeme a ecrire... en forcant l'utilisation du vrai

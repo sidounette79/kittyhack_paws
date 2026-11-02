@@ -39,6 +39,7 @@ from src.backend.constants import (
     RFID_BACKFILL_WINDOW_S,
     WAIT_FOR_OUTSIDE_RISING_TIMEOUT_S,
     VIDEO_FALLBACK_MIN_BOX_HEIGHT_PCT,
+    INSIDE_ENTRY_YIELD_FOR_EXIT_S,
 )
 import src.backend.model_runtime as model_runtime
 import src.backend.mqtt_bridge as mqtt_bridge
@@ -1506,7 +1507,32 @@ def backend_main(
                 if check_allowed_to_exit() == True and per_cat_exit_allowed and not exit_blocked_after_prey:
                     # 24.10: same fix as the inside-unlock gate above (~line 2000)
                     # - also check the queue, not just the already-executed state.
-                    if magnets.get_inside_state() == True or magnets.check_queued("unlock_inside") == True:
+                    inside_claimed = magnets.get_inside_state() == True or magnets.check_queued("unlock_inside") == True
+                    # 02.11, Sid ("Boubou dort dehors... empêche un chat dedans
+                    # de sortir") - see INSIDE_ENTRY_YIELD_FOR_EXIT_S's own
+                    # comment (constants.py) for the full reasoning. Gated on
+                    # zero inside PIR motion since the unlock - never
+                    # interrupts a cat that might actually be mid-crossing.
+                    yield_inside_for_exit = (
+                        inside_claimed
+                        and magnets.get_inside_state() == True
+                        and unlock_inside_tm > 0.0
+                        and (_mono() - unlock_inside_tm) >= INSIDE_ENTRY_YIELD_FOR_EXIT_S
+                        and motion_inside_raw_mono < unlock_inside_tm
+                    )
+                    if yield_inside_for_exit:
+                        logging.warning(
+                            f"[BACKEND] Fairness: inside magnet held for entry "
+                            f"{_mono() - unlock_inside_tm:.0f}s with no inside motion "
+                            "since - yielding to a genuinely pending exit. Forcing lock_inside."
+                        )
+                        magnets.queue_command("lock_inside")
+                        unlock_inside_tm = 0.0
+                        _timeline_log_inside_close(TimelineAction.INSIDE_CLOSED_YIELD_TO_EXIT)
+                        with door_unlock_source_lock:
+                            door_unlock_source["inside"] = None
+                        inside_claimed = False
+                    if inside_claimed:
                         logging.info("[BACKEND] Inside magnet is already unlocked or about to be. Only one magnet is allowed. --> Outside magnet will not be unlocked.")
                     else:
                         logging.info("[BACKEND] Allow cats to exit.")
@@ -1900,7 +1926,29 @@ def backend_main(
                     )
 
                     # 24.10: same fix as the other exit-gate above (~line 1438).
-                    if magnets.get_inside_state() == True or magnets.check_queued("unlock_inside") == True:
+                    inside_claimed2 = magnets.get_inside_state() == True or magnets.check_queued("unlock_inside") == True
+                    # 02.11: same fairness yield as the other exit-gate above -
+                    # see INSIDE_ENTRY_YIELD_FOR_EXIT_S's comment.
+                    yield_inside_for_exit2 = (
+                        inside_claimed2
+                        and magnets.get_inside_state() == True
+                        and unlock_inside_tm > 0.0
+                        and (_mono() - unlock_inside_tm) >= INSIDE_ENTRY_YIELD_FOR_EXIT_S
+                        and motion_inside_raw_mono < unlock_inside_tm
+                    )
+                    if yield_inside_for_exit2:
+                        logging.warning(
+                            f"[BACKEND] Fairness: inside magnet held for entry "
+                            f"{_mono() - unlock_inside_tm:.0f}s with no inside motion "
+                            "since - yielding to a genuinely pending exit (per-cat). Forcing lock_inside."
+                        )
+                        magnets.queue_command("lock_inside")
+                        unlock_inside_tm = 0.0
+                        _timeline_log_inside_close(TimelineAction.INSIDE_CLOSED_YIELD_TO_EXIT)
+                        with door_unlock_source_lock:
+                            door_unlock_source["inside"] = None
+                        inside_claimed2 = False
+                    if inside_claimed2:
                         logging.info("[BACKEND] Inside magnet is already unlocked or about to be. Only one magnet is allowed. --> Outside magnet will not be unlocked.")
                     else:
                         flag = exit_flag2 or str(EventType.EXIT_PER_CAT_DENIED)
@@ -2286,6 +2334,10 @@ def backend_main(
             if override_unlock_inside and magnets.get_inside_state():
                 logging.info("[BACKEND] Manual override: Inside door is already open.")
             elif override_unlock_inside and (magnets.get_outside_state() or magnets.check_queued("unlock_outside")):
+                # 02.11: test PSU 36W/3A fait avec Sid - crash reproduit
+                # malgré la nouvelle alim (voir CRASH_KITTYFLAP.md, incident
+                # #3). Garde-fou confirmé nécessaire, gardé en place pour de
+                # bon - ne plus désactiver ce chemin.
                 # 09.10, Sid (Pi crashes repeatedly correlated with using the
                 # manual Presence-page buttons, confirmed via a live timeline:
                 # "Extérieur ouvert" immediately followed by "Intérieur ouvert
@@ -2328,20 +2380,51 @@ def backend_main(
                 outside_manually_unlocked = True
                 with door_unlock_source_lock:
                     door_unlock_source["outside"] = "manual"
-            elif magnets.get_inside_state() or magnets.check_queued("unlock_inside"):
-                # 09.10: same "only one magnet" rule as the inside manual
-                # override above - see that comment for the full reasoning
-                # (Pi crashes correlated with these buttons).
-                logging.warning("[BACKEND] Manual override: Inside magnet is already unlocked or about to be. Only one magnet is allowed. Outside magnet will not be unlocked.")
             else:
-                logging.info("[BACKEND] Manual override: Opening outside door")
-                magnets.empty_queue()
-                magnets.queue_command("unlock_outside")
-                unlock_outside_tm = _mono()
-                _timeline_log_outside_open()
-                outside_manually_unlocked = True
-                with door_unlock_source_lock:
-                    door_unlock_source["outside"] = "manual"
+                inside_claimed3 = magnets.get_inside_state() or magnets.check_queued("unlock_inside")
+                # 02.11: same fairness yield as the automatic exit gates - see
+                # INSIDE_ENTRY_YIELD_FOR_EXIT_S's comment. A manual click is
+                # an explicit, deliberate request, but still gated on zero
+                # inside motion since unlock - same safety margin as the
+                # automatic path, never relaxed just because a human clicked
+                # the button.
+                yield_inside_for_exit3 = (
+                    inside_claimed3
+                    and magnets.get_inside_state() == True
+                    and unlock_inside_tm > 0.0
+                    and (_mono() - unlock_inside_tm) >= INSIDE_ENTRY_YIELD_FOR_EXIT_S
+                    and motion_inside_raw_mono < unlock_inside_tm
+                )
+                if yield_inside_for_exit3:
+                    logging.warning(
+                        f"[BACKEND] Fairness: inside magnet held for entry "
+                        f"{_mono() - unlock_inside_tm:.0f}s with no inside motion "
+                        "since - yielding to manual outside unlock. Forcing lock_inside."
+                    )
+                    magnets.queue_command("lock_inside")
+                    unlock_inside_tm = 0.0
+                    _timeline_log_inside_close(TimelineAction.INSIDE_CLOSED_YIELD_TO_EXIT)
+                    with door_unlock_source_lock:
+                        door_unlock_source["inside"] = None
+                    inside_claimed3 = False
+
+                if inside_claimed3:
+                    # 02.11: same confirmed-necessary guard as the inside manual
+                    # override above - see that comment (test PSU 36W/3A, crash
+                    # reproduced, garde-fou gardé en place pour de bon).
+                    # 09.10: same "only one magnet" rule as the inside manual
+                    # override above - see that comment for the full reasoning
+                    # (Pi crashes correlated with these buttons).
+                    logging.warning("[BACKEND] Manual override: Inside magnet is already unlocked or about to be. Only one magnet is allowed. Outside magnet will not be unlocked.")
+                else:
+                    logging.info("[BACKEND] Manual override: Opening outside door")
+                    magnets.empty_queue()
+                    magnets.queue_command("unlock_outside")
+                    unlock_outside_tm = _mono()
+                    _timeline_log_outside_open()
+                    outside_manually_unlocked = True
+                    with door_unlock_source_lock:
+                        door_unlock_source["outside"] = "manual"
 
         # 07.09, Sid: manual_door_override['lock_outside'] was set by the REST
         # API/MQTT (src/api.py's door_lock_outside) but never read anywhere in
