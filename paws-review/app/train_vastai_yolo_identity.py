@@ -113,12 +113,32 @@ EPOCHS={EPOCHS}
 # repli automatique sur yolo11n-cls.pt si le telechargement/l'entrainement
 # echoue, jamais un echec silencieux (le nom reellement utilise est ecrit
 # dans info.json plus bas).
-if yolo classify train model=yolo26n-cls.pt data=/workspace/data_split epochs=$EPOCHS imgsz=224 patience=15 project=/workspace/runs name=train_primary device=0; then
+#
+# 02.11 (round 2), Sid ("HK prend une ligne droite et reolink a un angle
+# plus ouvert mais pas de beaucoup... 200 photos de plus seraient quasi
+# identiques") - verifie dans le code source d'Ultralytics
+# (ClassificationDataset.__init__ / classify_augmentations) avant de
+# choisir ces valeurs : pour task=classify, SEULS scale/hsv_h/hsv_s/
+# hsv_v/erasing/fliplr/flipud/auto_augment sont reellement appliques -
+# degrees/shear/perspective/translate sont silencieusement ignores (ce
+# sont des augmentations detect/segment uniquement, jamais lues par
+# ClassificationDataset). scale=0.7 pousse la plage de RandomResizedCrop
+# a (0.3, 1.0) au lieu du defaut (0.5, 1.0) - simule directement plus de
+# variation de cadrage/zoom a partir des memes photos, le levier le plus
+# pertinent face au manque de diversite d'angle physique. hsv_v=0.5 (vs
+# 0.4) accentue la variation de luminosite deja presente par defaut.
+# erasing=0.5 (vs 0.4) renforce la robustesse a l'occlusion partielle
+# (corps coupes, deja presents dans le jeu de Sid). auto_augment reste
+# randaugment (deja actif par defaut, inclut deja rotation/translation/
+# cisaillement via sa propre politique interne malgre l'absence de
+# degrees/shear explicites).
+AUG_ARGS="scale=0.7 hsv_v=0.5 erasing=0.5"
+if yolo classify train model=yolo26n-cls.pt data=/workspace/data_split epochs=$EPOCHS imgsz=224 patience=15 project=/workspace/runs name=train_primary device=0 $AUG_ARGS; then
     USED_MODEL="yolo26n-cls.pt"
     RUN_DIR=/workspace/runs/train_primary
 else
     echo "yolo26n-cls.pt indisponible ou echec - repli sur yolo11n-cls.pt"
-    yolo classify train model=yolo11n-cls.pt data=/workspace/data_split epochs=$EPOCHS imgsz=224 patience=15 project=/workspace/runs name=train_fallback device=0
+    yolo classify train model=yolo11n-cls.pt data=/workspace/data_split epochs=$EPOCHS imgsz=224 patience=15 project=/workspace/runs name=train_fallback device=0 $AUG_ARGS
     USED_MODEL="yolo11n-cls.pt"
     RUN_DIR=/workspace/runs/train_fallback
 fi
@@ -221,20 +241,10 @@ def wait_for_result(started_after: float, api_key: str | None = None, instance_i
     return None
 
 
-def run_yolo_identity_training(api_key: str) -> dict:
-    if not UPLOAD_TOKEN:
-        msg = "MODEL_UPLOAD_TOKEN non configure cote serveur, abandon."
-        log.error(msg)
-        return {"status": "error", "message": msg}
-
-    log.info("Construction du zip de crops identite (meme dataset que l'approche embeddings)...")
-    stats = build_identity_training_zip(IDENTITY_TRAINING_DATA_PATH)
-    log.info("Zip pret : %s", stats)
-    if stats["included"] == 0:
-        msg = "Aucun crop a entrainer, abandon."
-        log.error(msg)
-        return {"status": "error", "message": msg}
-
+def _rent_train_and_wait(api_key: str) -> dict:
+    """Shared tail of both training entry points below - rents the
+    cheapest healthy GPU, waits for OUR result (see _is_my_result's
+    marker), always destroys the instance even on timeout/error."""
     excluded_hosts: set = set()
     instance_id = None
     started_at = time.time()
@@ -274,6 +284,54 @@ def run_yolo_identity_training(api_key: str) -> dict:
 
     log.info("Entrainement YOLO-classification identite termine : %s", result_path)
     return {"status": "success", "result_path": result_path}
+
+
+def run_yolo_identity_training(api_key: str) -> dict:
+    """Small curated dataset (~400/cat, Paws Review confirmed/corrected
+    pool) - original entry point, unchanged."""
+    if not UPLOAD_TOKEN:
+        msg = "MODEL_UPLOAD_TOKEN non configure cote serveur, abandon."
+        log.error(msg)
+        return {"status": "error", "message": msg}
+
+    log.info("Construction du zip de crops identite (meme dataset que l'approche embeddings)...")
+    stats = build_identity_training_zip(IDENTITY_TRAINING_DATA_PATH)
+    log.info("Zip pret : %s", stats)
+    if stats["included"] == 0:
+        msg = "Aucun crop a entrainer, abandon."
+        log.error(msg)
+        return {"status": "error", "message": msg}
+
+    return _rent_train_and_wait(api_key)
+
+
+def run_yolo_identity_training_from_zip(api_key: str, zip_path: str) -> dict:
+    """02.11, Sid ("explore les possibilites d'autres approches") - au
+    lieu du pool curé Paws Review (~400/cat), un jeu BEAUCOUP plus large
+    tire directement des vrais evenements RFID de Kittyflap (161k+
+    disponibles, voir data/identity_eval_scripts/
+    build_large_rfid_training_set.py - exclut explicitement tout
+    event_id deja dans le jeu de test fige pour eviter toute
+    contamination). zip_path doit deja exister (construit a part, pas ici
+    - ce module n'a pas acces a la vraie DB Kittyflap/aux fichiers image,
+    seulement paws-review/VAST_API_KEY). Copie simplement ce zip vers
+    IDENTITY_TRAINING_DATA_PATH (meme chemin que l'autre entree, servi
+    tel quel par /app-api/identity-model/training-data) puis reutilise
+    EXACTEMENT la meme location/attente/destruction."""
+    if not UPLOAD_TOKEN:
+        msg = "MODEL_UPLOAD_TOKEN non configure cote serveur, abandon."
+        log.error(msg)
+        return {"status": "error", "message": msg}
+    if not os.path.isfile(zip_path):
+        msg = f"Zip introuvable : {zip_path}"
+        log.error(msg)
+        return {"status": "error", "message": msg}
+
+    import shutil
+    shutil.copy(zip_path, IDENTITY_TRAINING_DATA_PATH)
+    log.info("Zip de dataset large copie vers %s (depuis %s).", IDENTITY_TRAINING_DATA_PATH, zip_path)
+
+    return _rent_train_and_wait(api_key)
 
 
 def main():
