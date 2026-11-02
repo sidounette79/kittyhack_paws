@@ -31,6 +31,13 @@ export interface ChronologyEvent {
   mouse_probability: number;
   mouse_threshold: number;
   had_skipped_entry: boolean;
+  // 02.11, Sid ("quand une proie est supposée par reolink, je peux aussi
+  // avoir l'icône de souris ?"): true when this visit's motion timeline
+  // has a reolink_prey_signal_applied entry (src/backend/loop.py) - lets
+  // the icon show even when Kittyflap's own local mouse_probability
+  // stayed 0 (exactly the 02.11 16h31 incident: local model missed it
+  // entirely, Reolink's signal is the only evidence).
+  reolink_prey_signal_applied: boolean;
   rfid_confirmed: boolean | null;
 }
 
@@ -91,6 +98,24 @@ export default function EventCard({
             >
               <MouseIcon className="h-3.5 w-3.5" />
               {ev.mouse_probability.toFixed(0)}%
+            </span>
+          )}
+          {/* 02.11, Sid: Reolink's own prey signal, separate from
+              mouse_probability above (Kittyflap's local detection) -
+              shown only when the local one stayed silent, so a real
+              miss (16h31 incident: local model never flagged it at all)
+              is still visible without opening "Détails du mouvement".
+              Same icon as requested ("je peux aussi avoir l'icône de
+              souris"), distinct orange tint + "Reolink" label instead of
+              a percentage so it's clear which camera is the source. */}
+          {ev.mouse_probability === 0 && ev.reolink_prey_signal_applied && (
+            <span
+              className="inline-flex items-center gap-1 whitespace-nowrap text-[0.85rem]"
+              style={{ color: "rgb(251, 146, 60)" }}
+              title="Proie signalée par la chatière Reolink (caméra interne silencieuse)"
+            >
+              <MouseIcon className="h-3.5 w-3.5" />
+              Reolink
             </span>
           )}
           {ev.had_skipped_entry && (

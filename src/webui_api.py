@@ -211,6 +211,14 @@ def _serialize_events(
     events = []
     for ev in raw_events:
         had_skipped_entry = False
+        # 02.11, Sid ("quand une proie est supposée par reolink, je peux
+        # aussi avoir l'icône de souris ?") - same pattern as
+        # had_skipped_entry just below: surface whether this visit's
+        # motion timeline contains a reolink_prey_signal_applied entry
+        # (src/backend/loop.py, Phase 2 of the Reolink prey signal), so
+        # the frontend can show it even though Kittyflap's own local
+        # mouse_probability stayed 0 for this event.
+        reolink_prey_applied = False
         if timelines_by_block is not None:
             # 02.11: ev may now be a merged multi-block visit (see
             # journeys.py's _merge_adjacent_blocks_into_visits) - check every
@@ -220,8 +228,9 @@ def _serialize_events(
                 for entry in timelines_by_block.get(bid, []):
                     if entry.get("action") == "exit_skipped_entry":
                         had_skipped_entry = True
-                        break
-                if had_skipped_entry:
+                    elif entry.get("action") == "reolink_prey_signal_applied":
+                        reolink_prey_applied = True
+                if had_skipped_entry and reolink_prey_applied:
                     break
         resolved_name = cat_name_dict.get(ev["rfid"]) if ev["rfid"] else None
         rfid_is_real = ev.get("rfid_is_real")
@@ -260,6 +269,7 @@ def _serialize_events(
                 "mouse_probability": round(float(ev.get("mouse_probability", 0.0)), 1),
                 "mouse_threshold": float(CONFIG["MOUSE_THRESHOLD"]),
                 "had_skipped_entry": had_skipped_entry,
+                "reolink_prey_signal_applied": reolink_prey_applied,
             }
         )
     return events

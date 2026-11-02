@@ -41,6 +41,9 @@ from src.backend.constants import (
     VIDEO_FALLBACK_MIN_BOX_HEIGHT_PCT,
     INSIDE_ENTRY_YIELD_FOR_EXIT_S,
     REOLINK_PREY_SIGNAL_MIN_CONFIDENCE,
+    REOLINK_PREY_SIGNAL_REPEAT_COUNT,
+    REOLINK_PREY_SIGNAL_REPEAT_MIN_CONFIDENCE,
+    REOLINK_PREY_SIGNAL_REPEAT_WINDOW_S,
 )
 import src.backend.model_runtime as model_runtime
 import src.backend.mqtt_bridge as mqtt_bridge
@@ -216,6 +219,7 @@ def backend_main(
     backend_main.prey_detection_tm = 0.0
     backend_main.prey_detection_mono = 0.0
     backend_main.reolink_prey_signal_applied_mono = 0.0
+    backend_main.reolink_prey_signal_history = []
     # 08.10, Sid: external wake request for PAUSE_CAMERA_WHEN_IDLE, set by
     # POST /camera/wake (src/api.py) - see that block below for the read.
     backend_main.camera_external_wake_until_mono = 0.0
@@ -2199,19 +2203,36 @@ def backend_main(
         reolink_signal_mono = float(getattr(backend_main, "reolink_prey_signal_mono", 0.0) or 0.0)
         reolink_signal_prob = getattr(backend_main, "reolink_prey_signal_probability", None)
         reolink_signal_applied_mono = float(getattr(backend_main, "reolink_prey_signal_applied_mono", 0.0) or 0.0)
-        if (
-            reolink_signal_mono > reolink_signal_applied_mono
-            and reolink_signal_prob is not None
-            and float(reolink_signal_prob) >= REOLINK_PREY_SIGNAL_MIN_CONFIDENCE
-        ):
+        reolink_apply_reason = None
+        if reolink_signal_mono > reolink_signal_applied_mono and reolink_signal_prob is not None:
+            if float(reolink_signal_prob) >= REOLINK_PREY_SIGNAL_MIN_CONFIDENCE:
+                reolink_apply_reason = f"{float(reolink_signal_prob):.0f}% single signal"
+            else:
+                # Sid, 02.11 ("si y a 3x 68% par exemple... 1x si supérieur
+                # mais aussi couvrir la quantité ?") - several weaker but
+                # repeated signals within the window are also real
+                # evidence. Re-filter by freshness here rather than trust
+                # api.py's own purge alone - that only runs on the NEXT
+                # incoming signal, this read could happen in between.
+                history = getattr(backend_main, "reolink_prey_signal_history", None) or []
+                cutoff = _mono() - REOLINK_PREY_SIGNAL_REPEAT_WINDOW_S
+                recent_strong_enough = sum(
+                    1 for (t, p) in history if t >= cutoff and p >= REOLINK_PREY_SIGNAL_REPEAT_MIN_CONFIDENCE
+                )
+                if recent_strong_enough >= REOLINK_PREY_SIGNAL_REPEAT_COUNT:
+                    reolink_apply_reason = (
+                        f"{recent_strong_enough}x >={REOLINK_PREY_SIGNAL_REPEAT_MIN_CONFIDENCE:.0f}% within "
+                        f"{REOLINK_PREY_SIGNAL_REPEAT_WINDOW_S:.0f}s"
+                    )
+        if reolink_apply_reason is not None:
             backend_main.reolink_prey_signal_applied_mono = reolink_signal_mono
             if reolink_signal_mono > prey_mono:
                 prey_mono = reolink_signal_mono
                 backend_main.prey_detection_mono = reolink_signal_mono
                 backend_main.prey_detection_tm = _wall()
                 logging.info(
-                    f"[BACKEND] Reolink chatiere prey signal ({float(reolink_signal_prob):.0f}%) "
-                    f"applied - extending the post-prey lock window."
+                    f"[BACKEND] Reolink chatiere prey signal applied ({reolink_apply_reason}) - "
+                    f"extending the post-prey lock window."
                 )
                 timeline_append(motion_timeline_entries, TimelineAction.REOLINK_PREY_SIGNAL_APPLIED)
 

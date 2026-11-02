@@ -57,7 +57,7 @@ from src.mqtt import MQTTConfig
 from src.paths import kittyhack_root
 from src.model.yolo_model import YoloModel
 from src.model.identity_model import IdentityModel
-from src.model.identity import load_identity_model, MIN_CROP_AREA_PCT, UNKNOWN_CAT_LABEL
+from src.model.identity import load_identity_model, MIN_CROP_AREA_PCT, MAX_CROP_AREA_PCT, UNKNOWN_CAT_LABEL
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [WATCHDOG] %(message)s")
 log = logging.getLogger("watchdog")
@@ -757,8 +757,13 @@ class MouseDetector:
                     # ensuite). % de l'aire de l'image, pas un nombre de
                     # pixels absolu - MIN_CROP_AREA_PCT importé directement,
                     # une seule valeur de référence entre les deux chemins.
+                    # 02.11 (round 2) : MAX_CROP_AREA_PCT symétrique, même
+                    # raison - voir son commentaire côté identity.py (chat
+                    # trop proche de l'objectif = flou macro illisible,
+                    # confirmé pire que les crops trop petits sur le jeu de
+                    # test figé).
                     area_pct = ((cx2 - cx1) / frame_w * 100) * ((cy2 - cy1) / frame_h * 100) / 100
-                    if cx2 - cx1 >= 8 and cy2 - cy1 >= 8 and area_pct >= MIN_CROP_AREA_PCT:
+                    if cx2 - cx1 >= 8 and cy2 - cy1 >= 8 and MIN_CROP_AREA_PCT <= area_pct <= MAX_CROP_AREA_PCT:
                         label_cased, score = self.identity.identify_crop(
                             frame[cy1:cy2, cx1:cx2],
                         )
@@ -1563,11 +1568,15 @@ class CameraWatcher(threading.Thread):
                     # viewer gets a dense, continuous sequence to compare
                     # against the flap's own camera, not just the odd hit.
                     _save_event_frame(self.cam_name, frame, detections, captured_at=frame_captured_wall)
-                    # Lockdown trigger disabled - see class docstring above.
+                    # Watchdog's OWN lockdown trigger stays disabled - see
+                    # class docstring above. 02.11, Sid ("branche le lien
+                    # reolink voit une proie et informe HK déjà"): the
+                    # signal sent below is no longer purely observational
+                    # (Phase 2, src/backend/loop.py/REOLINK_PREY_SIGNAL_MIN_
+                    # CONFIDENCE) - a confident enough one now extends
+                    # Kittyflap's own post-prey lock window.
                     if mouse_probability >= WATCHDOG_MOUSE_THRESHOLD:
-                        log.warning("[%s] Prey suspected (%.0f%%) - lockdown disabled, no action taken.", self.cam_name, mouse_probability)
-                        # 25.10, Sid : Phase 0 du signal proie Reolink → KH,
-                        # observation seule - voir _send_reolink_prey_signal.
+                        log.warning("[%s] Prey suspected (%.0f%%) - sending signal to Kittyflap.", self.cam_name, mouse_probability)
                         # Seulement chatiere (le bon angle, le vrai modèle) -
                         # jamais chatiere_int (déjà la source du verdict KH
                         # lui-même, comparer un signal à lui-même n'aurait

@@ -410,10 +410,18 @@ async def reolink_prey_signal(request: Request):
     endpoint reste "juste un log" comme en Phase 0. L'action réelle vit
     dans src/backend/loop.py, juste avant l'appel à no_prey_within_timeout() :
     un signal suffisamment confiant (REOLINK_PREY_SIGNAL_MIN_CONFIDENCE,
-    constants.py) et pas encore appliqué prolonge
-    backend_main.prey_detection_mono - la MÊME porte que la détection
-    locale de Kittyflap utilise déjà, jamais un verrou indépendant (voir
-    no_prey_within_timeout dans backend/decisions.py)."""
+    constants.py) OU plusieurs signaux plus faibles mais répétés
+    (REOLINK_PREY_SIGNAL_REPEAT_COUNT à
+    REOLINK_PREY_SIGNAL_REPEAT_MIN_CONFIDENCE dans
+    REOLINK_PREY_SIGNAL_REPEAT_WINDOW_S - Sid, 02.11: "si y a 3x 68% par
+    exemple, est-ce que ça peut aussi déclencher ?") et pas encore
+    appliqué prolonge backend_main.prey_detection_mono - la MÊME porte que
+    la détection locale de Kittyflap utilise déjà, jamais un verrou
+    indépendant (voir no_prey_within_timeout dans backend/decisions.py).
+
+    02.11: stocke un petit HISTORIQUE récent (pas juste la dernière
+    valeur) pour que loop.py puisse compter les répétitions, pas
+    seulement regarder le signal le plus récent."""
     _, err = await _auth_or_fail(request)
     if err:
         return err
@@ -426,11 +434,21 @@ async def reolink_prey_signal(request: Request):
         pass
 
     from src.backend.loop import backend_main
+    from src.backend.constants import REOLINK_PREY_SIGNAL_REPEAT_WINDOW_S
     from src.clock import monotonic_time
 
     now_mono = monotonic_time()
     backend_main.reolink_prey_signal_mono = now_mono
     backend_main.reolink_prey_signal_probability = probability
+    history = getattr(backend_main, "reolink_prey_signal_history", None)
+    if history is None:
+        history = []
+        backend_main.reolink_prey_signal_history = history
+    if probability is not None:
+        history.append((now_mono, probability))
+    cutoff = now_mono - REOLINK_PREY_SIGNAL_REPEAT_WINDOW_S
+    while history and history[0][0] < cutoff:
+        history.pop(0)
     prob_str = f"{probability:.0f}%" if probability is not None else "?"
     logging.info(f"[BACKEND] Reolink chatiere prey signal received ({prob_str}) - stored, loop.py decides whether to apply it.")
     return _ok({"action": "reolink_prey_signal", "probability": probability})
