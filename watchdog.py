@@ -644,6 +644,13 @@ class MouseDetector:
         # réinitialisé après un trou sans détection (nouveau passage,
         # jamais mélangé avec le précédent).
         self._recent_identities: list[str] = []
+        # 02.11, Sid (screenshot "Chat inconnu (100%)" devenant "Boubou
+        # (95%)" sur la même visite, quelques dixièmes de seconde d'écart) -
+        # parallel to _recent_identities (same index), so the smoothed name
+        # below can be paired with a score that actually reflects IT,
+        # instead of the raw per-frame score of whichever name this one
+        # frame happened to detect before smoothing.
+        self._recent_identity_scores: list[float] = []
         self._last_identity_detection_wall: float = 0.0
         if self.kind == "yolo":
             from ultralytics import YOLO
@@ -774,13 +781,27 @@ class MouseDetector:
                     now = time.time()
                     if now - self._last_identity_detection_wall > IDENTITY_SMOOTHING_RESET_GAP_S:
                         self._recent_identities.clear()
+                        self._recent_identity_scores.clear()
                     self._last_identity_detection_wall = now
                     self._recent_identities.append(label_cased)
+                    self._recent_identity_scores.append(probability)
                     if len(self._recent_identities) > IDENTITY_SMOOTHING_WINDOW:
                         self._recent_identities.pop(0)
+                        self._recent_identity_scores.pop(0)
                     counts = Counter(self._recent_identities)
                     smoothed_name, _n = counts.most_common(1)[0]
                     label_cased = smoothed_name
+                    # 02.11, Sid - probability must describe the smoothed
+                    # name actually shown, not this one frame's raw score
+                    # for whatever it detected before smoothing. Best score
+                    # seen for smoothed_name within the current window - 0.0
+                    # if it never won a single frame's raw vote directly
+                    # (can happen when it wins purely on recent-window
+                    # majority count), same convention as loop.py's own fix.
+                    probability = max(
+                        (s for n, s in zip(self._recent_identities, self._recent_identity_scores) if n == smoothed_name),
+                        default=0.0,
+                    )
                 detections.append(
                     {
                         "name": label_cased,

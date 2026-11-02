@@ -668,6 +668,30 @@ def backend_main(
             # seule) règle ça.
             winning_name_cased = cat_rfid_name_dict.get(winning_tag, "") if winning_tag else ""
             winning_name = winning_name_cased.lower()
+            # 02.11, Sid (screenshot "Boubou (0%)" - le crop de CETTE frame
+            # était trop petit/loin, le modèle d'identité a correctement
+            # renvoyé un score à 0 pour elle, mais le nom affiché vient du
+            # vote de bloc ci-dessus, pas de cette frame précise) - le
+            # probability n'était jamais retouché par la boucle de
+            # réécriture du nom en dessous, donc un score individuel bas ou
+            # nul restait affiché sous un nom qui, lui, reflète la meilleure
+            # preuve de TOUTE la visite. Même principe que `best_probs` du
+            # vote vidéo plus haut dans ce fichier (le meilleur score vu
+            # pour le nom gagnant) : une passe cherche d'abord le
+            # probability maximum déjà observé pour winning_name dans ce
+            # bloc, réutilisé pour les frames dont le nom est réécrit. 0.0
+            # si aucune frame n'a jamais vu ce nom directement (ex: identité
+            # tranchée par le vrai RFID, jamais confirmée par la vidéo) -
+            # honnête plutôt que trompeur dans ce cas.
+            winning_name_best_prob = 0.0
+            if winning_name:
+                for element in img_ids_for_motion_block:
+                    img = image_buffer.get_by_id(element)
+                    if img is None:
+                        continue
+                    for obj in getattr(img, 'detected_objects', None) or []:
+                        if (obj.object_name or "").lower() == winning_name:
+                            winning_name_best_prob = max(winning_name_best_prob, getattr(obj, 'probability', 0.0))
             for element in img_ids_for_motion_block:
                 image_buffer.update_block_id(element, motion_block_id)
                 if tag_id is not None:
@@ -683,6 +707,7 @@ def backend_main(
                                 continue
                             if obj_name != winning_name:
                                 obj.object_name = winning_name_cased
+                                obj.probability = winning_name_best_prob
             logging.info(f"[BACKEND] Minimal threshold exceeded or tag ID detected. Images will be written to the database. Updated block ID for {len(img_ids_for_motion_block)} elements to '{motion_block_id}' and tag ID to '{tag_id if tag_id is not None else ''}'")
             # 08.10, Sid ("forcer le systeme a ecrire... en forcant
             # l'utilisation du vrai RFID"): this block just got written
