@@ -19,6 +19,7 @@ import logging
 import os
 import re
 import threading
+import time
 import uuid
 import zipfile as _zipfile
 
@@ -64,7 +65,11 @@ from src.server_ui.journeys import (
     _list_flap_events_for_date,
     _list_training_samples_for_date,
     _local_day_utc_range,
+    _merge_adjacent_blocks_into_visits,
+    _merge_and_cross_check_visits,
     _presence_direction_text,
+    _reolink_frame_index_for_date,
+    _resolve_visit_block_ids,
 )
 from src.server_ui.presence import (
     _day_glance_prey_counts,
@@ -207,9 +212,16 @@ def _serialize_events(
     for ev in raw_events:
         had_skipped_entry = False
         if timelines_by_block is not None:
-            for entry in timelines_by_block.get(ev["block_id"], []):
-                if entry.get("action") == "exit_skipped_entry":
-                    had_skipped_entry = True
+            # 02.11: ev may now be a merged multi-block visit (see
+            # journeys.py's _merge_adjacent_blocks_into_visits) - check every
+            # original block's timeline, not just the one kept as block_id,
+            # so a skipped-entry warning from a merged-away block isn't lost.
+            for bid in ev.get("block_ids") or [ev["block_id"]]:
+                for entry in timelines_by_block.get(bid, []):
+                    if entry.get("action") == "exit_skipped_entry":
+                        had_skipped_entry = True
+                        break
+                if had_skipped_entry:
                     break
         resolved_name = cat_name_dict.get(ev["rfid"]) if ev["rfid"] else None
         rfid_is_real = ev.get("rfid_is_real")
@@ -269,7 +281,14 @@ async def get_chronology(date: str | None = None, _user: str = Depends(require_s
     timelines_by_block = EventsRepo.db_get_motion_timelines(
         CONFIG["KITTYHACK_DATABASE_PATH"], [ev["block_id"] for ev in raw_events]
     )
-    events = _serialize_events(raw_events, cat_name_dict, timelines_by_block)
+    # 02.11: collapse same-visit micro-blocks and cross-check against
+    # Reolink (see journeys.py's _merge_adjacent_blocks_into_visits and
+    # this file's _apply_reolink_cross_check docstrings) before
+    # serializing - built from raw_events's block_ids above so no timeline
+    # signal is lost.
+    events = _serialize_events(
+        _merge_and_cross_check_visits(raw_events, cat_name_dict), cat_name_dict, timelines_by_block
+    )
 
     return JSONResponse({"date": local_date.isoformat(), "events": events})
 
@@ -288,7 +307,9 @@ async def get_chronology_recent(limit: int = 50, _user: str = Depends(require_se
     timelines_by_block = EventsRepo.db_get_motion_timelines(
         CONFIG["KITTYHACK_DATABASE_PATH"], [ev["block_id"] for ev in raw_events]
     )
-    events = _serialize_events(raw_events, cat_name_dict, timelines_by_block)
+    events = _serialize_events(
+        _merge_and_cross_check_visits(raw_events, cat_name_dict), cat_name_dict, timelines_by_block
+    )
     return JSONResponse({"events": events})
 
 
@@ -324,16 +345,24 @@ async def get_journey(date: str | None = None, _user: str = Depends(require_sess
         raise HTTPException(status_code=400, detail="invalid date, expected YYYY-MM-DD")
 
     date_start_utc, date_end_utc = _local_day_utc_range(local_date)
-    events = _list_flap_events_for_date(date_start_utc, date_end_utc)
+    raw_events = _list_flap_events_for_date(date_start_utc, date_end_utc)
     samples = _list_training_samples_for_date(local_date.strftime("%Y-%m-%d"))
+    cat_name_dict = CatsRepo.get_cat_name_rfid_dict(CONFIG["KITTYHACK_DATABASE_PATH"])
+    # Built from raw_events (every original block_id) before merging, so a
+    # timeline signal from a merged-away block isn't lost - see
+    # _serialize_events's block_ids loop.
+    timelines_by_block = EventsRepo.db_get_motion_timelines(
+        CONFIG["KITTYHACK_DATABASE_PATH"], [ev["block_id"] for ev in raw_events]
+    )
+    # 02.11: collapse same-visit micro-blocks and cross-check against
+    # Reolink before correlating with watchdog samples - _correlate now
+    # matches against each merged visit's full [start, end] span, see its
+    # docstring.
+    events = _merge_and_cross_check_visits(raw_events, cat_name_dict)
     # _correlate mutates `events` in place, attaching each one's "cluster"
     # of nearby samples, and returns whatever samples are left unclaimed.
     solo_samples = _correlate(events, samples)
     solo_groups = _group_solo_samples(solo_samples)
-    cat_name_dict = CatsRepo.get_cat_name_rfid_dict(CONFIG["KITTYHACK_DATABASE_PATH"])
-    timelines_by_block = EventsRepo.db_get_motion_timelines(
-        CONFIG["KITTYHACK_DATABASE_PATH"], [ev["block_id"] for ev in events]
-    )
 
     timeline = []
     for ev in events:
@@ -400,19 +429,40 @@ def _list_event_frames(local_start: datetime, local_end: datetime) -> list[dict]
     """Dense "chatiere" (Reolink) frames within [local_start, local_end]
     (already padded by the caller), sorted oldest-first, each with its own
     detection boxes read back from the JSON sidecar _save_event_frame wrote
-    alongside it."""
+    alongside it.
+
+    02.11, Sid ("chaque fois lent... 21 secondes... 17 secondes sur une
+    autre"): real, repeatable delay opening an event's detail view,
+    confirmed and measured directly - this function used to glob.glob()
+    the WHOLE EVENT_FRAMES_DIR (530k+ files and growing, every Reolink
+    frame ever captured across the full history) on every single call,
+    6.8s measured just for this step alone on a real request. Same root
+    cause, same fix as journeys.py's _reolink_frame_index_for_date (built
+    02.11 for the identity cross-check, never applied here even though
+    this is the OLDER, more frequently hit call site - every single open
+    of an event's photo/video view goes through this): glob per calendar
+    date actually spanned by [local_start, local_end] instead of the
+    whole directory - a given event's window almost always covers one
+    date, at most two across a midnight boundary."""
+    # 02.11: built on top of journeys.py's _reolink_frame_index_for_date -
+    # same per-date cache the identity cross-check already warms (forever
+    # for a closed/past date, 60s for today), so a repeated open of the
+    # SAME event (Sid: "même si j'ai déjà ouvert une fois") reuses it
+    # instead of re-globbing, on top of the date-scoping itself already
+    # cutting a cold call from ~7s to under 1s.
     results = []
-    for filepath in glob.glob(os.path.join(EVENT_FRAMES_DIR, "chatiere_*.jpg")):
-        filename = os.path.basename(filepath)
-        m = _EVENT_FRAME_RE.match(filename)
-        if not m:
-            continue
-        try:
-            dt = datetime.strptime(m.group("date") + m.group("time"), "%Y%m%d%H%M%S")
-        except ValueError:
-            continue
+    dates_needed: set[str] = set()
+    d = local_start.date()
+    while d <= local_end.date():
+        dates_needed.add(d.strftime("%Y%m%d"))
+        d += timedelta(days=1)
+    candidates: list[tuple[datetime, str]] = []
+    for date_str in dates_needed:
+        candidates.extend(_reolink_frame_index_for_date(date_str))
+    for dt, filepath in candidates:
         if not (local_start <= dt <= local_end):
             continue
+        filename = os.path.basename(filepath)
         objects = []
         json_path = filepath[:-4] + ".json"
         try:
@@ -450,6 +500,11 @@ def _list_event_frames(local_start: datetime, local_end: datetime) -> list[dict]
     results.sort(key=lambda r: r["ts"])
     return results
 
+
+# 02.11: _apply_reolink_cross_check / _merge_and_cross_check_visits moved to
+# journeys.py (see there) - presence.py needs them too for the stats fix,
+# and presence.py can't import from this file (this file imports FROM
+# presence.py, not the other way - would be circular).
 
 # 21.10, Sid ("j'ai que 8 images dans la video reolink, alors qu'il a duré
 # autant du point de vue reolink que du point de vue HK") - un vrai
@@ -886,7 +941,12 @@ async def get_pictures_events(
         mouse_probability=CONFIG["MOUSE_THRESHOLD"], rfid_filter=rfid,
     )
     cat_name_dict = CatsRepo.get_cat_name_rfid_dict(CONFIG["KITTYHACK_DATABASE_PATH"])
-    events = _serialize_events(raw_events, cat_name_dict)
+    # 02.11: same visit-merge + Reolink cross-check as chronology/journey.
+    # With an rfid filter active this only merges same-cat adjacent blocks
+    # (cross-identity hand-offs aren't in the filtered set to merge
+    # against) - still a real improvement, just narrower than the
+    # unfiltered views.
+    events = _serialize_events(_merge_and_cross_check_visits(raw_events, cat_name_dict), cat_name_dict)
 
     return JSONResponse({"date": local_date.isoformat(), "events": events})
 
@@ -1319,14 +1379,22 @@ async def get_event_timeline(block_id: int, _user: str = Depends(require_session
     )
 
     database = CONFIG["KITTYHACK_DATABASE_PATH"]
-    timelines_by_block = EventsRepo.db_get_motion_timelines(database, [block_id])
-    entries = timelines_by_block.get(block_id)
-    if entries:
-        entries = timeline_extract_latest_event(entries)
-    else:
+    # 02.11: same merged-visit resolution as get_event() above - the latest
+    # event/timeline should reflect the visit's actual conclusion (its LAST
+    # original block), not whichever block happens to be the merged visit's
+    # primary (first) one.
+    visit_block_ids = _resolve_visit_block_ids(block_id)
+    timelines_by_block = EventsRepo.db_get_motion_timelines(database, visit_block_ids)
+    entries = None
+    for bid in sorted(visit_block_ids, reverse=True):
+        if timelines_by_block.get(bid):
+            entries = timeline_extract_latest_event(timelines_by_block[bid])
+            break
+    if not entries:
+        ids_sql = ",".join(str(int(b)) for b in visit_block_ids)
         df = DatabaseCore.read_df_from_database(
             database,
-            f"SELECT event_type, created_at FROM events WHERE block_id = {int(block_id)} ORDER BY created_at ASC LIMIT 1",
+            f"SELECT event_type, created_at FROM events WHERE block_id IN ({ids_sql}) ORDER BY created_at DESC LIMIT 1",
         )
         if df.empty:
             raise HTTPException(status_code=404, detail="unknown block_id")
@@ -1402,7 +1470,20 @@ async def serve_activity_page(_user: str = Depends(require_session)):
 @webui_app.get("/app-api/v1/events/{block_id}")
 async def get_event(block_id: int, _user: str = Depends(require_session)):
     database = CONFIG["KITTYHACK_DATABASE_PATH"]
-    df = EventsRepo.db_get_photos_by_block_id(database, block_id, ReturnDataPhotosDB.all_except_photos)
+    # 02.11: block_id may be a merged visit's primary block only (see
+    # _resolve_visit_block_ids's docstring) - fetch every original block of
+    # the visit so the detail view shows every frame, not just the first
+    # fragment's.
+    visit_block_ids = _resolve_visit_block_ids(block_id)
+    if len(visit_block_ids) == 1:
+        df = EventsRepo.db_get_photos_by_block_id(database, block_id, ReturnDataPhotosDB.all_except_photos)
+    else:
+        parts = [
+            EventsRepo.db_get_photos_by_block_id(database, bid, ReturnDataPhotosDB.all_except_photos)
+            for bid in visit_block_ids
+        ]
+        parts = [p for p in parts if not p.empty]
+        df = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
     if df.empty:
         raise HTTPException(status_code=404, detail="event not found")
 
@@ -1519,6 +1600,7 @@ async def get_event(block_id: int, _user: str = Depends(require_session)):
     return JSONResponse(
         {
             "block_id": block_id,
+            "block_ids": visit_block_ids,
             "fps": fps or 4.0,
             "reolink_fps": reolink_fps,
             "fallback_mode": fallback_mode,
@@ -1755,7 +1837,19 @@ async def download_event_photo(block_id: int, pid: int, _user: str = Depends(req
 @webui_app.get("/app-api/v1/events/{block_id}/download-zip")
 async def download_event_zip(block_id: int, _user: str = Depends(require_session)):
     database = CONFIG["KITTYHACK_DATABASE_PATH"]
-    df = EventsRepo.db_get_photos_by_block_id(database, block_id, ReturnDataPhotosDB.all)
+    # 02.11: same merged-visit resolution as get_event() - a zip "of this
+    # event" should contain every original block's photos, not just the
+    # merged visit's primary (first) one.
+    visit_block_ids = _resolve_visit_block_ids(block_id)
+    if len(visit_block_ids) == 1:
+        df = EventsRepo.db_get_photos_by_block_id(database, block_id, ReturnDataPhotosDB.all)
+    else:
+        parts = [
+            EventsRepo.db_get_photos_by_block_id(database, bid, ReturnDataPhotosDB.all)
+            for bid in visit_block_ids
+        ]
+        parts = [p for p in parts if not p.empty]
+        df = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
     files: list[tuple[str, bytes]] = []
     if not df.empty:
         for __, row in df.iterrows():
@@ -1944,9 +2038,13 @@ async def get_presence_cat_events(
     if filter not in _PRESENCE_EVENTS_FILTERS:
         raise HTTPException(status_code=400, detail="invalid filter")
     database = CONFIG["KITTYHACK_DATABASE_PATH"]
-    raw_events = _list_events_for_rfid_filtered(database, rfid, filter)
+    # 02.11: _list_events_for_rfid_filtered now filters presence.py's own
+    # _resolve_all_visits_df() (cross-camera merged+cross-checked already)
+    # - no separate merge step needed here any more, each row IS already
+    # one resolved real visit.
+    events_raw = _list_events_for_rfid_filtered(database, rfid, filter)
     cat_name_dict = CatsRepo.get_cat_name_rfid_dict(database)
-    events = _serialize_events(raw_events, cat_name_dict)
+    events = _serialize_events(events_raw, cat_name_dict)
     return JSONResponse({"events": events})
 
 

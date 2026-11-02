@@ -14,9 +14,11 @@ for on watchdog captures specifically.
 
 import glob
 import html as html_module
+import json
 import logging
 import os
 import re
+import time
 import asyncio
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -209,8 +211,9 @@ def _list_flap_events_for_date(
         extra_filters += f" AND mouse_probability >= {mouse_probability}"
 
     stmt = f"""
-        SELECT block_id, MIN(id) AS first_id, MAX(created_at) AS created_at, event_type, rfid,
-               MAX(mouse_probability) AS mouse_probability{rfid_is_real_select}
+        SELECT block_id, MIN(id) AS first_id, MIN(created_at) AS started_at,
+               MAX(created_at) AS created_at, event_type, rfid,
+               MAX(mouse_probability) AS mouse_probability, COUNT(*) AS n_rows{rfid_is_real_select}
         FROM events
         WHERE created_at BETWEEN '{date_start_utc}' AND '{date_end_utc}'{deleted_filter}{extra_filters}
         GROUP BY block_id
@@ -227,6 +230,8 @@ def _list_flap_events_for_date(
         try:
             local_str = DateTimeUtil.get_local_date_from_utc_date(row["created_at"])
             dt = pd.to_datetime(local_str).to_pydatetime().replace(tzinfo=None)
+            started_local_str = DateTimeUtil.get_local_date_from_utc_date(row["started_at"])
+            started_at = pd.to_datetime(started_local_str).to_pydatetime().replace(tzinfo=None)
         except Exception:
             continue
         rfid_is_real_val = row["rfid_is_real"] if has_rfid_is_real else None
@@ -236,6 +241,7 @@ def _list_flap_events_for_date(
                 "block_id": int(row["block_id"]),
                 "first_id": int(row["first_id"]),
                 "dt": dt,
+                "started_at": started_at,
                 "event_type": row["event_type"],
                 "rfid": row["rfid"],
                 # None = unknown provenance (pre-migration row), True = real
@@ -252,6 +258,11 @@ def _list_flap_events_for_date(
                     0.0 if mouse_prob_val is None or pd.isna(mouse_prob_val)
                     else float(mouse_prob_val)
                 ),
+                # 02.11, Sid ("ça me dédouble les événements"): raw frame count
+                # for this block, used by _merge_adjacent_blocks_into_visits()
+                # below to weight identity votes when pooling several blocks
+                # of the same real visit together.
+                "n_rows": int(row["n_rows"]) if not pd.isna(row["n_rows"]) else 1,
             }
         )
     return events
@@ -275,8 +286,9 @@ def _list_recent_flap_events(limit: int = 50) -> list[dict]:
     rfid_is_real_select = ", MAX(rfid_is_real) AS rfid_is_real" if has_rfid_is_real else ""
 
     stmt = f"""
-        SELECT block_id, MIN(id) AS first_id, MAX(created_at) AS created_at, event_type, rfid,
-               MAX(mouse_probability) AS mouse_probability{rfid_is_real_select}
+        SELECT block_id, MIN(id) AS first_id, MIN(created_at) AS started_at,
+               MAX(created_at) AS created_at, event_type, rfid,
+               MAX(mouse_probability) AS mouse_probability, COUNT(*) AS n_rows{rfid_is_real_select}
         FROM events
         WHERE block_id IS NOT NULL{deleted_filter}
         GROUP BY block_id
@@ -294,6 +306,8 @@ def _list_recent_flap_events(limit: int = 50) -> list[dict]:
         try:
             local_str = DateTimeUtil.get_local_date_from_utc_date(row["created_at"])
             dt = pd.to_datetime(local_str).to_pydatetime().replace(tzinfo=None)
+            started_local_str = DateTimeUtil.get_local_date_from_utc_date(row["started_at"])
+            started_at = pd.to_datetime(started_local_str).to_pydatetime().replace(tzinfo=None)
         except Exception:
             continue
         rfid_is_real_val = row["rfid_is_real"] if has_rfid_is_real else None
@@ -303,6 +317,7 @@ def _list_recent_flap_events(limit: int = 50) -> list[dict]:
                 "block_id": int(row["block_id"]),
                 "first_id": int(row["first_id"]),
                 "dt": dt,
+                "started_at": started_at,
                 "event_type": row["event_type"],
                 "rfid": row["rfid"],
                 "rfid_is_real": (
@@ -313,23 +328,402 @@ def _list_recent_flap_events(limit: int = 50) -> list[dict]:
                     0.0 if mouse_prob_val is None or pd.isna(mouse_prob_val)
                     else float(mouse_prob_val)
                 ),
+                "n_rows": int(row["n_rows"]) if not pd.isna(row["n_rows"]) else 1,
             }
         )
     return events
 
 
+# 02.11, Sid ("ça me dédouble les événements... Nala arrive, vient devant la
+# chatière et rentre" - un seul vrai passage affiché en 4, parfois 7+, lignes
+# distinctes "X en balade"/"X est entré", chacune avec un nom différent):
+# chaque micro-coupure de motion_outside (vote d'identité vidéo qui bascule,
+# garde-fou MAX_MOTION_BLOCK_SECONDS, etc. - voir loop.py) clôture le bloc en
+# cours et en redémarre un immédiatement (écart mesuré en prod: ~0.1-0.3s,
+# jamais un vrai trou). Corriger ça dans loop.py reviendrait à assouplir la
+# boucle de contrôle temps réel de la porte - risqué, et hors sujet pour un
+# problème qui n'est que de l'affichage/des stats, pas de la sécurité (RFID
+# garde la priorité absolue à l'entrée, intouché ici). Cette fonction fusionne
+# donc a posteriori, en lecture seule, les blocs consécutifs d'un même vrai
+# passage - ne touche jamais à loop.py ni à la boucle de contrôle physique.
+VISIT_MERGE_WINDOW_S = 5.0
+
+
+_REAL_TRANSITION_EVENT_TYPES = (
+    EventType.CAT_WENT_INSIDE,
+    EventType.CAT_WENT_PROBABLY_INSIDE,
+    EventType.CAT_WENT_INSIDE_WITH_MOUSE,
+    EventType.CAT_WENT_OUTSIDE,
+)
+
+
+def _merge_one_visit(group: list[dict]) -> dict:
+    """Collapse one group of consecutive blocks (same real visit) into a
+    single event dict. Identity: a real RFID read anywhere in the group
+    always wins (ground truth); otherwise the rfid with the most pooled
+    n_rows across the group wins (more actual evidence beats a short,
+    noisy tail fragment - this is exactly what would have kept the
+    02.11 "Pookie est entré" visit correctly attributed to whichever cat
+    dominated the whole approach, not just its last few frames).
+
+    Conclusion (event_type): the LAST block with a REAL transition
+    (_REAL_TRANSITION_EVENT_TYPES - an actual in/out crossing), not just
+    the chronologically last block in the group. 02.11, real bug caught by
+    Sid ("10:51 En vrai: Pookie est sorti - alors que c'est noté 'Pookie en
+    balade'"): block A correctly concludes cat_went_outside, then an
+    immediately-following block B (cat still visible, now already outside,
+    nothing left to transition) correctly concludes motion_outside_only on
+    its OWN - that per-block conclusion is right in isolation, but blindly
+    taking "the last block's" for the merged visit threw away A's real
+    exit in favour of B's mere glance. A glance can never outrank a real
+    crossing regardless of which one happened later; only decided by
+    recency when there are two (or more) real crossings in the same group.
+    Timestamp: the FIRST block's start, since that's when the real visit
+    began."""
+    group_sorted = sorted(group, key=lambda e: e.get("started_at") or e["dt"])
+    if len(group_sorted) == 1:
+        ev = dict(group_sorted[0])
+        ev.setdefault("block_ids", [ev["block_id"]])
+        ev.setdefault("end_dt", ev["dt"])
+        ev.setdefault("rfid_votes", {ev["rfid"]: int(ev.get("n_rows") or 1)} if ev.get("rfid") else {})
+        return ev
+
+    first, last = group_sorted[0], group_sorted[-1]
+    # 02.11, Sid ("confronter les deux votes [Kittyflap/Reolink] avec le
+    # RFID") - exposé telle quelle (pas juste le gagnant) pour que
+    # l'appelant (webui_api._apply_reolink_cross_check) puisse calculer la
+    # force du consensus Kittyflap pour CE gagnant précis, et la comparer
+    # au consensus Reolink sur la même fenêtre - un gagnant Kittyflap à
+    # 52% n'a pas le même poids qu'un gagnant à 95%.
+    totals: dict[str, int] = {}
+    for e in group_sorted:
+        if e.get("rfid"):
+            totals[e["rfid"]] = totals.get(e["rfid"], 0) + int(e.get("n_rows") or 1)
+
+    real = next((e for e in group_sorted if e.get("rfid_is_real") is True), None)
+    if real is not None:
+        rfid, rfid_is_real = real["rfid"], True
+    else:
+        rfid = max(totals, key=lambda k: totals[k]) if totals else (last.get("rfid") or "")
+        rfid_is_real = False if any(e.get("rfid_is_real") is False for e in group_sorted) else None
+
+    last_real_transition = next(
+        (
+            e
+            for e in reversed(group_sorted)
+            if _event_type_first(e.get("event_type")) in _REAL_TRANSITION_EVENT_TYPES
+        ),
+        None,
+    )
+    event_type = last_real_transition["event_type"] if last_real_transition is not None else last["event_type"]
+
+    return {
+        "block_id": first["block_id"],
+        "block_ids": [e["block_id"] for e in group_sorted],
+        "first_id": first["first_id"],
+        "dt": first.get("started_at") or first["dt"],
+        "end_dt": last["dt"],
+        "started_at": first.get("started_at") or first["dt"],
+        "event_type": event_type,
+        "rfid": rfid,
+        "rfid_is_real": rfid_is_real,
+        "rfid_votes": totals,
+        "mouse_probability": max((e.get("mouse_probability") or 0.0) for e in group_sorted),
+        "n_rows": sum(int(e.get("n_rows") or 1) for e in group_sorted),
+    }
+
+
+def _merge_adjacent_blocks_into_visits(
+    events: list[dict], window_seconds: float = VISIT_MERGE_WINDOW_S
+) -> list[dict]:
+    """Merge consecutive motion blocks into one visit when they're close in
+    time (<= window_seconds, measured end of one block to start of the
+    next). Never merges across two blocks that EACH carry a real (chip-read,
+    not video-guessed) RFID for a different cat - that's genuine ground
+    truth of two different passages, the only case this refuses to merge
+    regardless of how close in time they are. Read-only, display/stats
+    layer only - loop.py's real-time block-splitting is untouched."""
+    if not events:
+        return events
+    ordered = sorted(events, key=lambda e: e.get("started_at") or e["dt"])
+
+    groups: list[list[dict]] = []
+    current: list[dict] | None = None
+    group_real_rfid: str | None = None
+    prev_end = None
+    for ev in ordered:
+        start = ev.get("started_at") or ev["dt"]
+        is_real = ev.get("rfid_is_real") is True
+        conflicts = (
+            current is not None
+            and group_real_rfid is not None
+            and is_real
+            and ev["rfid"] != group_real_rfid
+        )
+        gap_ok = (
+            current is not None
+            and prev_end is not None
+            and (start - prev_end).total_seconds() <= window_seconds
+        )
+        if current is not None and gap_ok and not conflicts:
+            current.append(ev)
+        else:
+            if current is not None:
+                groups.append(current)
+            current = [ev]
+            group_real_rfid = None
+        if is_real and group_real_rfid is None:
+            group_real_rfid = ev["rfid"]
+        prev_end = ev["dt"]
+    if current is not None:
+        groups.append(current)
+
+    merged = [_merge_one_visit(g) for g in groups]
+    merged.sort(key=lambda e: e["dt"], reverse=True)
+    return merged
+
+
+# 02.11, Sid ("trouver un moyen de fusionner ce que pense HK et ce que
+# pense reo... confronter les deux votes avec le RFID", puis "de nuit,
+# reolink a aussi une meilleure vision que HK - meilleur IR"): un chat
+# tout près de la chatière n'est souvent visible, côté caméra Kittyflap,
+# que de face à très courte distance (voir src/model/identity.py -
+# fréquemment juste la tête/les oreilles, floues, sans le poitrail/les
+# pattes qui portent le vrai signal distinctif) alors que Reolink garde un
+# angle de profil exploitable même tout près, et un meilleur capteur IR
+# de nuit. Les deux pipelines d'identité tournent aujourd'hui en parfaite
+# indépendance (loop.py pour Kittyflap, watchdog.py pour Reolink) -
+# Reolink n'a jamais voix au chapitre sur le nom finalement affiché.
+#
+# Cas réel mesuré le 02.11 (visite 08:29:52-08:30:23, vraie identité
+# confirmée visuellement par Sid = Nala) : côté Kittyflap, 238 frames
+# votent Pookie contre 52 Nala (82% de consensus interne - majoritaire,
+# mais pas franc) ; côté Reolink, 6 frames sur 6 votent Nala (100%).
+# Sommer les votes bruts des deux caméras (238+0 Pookie vs 52+6 Nala)
+# donnerait TOUJOURS Pookie - Kittyflap capture ~10x plus souvent que
+# Reolink (~10 fps contre ~1 frame/s), donc un gagnant Kittyflap fragile
+# écraserait numériquement un gagnant Reolink solide mais plus rare.
+# Comparer plutôt la FORCE DE CONSENSUS propre à chaque caméra (part de
+# ses propres votes qui vont à son propre gagnant) - une caméra sûre
+# d'elle (même peu bavarde) doit l'emporter sur une caméra majoritaire
+# mais hésitante.
+#
+# 02.11 (déplacé depuis webui_api.py) : presence.py a besoin de cette même
+# fusion+cross-check pour corriger ses propres stats (entrées/sorties,
+# temps dehors, dedans/dehors), mais webui_api.py importe DEPUIS
+# presence.py (pas l'inverse) - donc ce code vit ici, le module commun aux
+# deux, plutôt que dans webui_api.py. EVENT_FRAMES_DIR/_EVENT_FRAME_RE
+# dupliqués depuis webui_api.py (même raisonnement que leur propre
+# duplication depuis watchdog.py : modules indépendants, pas de dépendance
+# à créer juste pour deux constantes).
+EVENT_FRAMES_DIR = "/data/watchdog_event_frames"
+_EVENT_FRAME_RE = re.compile(r"^(?P<cam>[a-z_]+)_(?P<date>\d{8})_(?P<time>\d{6})_(?P<ms>\d{3})\.jpg$")
+_EVENT_FRAME_PAD_S = 15.0
+_REOLINK_MIN_FRAMES_FOR_OVERRIDE = 3
+# See _apply_reolink_cross_check's docstring - bounds the cold-cache cost
+# of resolving presence.py's full-history stats as real history keeps
+# accumulating, at the cost of not cross-checking identity for visits
+# older than this (they keep their Kittyflap-only resolution).
+_REOLINK_CROSS_CHECK_MAX_AGE_DAYS = 3
+
+# even scoped to one date, glob.glob() over several thousand files measured
+# ~0.9s on real data - fine once, too slow once per visit per PAGE load
+# (chronology/journey/presence stats routinely touch dozens of visits).
+# Cached per date: a past/closed date's file list never changes once that
+# day is over, so it's cached forever (within this process's lifetime);
+# TODAY's is still actively growing, so it gets a short TTL instead of
+# indefinite caching. Capped at _REOLINK_INDEX_CACHE_MAX_DATES entries
+# (evict oldest) so repeatedly browsing many distinct historical dates
+# can't grow this without bound.
+_reolink_frame_index_cache: dict[str, tuple[float, list[tuple[datetime, str]]]] = {}
+_REOLINK_INDEX_CACHE_TTL_TODAY_S = 60.0
+_REOLINK_INDEX_CACHE_MAX_DATES = 30
+
+
+def _reolink_frame_index_for_date(date_str: str) -> list[tuple[datetime, str]]:
+    """(dt, filepath) for every chatiere_* frame on this local calendar date
+    (YYYYMMDD), filename parsing only - no file I/O beyond the directory
+    listing itself. EVENT_FRAMES_DIR holds every Reolink frame ever
+    captured (500k+ files across the full history) - glob.glob() scoped to
+    `chatiere_{date_str}_*.jpg` only touches that one day's files (a few
+    thousand, not half a million). That's fine for a single detail view
+    (opened once), but would be a severe regression if called once per
+    visit for a whole chronology/journey/presence-stats PAGE of visits -
+    which is exactly what _apply_reolink_cross_check does below."""
+    today_str = datetime.now(ZoneInfo(CONFIG["TIMEZONE"])).strftime("%Y%m%d")
+    cached = _reolink_frame_index_cache.get(date_str)
+    if cached is not None:
+        cached_at, index = cached
+        if date_str != today_str or (time.monotonic() - cached_at) < _REOLINK_INDEX_CACHE_TTL_TODAY_S:
+            return index
+
+    out = []
+    for filepath in glob.glob(os.path.join(EVENT_FRAMES_DIR, f"chatiere_{date_str}_*.jpg")):
+        filename = os.path.basename(filepath)
+        m = _EVENT_FRAME_RE.match(filename)
+        if not m:
+            continue
+        try:
+            dt = datetime.strptime(m.group("date") + m.group("time"), "%Y%m%d%H%M%S")
+        except ValueError:
+            continue
+        out.append((dt, filepath))
+
+    if len(_reolink_frame_index_cache) >= _REOLINK_INDEX_CACHE_MAX_DATES:
+        oldest_key = min(_reolink_frame_index_cache, key=lambda k: _reolink_frame_index_cache[k][0])
+        del _reolink_frame_index_cache[oldest_key]
+    _reolink_frame_index_cache[date_str] = (time.monotonic(), out)
+    return out
+
+
+def _reolink_top1_name(filepath: str) -> str | None:
+    """This frame's own highest-probability detection name, read from its
+    JSON sidecar - only called for frames that actually fall inside some
+    visit's time window (see _apply_reolink_cross_check), never for a
+    whole day's worth of frames at once."""
+    json_path = filepath[:-4] + ".json"
+    try:
+        with open(json_path, "r", encoding="utf-8") as f:
+            raw = json.load(f)
+    except Exception:
+        return None
+    if not raw:
+        return None
+    best = max(raw, key=lambda d: d.get("probability", 0))
+    return best.get("name") or None
+
+
+def _apply_reolink_cross_check(visits: list[dict], cat_name_dict: dict) -> list[dict]:
+    """Mutate each merged visit's rfid/rfid_is_real in place when Reolink's
+    own internal consensus for a DIFFERENT cat is stronger than Kittyflap's
+    for its current winner - never when a real RFID read is already present
+    (ground truth, untouchable), and never on fewer than
+    _REOLINK_MIN_FRAMES_FOR_OVERRIDE Reolink frames (too little evidence to
+    trust over a real Kittyflap majority, however weak).
+
+    Builds the Reolink frame index ONCE per distinct calendar date actually
+    needed across all `visits` (not once per visit - see
+    _reolink_frame_index_for_date's docstring), then does the per-visit
+    windowing/tallying purely in memory.
+
+    Only considers visits within _REOLINK_CROSS_CHECK_MAX_AGE_DAYS: each
+    extra distinct calendar date touched costs one more
+    glob.glob() of a few thousand files (~1s, measured) on a cold cache -
+    presence.py's stat functions resolve ALL history (months, eventually
+    years), and without this bound the cold cost grows without limit as
+    more days accumulate (996 blocks/16 days measured 02.11 -> ~24s cold
+    already). Older visits keep whatever Kittyflap-only identity they
+    already had - correct the vast majority of the time, and presence
+    stats care about recent activity far more than a years-old visit's
+    exact identity."""
+    cutoff = datetime.now() - timedelta(days=_REOLINK_CROSS_CHECK_MAX_AGE_DAYS)
+    candidates = [
+        v
+        for v in visits
+        if v.get("rfid_is_real") is not True and (v.get("rfid_votes") or {}) and v["dt"] >= cutoff
+    ]
+    if not candidates:
+        return visits
+
+    windows = {}
+    dates_needed: set[str] = set()
+    for v in candidates:
+        start = v["dt"] - timedelta(seconds=_EVENT_FRAME_PAD_S)
+        end = v["end_dt"] + timedelta(seconds=_EVENT_FRAME_PAD_S)
+        windows[id(v)] = (start, end)
+        d = start.date()
+        while d <= end.date():
+            dates_needed.add(d.strftime("%Y%m%d"))
+            d += timedelta(days=1)
+
+    frame_index: list[tuple[datetime, str]] = []
+    for date_str in dates_needed:
+        frame_index.extend(_reolink_frame_index_for_date(date_str))
+    frame_index.sort(key=lambda t: t[0])
+
+    name_to_rfid = {v: k for k, v in cat_name_dict.items()}
+    for visit in candidates:
+        start, end = windows[id(visit)]
+        reo_tally: dict[str, int] = {}
+        for dt, filepath in frame_index:
+            if start <= dt <= end:
+                name = _reolink_top1_name(filepath)
+                if name:
+                    reo_tally[name] = reo_tally.get(name, 0) + 1
+        reo_total = sum(reo_tally.values())
+        if reo_total < _REOLINK_MIN_FRAMES_FOR_OVERRIDE:
+            continue
+
+        kf_votes: dict[str, int] = visit.get("rfid_votes") or {}
+        kf_total = sum(kf_votes.values())
+        kf_rfid = visit.get("rfid")
+        kf_name = cat_name_dict.get(kf_rfid, kf_rfid or "")
+        kf_consensus = kf_votes.get(kf_rfid, 0) / kf_total if kf_total else 0.0
+
+        reo_name, reo_votes = max(reo_tally.items(), key=lambda kv: kv[1])
+        if reo_name == kf_name:
+            continue
+        reo_consensus = reo_votes / reo_total
+        if reo_consensus > kf_consensus:
+            reo_rfid = name_to_rfid.get(reo_name)
+            if reo_rfid:
+                logging.info(
+                    f"[JOURNEY] Reolink cross-check: visit at {visit['dt']} - Kittyflap said "
+                    f"'{kf_name}' ({kf_consensus:.0%} of {kf_total} frames), Reolink says "
+                    f"'{reo_name}' ({reo_consensus:.0%} of {reo_total} frames) - overriding."
+                )
+                visit["rfid"] = reo_rfid
+                visit["rfid_is_real"] = False
+    return visits
+
+
+def _merge_and_cross_check_visits(raw_events: list[dict], cat_name_dict: dict) -> list[dict]:
+    """The one call site every endpoint/stat function should use instead of
+    _merge_adjacent_blocks_into_visits directly - same merge, plus the
+    Reolink cross-check above."""
+    visits = _merge_adjacent_blocks_into_visits(raw_events)
+    return _apply_reolink_cross_check(visits, cat_name_dict)
+
+
+def _resolve_visit_block_ids(block_id: int, search_limit: int = 5000) -> list[int]:
+    """02.11, Sid ("avant je voyais le clapet et le bout de queue qui
+    montrait qu'il était bien rentré"): the frontend's event detail view
+    (EventModal, GET /app-api/v1/events/{block_id}) only ever requests ONE
+    block_id - the merged visit's primary one (see
+    _merge_adjacent_blocks_into_visits above). Without this, the detail view
+    for a merged visit only shows the FIRST original block's photos, missing
+    everything from the later blocks - including, for an entry, the actual
+    crossing frame, which usually happens near the END of a fragmented
+    sequence, not the start. Resolves one original block_id back to every
+    original block_id of the visit it belongs to, so callers can fetch
+    photos/timeline for the whole visit instead of just its first fragment.
+    Falls back to [block_id] alone if it can't be found (older than
+    search_limit, or was never part of a merge)."""
+    raw = _list_recent_flap_events(search_limit)
+    merged = _merge_adjacent_blocks_into_visits(raw)
+    for visit in merged:
+        ids = visit.get("block_ids") or [visit["block_id"]]
+        if block_id in ids:
+            return ids
+    return [block_id]
+
+
 def _correlate(events: list[dict], samples: list[dict]) -> list[dict]:
     """Attach nearby watchdog samples to flap events (within
-    CORRELATION_WINDOW_S); mutate events in place with a "cluster" key and
-    return the leftover samples with no nearby event."""
+    CORRELATION_WINDOW_S of the event's full [start, end] span, not just a
+    single point - 02.11: events can now be a merged multi-block visit
+    spanning minutes, see _merge_adjacent_blocks_into_visits() above);
+    mutate events in place with a "cluster" key and return the leftover
+    samples with no nearby event."""
     remaining = list(samples)
     # Newest-first processing (events are already sorted that way) so a
     # sample between two close events attaches to the more recent one.
     for ev in events:
+        start = ev["dt"]
+        end = ev.get("end_dt", ev["dt"])
         cluster, still_remaining = [], []
         for s in remaining:
-            delta = abs((s["dt"] - ev["dt"]).total_seconds())
-            if delta <= CORRELATION_WINDOW_S:
+            if (start - s["dt"]).total_seconds() <= CORRELATION_WINDOW_S and (s["dt"] - end).total_seconds() <= CORRELATION_WINDOW_S:
                 cluster.append(s)
             else:
                 still_remaining.append(s)

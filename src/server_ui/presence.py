@@ -4,6 +4,7 @@ import base64
 import json
 import logging
 import sqlite3
+import time
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -20,7 +21,11 @@ from src.server_ui.state import reload_trigger_config, reload_trigger_photos
 from src.server_ui.context import SessionContext
 from src.server_ui.event_modal import btn_show_event, show_event_server
 from src.server_ui.cats import build_cat_settings_card
-from src.server_ui.journeys import _event_card_html
+from src.server_ui.journeys import (
+    _event_card_html,
+    _list_recent_flap_events,
+    _merge_and_cross_check_visits,
+)
 
 _ = set_language(CONFIG["LANGUAGE"])
 
@@ -80,18 +85,110 @@ def _event_type_sql_in(column: str, types) -> str:
     return "(" + " OR ".join(parts) + ")"
 
 
+# 02.11, Sid ("ça fout en l'air les stats, le qui est dedans qui est
+# dehors"): every function below used to query `events` filtered by
+# `WHERE rfid = X` BEFORE any cross-block/cross-camera identity
+# resolution - exactly the bug the fragmentation investigation uncovered
+# (journeys.py's _merge_adjacent_blocks_into_visits docstring): a single
+# real visit whose video-guess blocks flip between cats only ever showed
+# up in ONE cat's own stats, picked by whichever fragment happened to
+# carry that name, not the visit's real cross-checked identity. A
+# misattributed visit didn't just display wrong (fixed earlier tonight in
+# the chronology/journey/photos views) - it also silently corrupted THIS
+# cat's entries/exits/time-outside counters and the OTHER cat's (the one
+# who should have gotten it but didn't).
+#
+# Fix: resolve ALL visits (every cat, cross-camera merged+cross-checked -
+# the exact same pipeline the display views already use) ONCE, THEN filter
+# by rfid - never the other way around. _ALL_VISITS_FETCH_LIMIT has
+# generous headroom (996 distinct blocks measured over 16 days of real
+# history on 02.11 - this comfortably covers months before needing to
+# raise it).
+_ALL_VISITS_FETCH_LIMIT = 20000
+
+# 02.11: resolving all visits (DB fetch + cross-camera merge/cross-check)
+# measured multiple seconds on real data - each of the 7+ functions below
+# calling it fresh, and a single page load (Présence, 4 cats × several
+# stat tiles each) calling several of THOSE, would mean dozens of full
+# re-resolutions for data that cannot have changed within the same
+# second. Short TTL (not "forever" like the Reolink per-date cache - this
+# one covers ALL history, including TODAY, which is always still growing)
+# so a page load shares one resolution, without ever showing stats more
+# than a few seconds stale.
+# 02.11: measured ~24s cold on real data (full-history Reolink cross-check,
+# see journeys.py's _apply_reolink_cross_check bound below) - a 20s TTL
+# would mean almost every request pays that cost since real page loads are
+# rarely <20s apart. 3 minutes of staleness on entry/exit counters is a
+# fine trade for never blocking a page load that long; the live
+# chronology/journey/photos views (journeys.py's own callers) are
+# untouched by this cache and stay exactly as fresh as before.
+_all_visits_cache: dict[str, tuple[float, pd.DataFrame]] = {}
+_ALL_VISITS_CACHE_TTL_S = 180.0
+
+
+def _resolve_all_visits_df(database: str) -> pd.DataFrame:
+    """Every flap visit ever, one row per real visit (block_id, first_id,
+    dt as a local tz-naive datetime, event_type, rfid, rfid_is_real,
+    mouse_probability, ts_utc as a tz-aware UTC Timestamp) - the single
+    source every presence stat function below filters from by rfid,
+    instead of querying the database pre-filtered."""
+    cached = _all_visits_cache.get(database)
+    if cached is not None and (time.monotonic() - cached[0]) < _ALL_VISITS_CACHE_TTL_S:
+        return cached[1]
+
+    tz = ZoneInfo(CONFIG["TIMEZONE"])
+    raw = _list_recent_flap_events(_ALL_VISITS_FETCH_LIMIT)
+    cat_name_dict = CatsRepo.get_cat_name_rfid_dict(database)
+    visits = _merge_and_cross_check_visits(raw, cat_name_dict)
+    columns = ["block_id", "first_id", "dt", "event_type", "rfid", "rfid_is_real", "mouse_probability", "ts_utc"]
+    if not visits:
+        result = pd.DataFrame(columns=columns)
+    else:
+        rows = []
+        for v in visits:
+            try:
+                ts_utc = pd.Timestamp(v["dt"]).tz_localize(tz).tz_convert("UTC")
+            except Exception:
+                continue
+            rows.append(
+                {
+                    "block_id": v["block_id"],
+                    "first_id": v.get("first_id"),
+                    "dt": v["dt"],
+                    "event_type": v["event_type"],
+                    "rfid": v.get("rfid") or "",
+                    "rfid_is_real": v.get("rfid_is_real"),
+                    "mouse_probability": v.get("mouse_probability") or 0.0,
+                    "ts_utc": ts_utc,
+                }
+            )
+        result = pd.DataFrame(rows, columns=columns)
+
+    _all_visits_cache[database] = (time.monotonic(), result)
+    return result
+
+
+def _ts_utc_to_created_at_str(ts_utc: pd.Timestamp) -> str:
+    """Format a tz-aware UTC Timestamp to match events.created_at's own
+    on-disk string shape ("...19:58:49.1932+00:00") - DateTimeUtil.
+    get_local_date_from_utc_date() (src/helper.py) specifically expects a
+    "+00:00" suffix (not "+0000") and a space separator (not "T"), the
+    only two formats it strips/parses."""
+    return ts_utc.strftime("%Y-%m-%d %H:%M:%S.%f") + "+00:00"
+
+
 def _latest_presence_for_rfid(database: str, rfid: str):
     """Return (event_type, created_at) of the most recent in/out event for this cat, or (None, None)."""
-    types_cond = _event_type_sql_in("event_type", _PRESENCE_EVENT_TYPES)
-    stmt = f"""
-        SELECT event_type, created_at FROM events
-        WHERE rfid = {_sql_quote(rfid)} AND {types_cond} AND deleted = 0
-        ORDER BY created_at DESC LIMIT 1
-    """
-    df = DatabaseCore.read_df_from_database(database, stmt)
+    df = _resolve_all_visits_df(database)
     if df.empty:
         return None, None
-    return df.iloc[0]["event_type"], df.iloc[0]["created_at"]
+    df = df[
+        (df["rfid"] == rfid) & (df["event_type"].apply(_event_type_first).isin(_PRESENCE_EVENT_TYPES))
+    ]
+    if df.empty:
+        return None, None
+    row = df.loc[df["ts_utc"].idxmax()]
+    return row["event_type"], _ts_utc_to_created_at_str(row["ts_utc"])
 
 
 def _format_elapsed(created_at: str) -> str:
@@ -121,25 +218,15 @@ def _presence_prey_blocks_for_rfid(database: str, rfid: str) -> pd.DataFrame:
     """04.10 (Sid, "trait d'une autre couleur... quand une proie est
     detectee... cadeaux bloques"): dedup'd, UTC-timestamped prey-blocked
     sightings for this cat (columns: block_id, ts_utc). A blocked entry
-    conclude_motion_event_type's conclusion stays motion_outside_with_mouse. Same
-    frame-spam dedup as _presence_events_for_rfid (one row per block_id)."""
-    stmt = f"""
-        SELECT block_id, event_type, created_at FROM events
-        WHERE rfid = {_sql_quote(rfid)} AND {_event_type_sql_in("event_type", [EventType.MOTION_OUTSIDE_WITH_MOUSE])} AND deleted = 0
-        ORDER BY created_at ASC
-    """
-    df = DatabaseCore.read_df_from_database(database, stmt)
+    conclude_motion_event_type's conclusion stays motion_outside_with_mouse."""
+    df = _resolve_all_visits_df(database)
     if df.empty:
-        return df
-    # 04.10, Sid: same mixed-format created_at issue as _presence_events_for_rfid above.
-    df["ts_utc"] = pd.to_datetime(df["created_at"], format="mixed", utc=True, errors="coerce")
-    df = df.dropna(subset=["ts_utc"])
-    if df.empty:
-        return df
-    df["dedup_key"] = df["block_id"]
-    missing = df["dedup_key"].isna()
-    df.loc[missing, "dedup_key"] = df.index[missing]
-    return df.sort_values("ts_utc").drop_duplicates(subset="dedup_key", keep="first")
+        return pd.DataFrame(columns=["block_id", "event_type", "ts_utc"])
+    df = df[
+        (df["rfid"] == rfid)
+        & (df["event_type"].apply(_event_type_first) == str(EventType.MOTION_OUTSIDE_WITH_MOUSE))
+    ]
+    return df[["block_id", "event_type", "ts_utc"]].sort_values("ts_utc")
 
 
 def _last_entry_for_rfid(database: str, rfid: str):
@@ -149,16 +236,13 @@ def _last_entry_for_rfid(database: str, rfid: str):
     UTC-aware comparison as _format_elapsed) - comparing a tz-aware "now"
     against the tz-naive local_dt directly crashed with "can't subtract
     offset-naive and offset-aware datetimes" the first time around."""
-    types_cond = _event_type_sql_in("event_type", _INSIDE_EVENT_TYPES)
-    stmt = f"""
-        SELECT created_at FROM events
-        WHERE rfid = {_sql_quote(rfid)} AND {types_cond} AND deleted = 0
-        ORDER BY created_at DESC LIMIT 1
-    """
-    df = DatabaseCore.read_df_from_database(database, stmt)
+    df = _resolve_all_visits_df(database)
     if df.empty:
         return None, None
-    created_at_utc = df.iloc[0]["created_at"]
+    df = df[(df["rfid"] == rfid) & (df["event_type"].apply(_event_type_first).isin(_INSIDE_EVENT_TYPES))]
+    if df.empty:
+        return None, None
+    created_at_utc = _ts_utc_to_created_at_str(df.loc[df["ts_utc"].idxmax(), "ts_utc"])
     try:
         local_str = DateTimeUtil.get_local_date_from_utc_date(created_at_utc)
         local_dt = pd.to_datetime(local_str).to_pydatetime()
@@ -173,17 +257,16 @@ def _last_exit_for_rfid(database: str, rfid: str):
     _last_entry_for_rfid() above, just the complementary event type - this
     one was never actually built even on the Shiny side despite having been
     discussed."""
-    stmt = f"""
-        SELECT created_at FROM events
-        WHERE rfid = {_sql_quote(rfid)}
-          AND {_event_type_sql_in("event_type", (EventType.CAT_WENT_OUTSIDE,))}
-          AND deleted = 0
-        ORDER BY created_at DESC LIMIT 1
-    """
-    df = DatabaseCore.read_df_from_database(database, stmt)
+    df = _resolve_all_visits_df(database)
     if df.empty:
         return None, None
-    created_at_utc = df.iloc[0]["created_at"]
+    df = df[
+        (df["rfid"] == rfid)
+        & (df["event_type"].apply(_event_type_first) == str(EventType.CAT_WENT_OUTSIDE))
+    ]
+    if df.empty:
+        return None, None
+    created_at_utc = _ts_utc_to_created_at_str(df.loc[df["ts_utc"].idxmax(), "ts_utc"])
     try:
         local_str = DateTimeUtil.get_local_date_from_utc_date(created_at_utc)
         local_dt = pd.to_datetime(local_str).to_pydatetime()
@@ -193,57 +276,30 @@ def _last_exit_for_rfid(database: str, rfid: str):
 
 
 def _presence_events_for_rfid(database: str, rfid: str) -> pd.DataFrame:
-    """Full dedup'd, UTC-timestamped, sorted in/out event history for this
-    cat (columns: event_type, ts_utc). Shared by every day/week presence
-    stat so a week view queries the DB once, not once per day.
+    """Full, UTC-timestamped, sorted in/out event history for this cat
+    (columns: block_id, event_type, ts_utc). Shared by every day/week
+    presence stat so a week view resolves all visits once, not once per
+    day.
 
-    03.10, BUG REEL #1 trouve par Sid (618/301 entrees - impossible): `created_at`
-    n'est PAS stocke dans un format de texte homogene ('2026-10-03 20:45:15'
-    sans fuseau sur certaines lignes, '...19:58:49.1932+00:00' avec fuseau et
-    microsecondes sur d'autres) - un simple `BETWEEN` SQL sur ces chaines
-    compare du texte, pas des instants, et matchait des lignes de n'importe
-    quel autre jour selon le format. Fix: tout parser proprement en UTC cote
-    Python (pandas gere les formats melanges) et ne JAMAIS comparer ces
-    chaines brutes en SQL.
+    02.11: now a filter over _resolve_all_visits_df() (see its docstring -
+    cross-camera merged+cross-checked FIRST, filtered by rfid after), not
+    a per-rfid SQL query - the real fix for BUG REEL #1/#2 below was
+    "dedupe by block_id", which is now true by construction (each resolved
+    visit already IS one deduped block_id), so no separate dedup step is
+    needed here any more.
 
-    03.10, BUG REEL #2 (toujours 618/300 apres le fix #1): le compte etait
-    toujours faux car `events` a UNE LIGNE PAR PHOTO CAPTUREE pendant un
-    passage (jusqu'a ~100-200 lignes pour un seul vrai passage, toutes avec
-    le meme `block_id` - verifie sur Patoune: 820 lignes brutes mais
-    seulement 11 `block_id` distincts ce jour-la). journeys.py le savait deja
-    et groupait par block_id pour sa chronologie ; cette fonction ne le
-    faisait pas. Fix: dedupliquer par block_id (une ligne representative par
-    block) avant de compter."""
-    types_cond = _event_type_sql_in("event_type", _PRESENCE_EVENT_TYPES)
-    stmt = f"""
-        SELECT block_id, event_type, created_at FROM events
-        WHERE rfid = {_sql_quote(rfid)} AND {types_cond} AND deleted = 0
-        ORDER BY created_at ASC
-    """
-    df = DatabaseCore.read_df_from_database(database, stmt)
+    03.10, BUG REEL #1 trouve par Sid (618/301 entrees - impossible):
+    `created_at` n'est pas stocke dans un format de texte homogene -
+    comparer ces chaines brutes en SQL matchait n'importe quel jour.
+    03.10, BUG REEL #2 (toujours 618/300 apres le fix #1): `events` a UNE
+    LIGNE PAR PHOTO CAPTUREE pendant un passage (jusqu'a ~100-200 lignes
+    pour un seul vrai passage) - comptait les lignes brutes au lieu des
+    passages reels."""
+    df = _resolve_all_visits_df(database)
     if df.empty:
-        return df
-
-    # 04.10, Sid ("ma correction de Pookie ne met pas a jour le graphique"):
-    # created_at mixes two formats (see BUG REEL #1 above) but this call was
-    # missing format="mixed" - pandas infers ONE format from the bulk of
-    # rows, so the plain "YYYY-MM-DD HH:MM:SS" format _insert_manual_presence_event
-    # writes (no microseconds/offset) silently failed to parse and got
-    # dropped by dropna() below, right after being correctly inserted.
-    df["ts_utc"] = pd.to_datetime(df["created_at"], format="mixed", utc=True, errors="coerce")
-    df = df.dropna(subset=["ts_utc"])
-    if df.empty:
-        return df
-
-    # One row per block_id (first event of that block wins); rows with no
-    # block_id (shouldn't normally happen) are each kept as their own block.
-    # 03.10: .where(cond, df.index) crashed on some cats' data (AssertionError
-    # deep in pandas' internals, version-sensitive) - .loc assignment instead,
-    # no ambiguity about what's being aligned to what.
-    df["dedup_key"] = df["block_id"]
-    missing = df["dedup_key"].isna()
-    df.loc[missing, "dedup_key"] = df.index[missing]
-    return df.sort_values("ts_utc").drop_duplicates(subset="dedup_key", keep="first")
+        return pd.DataFrame(columns=["block_id", "event_type", "ts_utc"])
+    df = df[(df["rfid"] == rfid) & (df["event_type"].apply(_event_type_first).isin(_PRESENCE_EVENT_TYPES))]
+    return df[["block_id", "event_type", "ts_utc"]].sort_values("ts_utc")
 
 
 def _day_bounds_utc(local_date) -> tuple[pd.Timestamp, pd.Timestamp]:
@@ -292,30 +348,23 @@ def _day_stats_for_events(events_df: pd.DataFrame, local_date) -> tuple[int, int
 
 def _day_glance_prey_counts(database: str, rfid: str, local_date) -> tuple[int, int]:
     """(glances_count, prey_blocked_count) for this cat on this local
-    calendar day - distinct motion blocks, not raw photo rows (see
-    _presence_events_for_rfid's BUG REEL #2 for why raw rows would wildly
-    overcount: hundreds of frames per real visit)."""
+    calendar day - real visits (see _resolve_all_visits_df), not raw photo
+    rows (hundreds of frames per real visit) nor pre-identity-resolution
+    SQL rows (see this module's "ça fout en l'air les stats" comment)."""
     day_start, day_end = _day_bounds_utc(local_date)
-    stmt = f"""
-        SELECT block_id, event_type, created_at FROM events
-        WHERE rfid = {_sql_quote(rfid)}
-        AND (event_type LIKE '{_GLANCE_EVENT_TYPE}%' OR event_type LIKE '{_PREY_BLOCKED_EVENT_TYPE}%')
-        AND deleted = 0
-    """
-    df = DatabaseCore.read_df_from_database(database, stmt)
+    df = _resolve_all_visits_df(database)
     if df.empty:
         return 0, 0
-    df["ts_utc"] = pd.to_datetime(df["created_at"], format="mixed", utc=True, errors="coerce")
-    df = df.dropna(subset=["ts_utc"])
-    df = df[(df["ts_utc"] >= day_start) & (df["ts_utc"] < day_end)]
+    df = df[(df["rfid"] == rfid) & (df["ts_utc"] >= day_start) & (df["ts_utc"] < day_end)]
     if df.empty:
         return 0, 0
+    types = df["event_type"].apply(_event_type_first)
     # motion_outside_with_mouse can also contain "motion_outside_only" as a
-    # substring-false-positive? No - LIKE prefix match on event_type, which
-    # is an exact enum string (possibly with ",suffix" flags appended, see
-    # EventType docstring) - startswith is the correct, unambiguous test.
-    glances = df[df["event_type"].str.startswith(_GLANCE_EVENT_TYPE)]["block_id"].nunique()
-    prey_blocked = df[df["event_type"].str.startswith(_PREY_BLOCKED_EVENT_TYPE)]["block_id"].nunique()
+    # substring-false-positive? No - startswith on event_type, which is an
+    # exact enum string (possibly with ",suffix" flags, see EventType
+    # docstring) - unambiguous.
+    glances = types.str.startswith(_GLANCE_EVENT_TYPE).sum()
+    prey_blocked = types.str.startswith(_PREY_BLOCKED_EVENT_TYPE).sum()
     return int(glances), int(prey_blocked)
 
 
@@ -345,27 +394,24 @@ def _monthly_prey_counts_for_rfid(database: str, rfid: str, months: int = 6) -> 
     month_starts.reverse()
 
     range_start_local = datetime(month_starts[0][0], month_starts[0][1], 1, tzinfo=tz)
-    range_start_utc = range_start_local.astimezone(ZoneInfo("UTC")).strftime("%Y-%m-%d %H:%M:%S%z")
+    range_start_utc = pd.Timestamp(range_start_local).tz_convert("UTC")
 
-    stmt = f"""
-        SELECT block_id, event_type, created_at FROM events
-        WHERE rfid = {_sql_quote(rfid)}
-        AND event_type LIKE '{_PREY_BLOCKED_EVENT_TYPE}%'
-        AND deleted = 0
-        AND created_at >= '{range_start_utc}'
-    """
-    df = DatabaseCore.read_df_from_database(database, stmt)
     months_out = [
         {"month": f"{y:04d}-{m:02d}", "label": _FR_MONTH_ABBR[m - 1], "count": 0}
         for y, m in month_starts
     ]
+    df = _resolve_all_visits_df(database)
+    if df.empty:
+        return months_out
+    df = df[
+        (df["rfid"] == rfid)
+        & (df["event_type"].apply(_event_type_first).str.startswith(_PREY_BLOCKED_EVENT_TYPE))
+        & (df["ts_utc"] >= range_start_utc)
+    ]
     if df.empty:
         return months_out
 
-    df["ts_utc"] = pd.to_datetime(df["created_at"], format="mixed", utc=True, errors="coerce")
-    df = df.dropna(subset=["ts_utc"])
     df["ts_local"] = df["ts_utc"].dt.tz_convert(tz)
-    df = df.drop_duplicates(subset="block_id")
     counts_by_month = df.groupby(df["ts_local"].dt.strftime("%Y-%m")).size()
     for entry in months_out:
         entry["count"] = int(counts_by_month.get(entry["month"], 0))
@@ -403,38 +449,36 @@ def _list_events_for_rfid_filtered(database: str, rfid: str, filter_type: str) -
     event_type/rfid) _event_card_html() already knows how to render,
     journeys.py's own "simple" Chronologie card style. ``filter_type ==
     "all"`` (the 6th tile, full per-cat chronology) applies no type filter
-    at all - unknown filter_type values still return nothing."""
+    at all - unknown filter_type values still return nothing.
+
+    02.11: filters _resolve_all_visits_df() (cross-camera merged+cross-
+    checked FIRST) instead of querying `events` pre-filtered by rfid - same
+    "ça fout en l'air les stats" fix as every other function in this file."""
     if filter_type != "all" and filter_type not in _EVENTS_FILTER_TYPE_PREFIXES:
         return []
     prefixes = _EVENTS_FILTER_TYPE_PREFIXES.get(filter_type)
-    type_clause = (
-        " AND (" + " OR ".join(f"event_type LIKE '{p}%'" for p in prefixes) + ")" if prefixes else ""
-    )
-    stmt = f"""
-        SELECT block_id, MIN(id) AS first_id, MAX(created_at) AS created_at, event_type, rfid
-        FROM events
-        WHERE rfid = {_sql_quote(rfid)}{type_clause} AND deleted = 0
-        GROUP BY block_id
-        ORDER BY block_id DESC
-    """
-    try:
-        df = DatabaseCore.read_df_from_database(database, stmt)
-    except Exception as e:
-        logging.error(f"[PRESENCE] Failed to query filtered events for rfid {rfid}: {e}")
+
+    df = _resolve_all_visits_df(database)
+    if df.empty:
         return []
+    df = df[df["rfid"] == rfid]
+    if prefixes:
+        types = df["event_type"].apply(_event_type_first)
+        mask = False
+        for p in prefixes:
+            mask = mask | types.str.startswith(p)
+        df = df[mask]
+    df = df.sort_values("block_id", ascending=False)
 
     events = []
     for __, row in df.iterrows():
-        try:
-            local_str = DateTimeUtil.get_local_date_from_utc_date(row["created_at"])
-            dt = pd.to_datetime(local_str).to_pydatetime().replace(tzinfo=None)
-        except Exception:
+        if row.get("first_id") is None or pd.isna(row.get("first_id")):
             continue
         events.append(
             {
                 "block_id": int(row["block_id"]),
                 "first_id": int(row["first_id"]),
-                "dt": dt,
+                "dt": row["dt"],
                 "event_type": row["event_type"],
                 "rfid": row["rfid"],
             }
