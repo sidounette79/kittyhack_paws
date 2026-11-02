@@ -72,6 +72,24 @@ import numpy as np
 
 UNKNOWN_CAT_LABEL = "Chat inconnu"
 
+# 02.11, vrai bug en prod la nuit suivant l'activation (Sid : "la vidéo
+# enregistre qu'un bout de queue prise pour Boubou") - Nala sort du cadre,
+# own_cat_probability retombe à 0 sur toutes les frames suivantes (plus
+# aucun chat visible), SAUF une : un bout de queue a franchi le plancher
+# de 8 PIXELS absolus (beaucoup trop permissif) et obtenu une identité
+# confiante ("Boubou") au lieu de "Chat inconnu" - comme c'était la
+# DERNIÈRE identité vue avant que le bloc ne se termine, elle est restée
+# affichée comme titre du bloc entier (loop.py:winning_tag, voir son
+# commentaire - reprend la dernière valeur connue, pas une vraie
+# ré-ouverture de vote). Même seuil que MIN_BOX_AREA_PCT côté
+# export_identity_training.py (paws-review) - cohérent : un crop trop
+# petit pour servir de bonne donnée d'entraînement n'est pas non plus
+# assez d'information pour une identité fiable à l'inférence. % de l'aire
+# totale de l'image, pas un nombre de pixels absolu (une image HD a
+# beaucoup plus de pixels "libres" qu'un flux bas débit pour la même
+# vraie taille de sujet).
+MIN_CROP_AREA_PCT = 2.0
+
 # Même ensemble que ModelHandler._uses_openvino_backend() / watchdog.py's
 # _uses_openvino_backend() - une seule source de vérité pour "ce device
 # veut dire OpenVINO", dupliquée ici en constante plutôt qu'importée
@@ -252,9 +270,11 @@ def resolve_cat_identities(
         y1 = max(0, int(obj["y"] / 100.0 * frame_h))
         x2 = min(frame_w, int((obj["x"] + obj["w"]) / 100.0 * frame_w))
         y2 = min(frame_h, int((obj["y"] + obj["h"]) / 100.0 * frame_h))
-        if x2 - x1 < 8 or y2 - y1 < 8:
-            # Boîte dégénérée (quasi nulle) - jamais assez de signal pour une
-            # identité fiable, inutile de solliciter le modèle pour ça.
+        area_pct = obj["w"] * obj["h"] / 100.0
+        if x2 - x1 < 8 or y2 - y1 < 8 or area_pct < MIN_CROP_AREA_PCT:
+            # Boîte trop petite (quasi nulle, ou juste un bout de queue/
+            # patte) - jamais assez de signal pour une identité fiable,
+            # inutile de solliciter le modèle pour ça.
             obj["name"] = UNKNOWN_CAT_LABEL
             obj["probability"] = 0.0
             continue

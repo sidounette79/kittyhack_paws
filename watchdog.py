@@ -56,7 +56,7 @@ from src.mqtt import MQTTConfig
 from src.paths import kittyhack_root
 from src.model.yolo_model import YoloModel
 from src.model.identity_model import IdentityModel
-from src.model.identity import load_identity_model, UNKNOWN_CAT_LABEL
+from src.model.identity import load_identity_model, MIN_CROP_AREA_PCT, UNKNOWN_CAT_LABEL
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [WATCHDOG] %(message)s")
 log = logging.getLogger("watchdog")
@@ -695,7 +695,16 @@ class MouseDetector:
                     # l'identité ne change que ce qui est affiché/stocké.
                     cx1, cy1 = max(0, int(x1)), max(0, int(y1))
                     cx2, cy2 = min(frame_w, int(x2)), min(frame_h, int(y2))
-                    if cx2 - cx1 >= 8 and cy2 - cy1 >= 8:
+                    # 02.11, même correctif que identity.py côté Kittyflap -
+                    # un bout de queue/patte peut franchir 8 pixels absolus
+                    # sans porter assez de signal pour une identité fiable
+                    # (vrai bug en prod : Nala sort du cadre, un bout de
+                    # queue confiant "Boubou" devient la seule identité vue
+                    # ensuite). % de l'aire de l'image, pas un nombre de
+                    # pixels absolu - MIN_CROP_AREA_PCT importé directement,
+                    # une seule valeur de référence entre les deux chemins.
+                    area_pct = ((cx2 - cx1) / frame_w * 100) * ((cy2 - cy1) / frame_h * 100) / 100
+                    if cx2 - cx1 >= 8 and cy2 - cy1 >= 8 and area_pct >= MIN_CROP_AREA_PCT:
                         label_cased, score = self.identity.identify_crop(
                             frame[cy1:cy2, cx1:cx2],
                         )
