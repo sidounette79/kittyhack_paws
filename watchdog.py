@@ -648,7 +648,15 @@ class MouseDetector:
         if self.kind == "yolo":
             from ultralytics import YOLO
             self.yolo = YOLO(self.model_path, task="detect", verbose=False)
-            log.info("Loaded custom YOLO model for prey detection: %s (imgsz=%d)", self.model_path, self.imgsz)
+            # 02.11, Sid ("Ca doit tout tourner en GPU") - without an
+            # explicit device=, Ultralytics 8.4.126 always loads OpenVINO
+            # on CPU even with the GPU visible (same fix as
+            # model_handler.py's direct_inference, see its own comment for
+            # the measurement that found this). 'cpu' stays unset so a
+            # plain CPU setup behaves exactly as before.
+            self._yolo_device = str(CONFIG.get("INFERENCE_DEVICE", "cpu") or "cpu").strip().lower()
+            log.info("Loaded custom YOLO model for prey detection: %s (imgsz=%d, device=%s)",
+                     self.model_path, self.imgsz, self._yolo_device)
             # 01.11, scission détection/identité - même modèle 2 que côté
             # Kittyflap, chargé indépendamment ici (process séparé, aucun
             # partage possible). None (no-op) tant qu'aucun Modèle 2 n'est
@@ -692,7 +700,10 @@ class MouseDetector:
         return self._run_tflite(frame)
 
     def _run_yolo(self, frame: np.ndarray) -> tuple[float, bool, list[dict]]:
-        results = self.yolo.predict(frame, imgsz=self.imgsz, verbose=False)
+        predict_kwargs: dict = dict(imgsz=self.imgsz, verbose=False)
+        if self._yolo_device != "cpu":
+            predict_kwargs["device"] = self._yolo_device
+        results = self.yolo.predict(frame, **predict_kwargs)
         prey_probability = 0.0
         any_detection = False
         detections: list[dict] = []

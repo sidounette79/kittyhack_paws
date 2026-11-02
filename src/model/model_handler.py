@@ -211,17 +211,28 @@ class ModelHandler:
 
                 # Capture device info for the closure
                 _inference_device = resolved_inference_device
-                _is_openvino = self._uses_openvino_backend()
 
                 # Create a wrapper function to match the expected interface
                 def direct_inference(frame, input_size):
                     # Run inference directly. Ultralytics handles letterboxing internally.
-                    # For OpenVINO models, do NOT pass device: Ultralytics hardcodes
-                    # device_name="AUTO" internally, and select_device() does not
-                    # understand Intel GPU strings (it only knows CUDA/CPU/MPS).
-                    # OpenVINO AUTO mode automatically selects the best available
-                    # device (GPU if available, CPU as fallback).
-                    # For CUDA, pass the device explicitly as usual.
+                    # 02.11, Sid ("Ca doit tout tourner en GPU") - the comment
+                    # that used to be here claimed OpenVINO's internal "AUTO"
+                    # device picks GPU automatically when not told otherwise,
+                    # so device= was deliberately withheld for OpenVINO.
+                    # Measured directly tonight (Ultralytics 8.4.126, this
+                    # exact model): omitting device= always loads "Using
+                    # OpenVINO LATENCY mode for batch=1 inference on (CPU)...",
+                    # even with the GPU present and visible
+                    # (openvino.Core().available_devices includes 'GPU').
+                    # Passing device='intel:gpu' explicitly, however, loads
+                    # on "OCL_GPU.0" - confirmed the real fix, not a
+                    # select_device() string-parsing problem (that function is
+                    # for CUDA/CPU/MPS, never reached - Ultralytics routes an
+                    # OpenVINO *.xml/_openvino_model path to its own OpenVINO
+                    # backend, which DOES understand "intel:gpu"/"intel:cpu").
+                    # This was silently running the flap's own camera
+                    # detection on CPU the whole time INFERENCE_DEVICE=intel:gpu
+                    # has been set, however long that's been.
                     # 26.10, Sid ("je pense qu'il y a une double détection
                     # inutile... la boîte verte est très large mais c'est
                     # la même frame") - confirmé dans les vraies données
@@ -233,7 +244,7 @@ class ModelHandler:
                     # qui se chevauchent franchement soient vraiment traitées
                     # comme UNE détection, pas deux.
                     _predict_kwargs: dict = dict(stream=True, imgsz=input_size, verbose=False, iou=0.5)
-                    if _inference_device != 'cpu' and not _is_openvino:
+                    if _inference_device != 'cpu':
                         _predict_kwargs['device'] = _inference_device
                     results = self._yolo_model(frame, **_predict_kwargs)
                     mouse_probability, own_cat_probability, detected_objects = _parse_yolo_detection_results(
