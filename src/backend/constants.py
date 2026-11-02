@@ -26,6 +26,23 @@ MAX_MOTION_BLOCK_SECONDS = 90.0  # Finalize a motion block after this time even 
 # inside motion since unlock" specifically so a cat actually walking
 # through can never be interrupted mid-passage.
 INSIDE_ENTRY_YIELD_FOR_EXIT_S = 10.0
+# 02.11, Sid ("branche le lien reolink voit une proie et informe HK déjà"):
+# was PHASE 0 (observation only) since 25.10 - see src/api.py's
+# reolink_prey_signal() docstring for the original plan. Today's real
+# incident (16:31, Patoune brought in prey - Kittyflap's own local model
+# never flagged it at all, Reolink saw it clearly, box visible, 73%/65%
+# confidence) is exactly the case that Phase 0 was collecting evidence
+# for. This is PHASE 2 of that plan specifically ("prolonger la fenêtre
+# de blocage post-proie existante, jamais un verrou indépendant") - a
+# confident-enough Reolink signal now feeds the SAME
+# backend_main.prey_detection_mono / LOCK_DURATION_AFTER_PREY_DETECTION
+# gate Kittyflap's own detection already uses, never a separate lock.
+# Threshold matches MOUSE_THRESHOLD's own default (70.0) - the real
+# incident's first signal (73%) would have cleared it with room to
+# spare, its second (65%) would not have (but didn't need to, the first
+# one already opened the 300s window well before the cat actually
+# crossed).
+REOLINK_PREY_SIGNAL_MIN_CONFIDENCE = 70.0
 CAMERA_IDLE_RESUME_HOLD_S = 20.0  # PAUSE_CAMERA_WHEN_IDLE: keep the chatiere camera model running this long after the last real PIR edge
 GLANCE_NOTIFICATION_COOLDOWN_S = 600.0  # 05.10, Sid: "a regarde" push notification - per-RFID cooldown, far more frequent than entry/exit so needs one
 # 08.10, Sid ("forcer le systeme a ecrire... en forcant l'utilisation du vrai

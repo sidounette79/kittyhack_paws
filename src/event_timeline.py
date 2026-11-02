@@ -28,6 +28,7 @@ class TimelineAction:
     ENTRY_ALLOWED = "entry_allowed"
     ENTRY_DENIED = "entry_denied"
     PREY_DETECTED = "prey_detected"
+    REOLINK_PREY_SIGNAL_APPLIED = "reolink_prey_signal_applied"
     NO_PREY_DETECTED = "no_prey_detected"
     PER_CAT_PREY_DISABLED = "per_cat_prey_disabled"
     INSIDE_OPENED = "inside_opened"
@@ -97,6 +98,7 @@ def timeline_format_message(entry: dict) -> str:
         TimelineAction.ENTRY_DENIED: _("Entry denied for {cat}").format(cat=cat)
         + (f" ({source})" if source else ""),
         TimelineAction.PREY_DETECTED: _("Prey detected"),
+        TimelineAction.REOLINK_PREY_SIGNAL_APPLIED: _("Prey detected (Reolink chatiere, confirmed by the flap's own camera too late or not at all)"),
         TimelineAction.NO_PREY_DETECTED: _("No prey detected"),
         TimelineAction.PER_CAT_PREY_DISABLED: _("Prey detection disabled for {cat}").format(cat=cat),
         TimelineAction.INSIDE_OPENED: _("Inside opened"),

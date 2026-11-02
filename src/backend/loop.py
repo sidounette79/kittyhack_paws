@@ -40,6 +40,7 @@ from src.backend.constants import (
     WAIT_FOR_OUTSIDE_RISING_TIMEOUT_S,
     VIDEO_FALLBACK_MIN_BOX_HEIGHT_PCT,
     INSIDE_ENTRY_YIELD_FOR_EXIT_S,
+    REOLINK_PREY_SIGNAL_MIN_CONFIDENCE,
 )
 import src.backend.model_runtime as model_runtime
 import src.backend.mqtt_bridge as mqtt_bridge
@@ -214,6 +215,7 @@ def backend_main(
     outside_manually_unlocked = False
     backend_main.prey_detection_tm = 0.0
     backend_main.prey_detection_mono = 0.0
+    backend_main.reolink_prey_signal_applied_mono = 0.0
     # 08.10, Sid: external wake request for PAUSE_CAMERA_WHEN_IDLE, set by
     # POST /camera/wake (src/api.py) - see that block below for the read.
     backend_main.camera_external_wake_until_mono = 0.0
@@ -2185,6 +2187,34 @@ def backend_main(
         # seconds after every service restart (_mono() is small just
         # after boot, so the difference would be < the configured duration).
         prey_mono = float(getattr(backend_main, "prey_detection_mono", 0.0) or 0.0)
+
+        # 02.11, Sid ("branche le lien reolink voit une proie et informe HK
+        # déjà") - PHASE 2 of the 25.10 plan (see REOLINK_PREY_SIGNAL_MIN_
+        # CONFIDENCE's own comment and src/api.py's reolink_prey_signal()
+        # docstring). A confident-enough, not-yet-applied Reolink signal
+        # feeds the SAME gate Kittyflap's own detection already uses -
+        # never a separate lock. "Not yet applied" tracked by comparing
+        # against the last signal timestamp already folded in, so this
+        # only fires once per real signal, not every tick of this loop.
+        reolink_signal_mono = float(getattr(backend_main, "reolink_prey_signal_mono", 0.0) or 0.0)
+        reolink_signal_prob = getattr(backend_main, "reolink_prey_signal_probability", None)
+        reolink_signal_applied_mono = float(getattr(backend_main, "reolink_prey_signal_applied_mono", 0.0) or 0.0)
+        if (
+            reolink_signal_mono > reolink_signal_applied_mono
+            and reolink_signal_prob is not None
+            and float(reolink_signal_prob) >= REOLINK_PREY_SIGNAL_MIN_CONFIDENCE
+        ):
+            backend_main.reolink_prey_signal_applied_mono = reolink_signal_mono
+            if reolink_signal_mono > prey_mono:
+                prey_mono = reolink_signal_mono
+                backend_main.prey_detection_mono = reolink_signal_mono
+                backend_main.prey_detection_tm = _wall()
+                logging.info(
+                    f"[BACKEND] Reolink chatiere prey signal ({float(reolink_signal_prob):.0f}%) "
+                    f"applied - extending the post-prey lock window."
+                )
+                timeline_append(motion_timeline_entries, TimelineAction.REOLINK_PREY_SIGNAL_APPLIED)
+
         no_prey_within_timeout_effective = no_prey_within_timeout(
             per_cat_prey_detection_disabled,
             prey_mono,
