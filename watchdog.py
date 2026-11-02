@@ -29,6 +29,7 @@ import logging
 from collections import Counter
 from logging.handlers import TimedRotatingFileHandler
 import os
+import re
 import select
 import smtplib
 import subprocess
@@ -136,16 +137,50 @@ CHATIERE_BOOST_DURATION_S = 20.0
 # cameras, not necessarily right at the flap), so it gets a longer window
 # to still catch the cat by the time it actually reaches the flap.
 CHATIERE_REOLINK_TRIGGER_DURATION_S = 180.0
+# 02.11, Sid: if chatiere's own local detector finds NOTHING at all for
+# this long while a trigger window is still active, end that window now
+# instead of running out the full remaining duration (up to 180s) saving
+# dense, empty frames - see _chatiere_last_detection_mono's comment above
+# for the real example that prompted this. 20s (same as the PIR window's
+# own full duration) is a generous grace period for a cat that's slowly
+# approaching after the Reolink-backup trigger fired without yet being
+# in frame.
+CHATIERE_BOOST_IDLE_DECAY_S = 20.0
 # 21.10, Sid: cadence du poll Reolink lui-même (voir le commentaire sur
 # CameraWatcher._last_reolink_poll) - 2s plutôt que l'ancien 8s hérité du
 # cycle idle, sans toucher à ce dernier (toujours utile pour
 # snapshot/inférence locale, plus coûteux).
-CHATIERE_REOLINK_POLL_INTERVAL_S = 2.0
+# 02.11, Sid ("pendant le passage du chat, y en a peu [de frames]"): ce
+# poll (IA embarquée de la caméra Reolink, GetAiState - pur GET HTTP, pas
+# de décodage vidéo, donc peu coûteux) est le SEUL déclencheur de
+# `_chatiere_boost_until` indépendant du pipeline de détection de
+# Kittyflap - l'autre voie (MQTT `motion_outside_state`, MqttStatus
+# ci-dessus) n'arrive qu'une fois que le Modèle 1+2 de la Kittyflap a
+# lui-même confirmé un chat, ce qui a son propre délai. 2s→0.5s pour que
+# ce chemin indépendant puisse déclencher la capture dense plus tôt dans
+# un vrai passage, avant que celui-ci soit déjà bien entamé.
+CHATIERE_REOLINK_POLL_INTERVAL_S = 0.5
 # Written by MqttStatus's on_message handler AND by a peripheral camera's
 # own thread (via _extend_chatiere_trigger below), read by chatiere's
 # CameraWatcher thread - a single float assignment/read is atomic enough in
 # CPython for this (no lock needed, worst case is one stale poll decision).
 _chatiere_boost_until = [0.0]
+# 02.11, Sid ("si on peut améliorer des trucs dans watchdog, n'hésite
+# pas"): real example found this morning - a genuine ~2s passage got
+# followed by ~150s of dense (0.3s/frame) capture of a completely empty
+# scene (confirmed visually, 3 sampled frames across the window, no cat
+# anywhere), almost exactly matching CHATIERE_REOLINK_TRIGGER_DURATION_S
+# (180s) - the Reolink-backup trigger fired (another camera's AI, or a
+# late PIR edge) but the cat was never actually in THIS camera's view for
+# the rest of that window. The dense per-frame save during an active
+# window is deliberate (10.10, Sid - smooth comparator playback), so the
+# fix isn't to stop saving undetected frames - it's to stop the window
+# itself from running the full 180s once it's clear nothing is
+# happening. Tracks the last frame (chatiere only) where the local
+# detector found ANYTHING at all (reset on every real trigger extension
+# below, so a stale value from a much earlier passage can never fire
+# immediately on a brand new trigger).
+_chatiere_last_detection_mono = [0.0]
 
 
 def _extend_chatiere_trigger(duration_s: float) -> None:
@@ -155,6 +190,7 @@ def _extend_chatiere_trigger(duration_s: float) -> None:
     candidate = time.monotonic() + duration_s
     if candidate > _chatiere_boost_until[0]:
         _chatiere_boost_until[0] = candidate
+        _chatiere_last_detection_mono[0] = time.monotonic()
 
 # 09.09, Sid: on a flaky RTSP link (terrasse/entree, weak WiFi -> packet
 # loss), ffmpeg's h264 decoder does error concealment on a corrupted frame
@@ -849,9 +885,19 @@ def _save_training_sample(cam_name: str, frame: np.ndarray, detections: list[dic
 # rather than growing forever. Separate from TRAINING_SAMPLES_DIR on
 # purpose - that one stays sparse/gated for Label Studio, this one is dense
 # for the event-comparison viewer and keeps every frame regardless of
-# confidence. Storage isn't a concern ("j'ai 2 to de libre") - no retention
-# logic here, same as the existing training-sample archive.
+# confidence.
+#
+# 02.11, Sid ("Faut mettre les mêmes réglages que les images de KH"):
+# the "2 to de libre" reasoning above held when this was written, but by
+# tonight the directory had grown to 530k+ files with zero retention,
+# which is what made _list_event_frames()'s full-directory glob slow (see
+# journeys.py/webui_api.py's own fix tonight). Now capped the same way
+# Kittyflap caps its own photos - see _purge_excess_event_frames() below,
+# reusing CONFIG['MAX_PHOTOS_COUNT'] (the exact same live setting, not a
+# separate copy) so a change to one cap always applies to both.
 EVENT_FRAMES_DIR = "/data/watchdog_event_frames"
+_EVENT_FRAME_RE = re.compile(r"^(?P<cam>[a-z_]+)_(?P<date>\d{8})_(?P<time>\d{6})_(?P<ms>\d{3})\.jpg$")
+_EVENT_FRAMES_PURGE_CHECK_INTERVAL_S = 3600.0
 
 
 def _save_event_frame(cam_name: str, frame: np.ndarray, detections: list[dict], captured_at: float | None = None) -> None:
@@ -893,6 +939,62 @@ def _save_event_frame(cam_name: str, frame: np.ndarray, detections: list[dict], 
             json.dump(detections, f)
     except Exception as e:
         log.warning("[%s] Could not save event frame: %s", cam_name, e)
+
+
+def _purge_excess_event_frames() -> None:
+    """Cap EVENT_FRAMES_DIR the same way Kittyflap caps its own photos
+    (EventsRepo._purge_excess_photos_with_cursor, src/database.py) -
+    reusing CONFIG['MAX_PHOTOS_COUNT'] as the live cap (re-read fresh every
+    call, same convention as the rest of this file's CONFIG.get() calls -
+    picks up a change from the UI without a restart). Kittyflap's own
+    version keeps the DB row and only nulls the media blobs; there's no DB
+    row here, just a flat file pair per frame, so the equivalent is
+    deleting the .jpg + its .json sidecar outright for the oldest excess
+    frames.
+
+    Runs from its own periodic thread (see main()), not inline on every
+    _save_event_frame() call - os.scandir() over 500k+ files is cheap
+    enough for an hourly check but not for a per-frame one, and the real
+    count today (530k+) is still well under Kittyflap's own real deployed
+    cap (2 500 000, confirmed via config.ini - NOT the 6000 schema
+    default), so this won't actually delete anything for a long while."""
+    try:
+        max_count = int(CONFIG.get("MAX_PHOTOS_COUNT", 6000) or 6000)
+        if max_count <= 0:
+            return
+        entries = []
+        with os.scandir(EVENT_FRAMES_DIR) as it:
+            for entry in it:
+                m = _EVENT_FRAME_RE.match(entry.name)
+                if m:
+                    entries.append((m.group("date") + m.group("time") + m.group("ms"), entry.name))
+        excess = len(entries) - max_count
+        if excess <= 0:
+            log.info("[EVENT_FRAMES] %d frames, cap %d - nothing to purge.", len(entries), max_count)
+            return
+        entries.sort(key=lambda e: e[0])
+        log.info("[EVENT_FRAMES] %d frames over cap %d (%d total) - purging oldest.", excess, max_count, len(entries))
+        removed = 0
+        for _, name in entries[:excess]:
+            base = os.path.join(EVENT_FRAMES_DIR, name[:-4])
+            for path in (base + ".jpg", base + ".json"):
+                try:
+                    os.remove(path)
+                except FileNotFoundError:
+                    pass
+            removed += 1
+        log.info("[EVENT_FRAMES] Purged %d frame(s).", removed)
+    except Exception as e:
+        log.warning("[EVENT_FRAMES] Purge check failed: %s", e)
+
+
+def _event_frames_purge_loop(stop_event: threading.Event) -> None:
+    """Dedicated daemon thread (see main()) - keeps the purge check off the
+    per-camera capture threads entirely, so a slow directory scan never
+    delays a real passage's frame capture."""
+    while not stop_event.is_set():
+        _purge_excess_event_frames()
+        stop_event.wait(_EVENT_FRAMES_PURGE_CHECK_INTERVAL_S)
 
 
 def _save_frame_snapshot(cam_name: str, frame: np.ndarray) -> None:
@@ -1381,6 +1483,25 @@ class CameraWatcher(threading.Thread):
                     if any_detection and now - self._last_sample_at >= TRAINING_SAMPLE_COOLDOWN_S:
                         self._last_sample_at = now
                         _save_training_sample(self.cam_name, frame, detections)
+                    # 02.11: decay the trigger window early once it's clear
+                    # nothing is here any more - see CHATIERE_BOOST_IDLE_
+                    # DECAY_S's comment. Only shortens an ALREADY-active
+                    # window (never extends it), and only for chatiere -
+                    # _poll_interval()'s own boost gate is chatiere-only too.
+                    if self.cam_name == "chatiere":
+                        if any_detection:
+                            _chatiere_last_detection_mono[0] = now
+                        elif (
+                            _chatiere_last_detection_mono[0] > 0.0
+                            and now - _chatiere_last_detection_mono[0] >= CHATIERE_BOOST_IDLE_DECAY_S
+                            and _chatiere_boost_until[0] > now
+                        ):
+                            log.info(
+                                "[%s] No detection for %.0fs during an active trigger window - "
+                                "ending it now instead of running out the full remaining duration.",
+                                self.cam_name, now - _chatiere_last_detection_mono[0],
+                            )
+                            _chatiere_boost_until[0] = now
                     # 10.10, Sid ("deux vidéos côte à côte"): we're already
                     # past the `_chatiere_boost_until` gate above, so every
                     # poll reaching here is within a real trigger window -
@@ -1488,6 +1609,15 @@ def main():
     ]
     for w in watchers:
         w.start()
+
+    # 02.11, Sid ("Faut mettre les mêmes réglages que les images de KH"):
+    # see _purge_excess_event_frames()'s own docstring. Own daemon thread,
+    # not joined below with the camera watchers - it never needs to block
+    # process shutdown.
+    purge_stop = threading.Event()
+    purge_thread = threading.Thread(target=_event_frames_purge_loop, args=(purge_stop,), daemon=True)
+    purge_thread.start()
+
     for w in watchers:
         w.join()
 
