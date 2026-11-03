@@ -197,6 +197,13 @@ SETTINGS_SCHEMA: list[Setting] = [
     _S("IMMEDIATE_LOCK_AFTER_PASSAGE", False, "bool"),
     _S("WLAN_TX_POWER", 7, "int"),
     _S("GROUP_PICTURES_TO_EVENTS", True, "bool"),
+    # 03.11, Sid ("il faut mettre en pause le cross check" - diagnostic de
+    # la confusion Pookie/Patoune/Nala) - temporary off switch for
+    # journeys.py's _apply_reolink_cross_check, so the visit title shown in
+    # Parcours reflects Kittyflap's own video vote untouched while she
+    # studies what the model actually sees. No UI toggle on purpose - meant
+    # to be flipped in config.ini for a diagnostic session, not a feature.
+    _S("DISABLE_REOLINK_CROSS_CHECK", False, "bool"),
     _S("TFLITE_MODEL_VERSION", "original_kittyflap_model_v2"),
     _S("LOCK_DURATION_AFTER_PREY_DETECTION", 300, "int"),
     # 04.10, Sid: Patoune drops a caught prey outside the flap, waits out the

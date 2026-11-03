@@ -682,6 +682,8 @@ def _merge_and_cross_check_visits(raw_events: list[dict], cat_name_dict: dict) -
     _merge_adjacent_blocks_into_visits directly - same merge, plus the
     Reolink cross-check above."""
     visits = _merge_adjacent_blocks_into_visits(raw_events)
+    if CONFIG["DISABLE_REOLINK_CROSS_CHECK"]:
+        return visits
     return _apply_reolink_cross_check(visits, cat_name_dict)
 
 
