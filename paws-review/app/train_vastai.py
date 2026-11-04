@@ -153,7 +153,16 @@ POLL_INTERVAL_S = 30
 # centaines de Mo de roues). 45 min ne couvre pas pip lent + 100 epochs à
 # 640 (~20s/epoch ≈ 33min) + export NCNN + upload. Porté à 80 min - marge
 # réelle plutôt qu'un chiffre arbitraire, voir le calcul ci-dessus.
-TIMEOUT_S = 80 * 60  # au-delà, quelque chose s'est mal passé - on arrête les frais
+# 04.11/05.11, même symptôme exact, rythme différent : run collapse_identity
+# (25 epochs, patience=15) tué par CE MÊME timeout fixe à l'epoch ~17/25
+# (mAP50 déjà à 0.929, progressait normalement) - l'offre louée ce soir
+# tournait à ~140s/epoch, pas les ~20s/epoch du 19.10 (GPU différent selon
+# l'offre la moins chère du moment, pas un paramètre qu'on contrôle). Une
+# constante fixe ne peut pas être correcte pour toute combinaison
+# TRAIN_EPOCHS × rythme réel du GPU loué - calculée depuis TRAIN_EPOCHS à la
+# place, avec 250s/epoch (140s mesuré + marge) et 20 min de marge fixe pour
+# pip install + export NCNN + upload.
+TIMEOUT_S = 20 * 60 + TRAIN_EPOCHS * 250  # au-delà, quelque chose s'est mal passé - on arrête les frais
 
 # 19.10 : hôte 85323 vu défaillant 3 fois d'affilée sur des tentatives
 # séparées (même erreur OCI/CDI à chaque fois - "unresolvable CDI devices...
