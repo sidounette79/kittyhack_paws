@@ -244,13 +244,24 @@ function Slider({
   );
 }
 
-// 07.10: Configuration.tsx is the start of the React replacement for
-// configuration.py (3469 lines, 13 sections) - stays UNREACHABLE (no route
-// in app.py's FASTAPI_TAB_PATHS) until every section is built, per Sid's
-// call ("je construis tout avant de basculer"): the Shiny page covers all
-// 13 sections in one tab, so unlike every other migrated page this can't be
-// cut over section-by-section - flipping early would strand her mid-page
-// the moment she needs a section not built yet.
+// 07.10: Configuration.tsx is the React replacement for configuration.py
+// (3469 lines, 13 sections) - was kept UNREACHABLE (no route in app.py's
+// FASTAPI_TAB_PATHS) until every section was built, per Sid's call ("je
+// construis tout avant de basculer"): the Shiny page covered all 13
+// sections in one tab, so unlike every other migrated page this couldn't
+// be cut over section-by-section - flipping early would have stranded
+// her mid-page the moment she needed a section not built yet.
+//
+// ✅ CUT OVER 08.10, Sid: "configuration" added to FASTAPI_TAB_PATHS
+// after 11 of 13 sections were individually built and tested overnight -
+// this page (not configuration.py) is the real one since then. Only 2
+// sections were deliberately never ported and stay Shiny-only, reachable
+// via the "configuration-legacy" direct link: the self-update flow
+// (git pull/pip install/version-mismatch gating) and the static
+// remote-mode markdown doc. configuration.py itself is otherwise dead
+// code for every other section - don't edit it expecting Sid to see it,
+// confirmed the hard way 04.11 (edited it for a new setting, she had to
+// correct "shiny n'existe plus, on a tout migré en react").
 export default function ConfigurationPage() {
   usePageTitle("Configuration");
   const navigate = useNavigate();
