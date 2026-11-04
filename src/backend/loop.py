@@ -40,10 +40,6 @@ from src.backend.constants import (
     WAIT_FOR_OUTSIDE_RISING_TIMEOUT_S,
     VIDEO_FALLBACK_MIN_BOX_HEIGHT_PCT,
     INSIDE_ENTRY_YIELD_FOR_EXIT_S,
-    REOLINK_PREY_SIGNAL_MIN_CONFIDENCE,
-    REOLINK_PREY_SIGNAL_REPEAT_COUNT,
-    REOLINK_PREY_SIGNAL_REPEAT_MIN_CONFIDENCE,
-    REOLINK_PREY_SIGNAL_REPEAT_WINDOW_S,
 )
 import src.backend.model_runtime as model_runtime
 import src.backend.mqtt_bridge as mqtt_bridge
@@ -2205,7 +2201,15 @@ def backend_main(
         reolink_signal_applied_mono = float(getattr(backend_main, "reolink_prey_signal_applied_mono", 0.0) or 0.0)
         reolink_apply_reason = None
         if reolink_signal_mono > reolink_signal_applied_mono and reolink_signal_prob is not None:
-            if float(reolink_signal_prob) >= REOLINK_PREY_SIGNAL_MIN_CONFIDENCE:
+            # 04.11, Sid - read live from CONFIG (baseconfig.py), not an
+            # import-time constant, so a change in the UI takes effect on
+            # the very next tick without a restart (same pattern already
+            # used for MOUSE_THRESHOLD just above in this loop).
+            reolink_min_confidence = CONFIG['REOLINK_PREY_SIGNAL_MIN_CONFIDENCE']
+            reolink_repeat_window_s = CONFIG['REOLINK_PREY_SIGNAL_REPEAT_WINDOW_S']
+            reolink_repeat_min_confidence = CONFIG['REOLINK_PREY_SIGNAL_REPEAT_MIN_CONFIDENCE']
+            reolink_repeat_count = CONFIG['REOLINK_PREY_SIGNAL_REPEAT_COUNT']
+            if float(reolink_signal_prob) >= reolink_min_confidence:
                 reolink_apply_reason = f"{float(reolink_signal_prob):.0f}% single signal"
             else:
                 # Sid, 02.11 ("si y a 3x 68% par exemple... 1x si supérieur
@@ -2215,14 +2219,14 @@ def backend_main(
                 # api.py's own purge alone - that only runs on the NEXT
                 # incoming signal, this read could happen in between.
                 history = getattr(backend_main, "reolink_prey_signal_history", None) or []
-                cutoff = _mono() - REOLINK_PREY_SIGNAL_REPEAT_WINDOW_S
+                cutoff = _mono() - reolink_repeat_window_s
                 recent_strong_enough = sum(
-                    1 for (t, p) in history if t >= cutoff and p >= REOLINK_PREY_SIGNAL_REPEAT_MIN_CONFIDENCE
+                    1 for (t, p) in history if t >= cutoff and p >= reolink_repeat_min_confidence
                 )
-                if recent_strong_enough >= REOLINK_PREY_SIGNAL_REPEAT_COUNT:
+                if recent_strong_enough >= reolink_repeat_count:
                     reolink_apply_reason = (
-                        f"{recent_strong_enough}x >={REOLINK_PREY_SIGNAL_REPEAT_MIN_CONFIDENCE:.0f}% within "
-                        f"{REOLINK_PREY_SIGNAL_REPEAT_WINDOW_S:.0f}s"
+                        f"{recent_strong_enough}x >={reolink_repeat_min_confidence:.0f}% within "
+                        f"{reolink_repeat_window_s:.0f}s"
                     )
         if reolink_apply_reason is not None:
             backend_main.reolink_prey_signal_applied_mono = reolink_signal_mono

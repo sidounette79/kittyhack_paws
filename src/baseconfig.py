@@ -206,6 +206,18 @@ SETTINGS_SCHEMA: list[Setting] = [
     _S("DISABLE_REOLINK_CROSS_CHECK", False, "bool"),
     _S("TFLITE_MODEL_VERSION", "original_kittyflap_model_v2"),
     _S("LOCK_DURATION_AFTER_PREY_DETECTION", 300, "int"),
+    # 04.11, Sid ("il faudrait que tu me crées des boutons pour que je
+    # puisse moi-même modifier les limites") - the 4 thresholds driving
+    # the Reolink prey signal (src/backend/constants.py's own doc
+    # comments have the full incident history behind each default) were
+    # hardcoded constants, needing a code change + redeploy every time
+    # she wanted to tune them after a real false-positive/miss. Same
+    # values she already tuned by hand on 02.11 ("80% unique et 3x45")
+    # kept as defaults here.
+    _S("REOLINK_PREY_SIGNAL_MIN_CONFIDENCE", 80.0, "float"),
+    _S("REOLINK_PREY_SIGNAL_REPEAT_COUNT", 3, "int"),
+    _S("REOLINK_PREY_SIGNAL_REPEAT_MIN_CONFIDENCE", 45.0, "float"),
+    _S("REOLINK_PREY_SIGNAL_REPEAT_WINDOW_S", 15.0, "float"),
     # 04.10, Sid: Patoune drops a caught prey outside the flap, waits out the
     # entry-block window, comes in prey-free (so the entry-side check never
     # sees it), then reaches a paw back out to drag it in. These two close

@@ -42,28 +42,35 @@ INSIDE_ENTRY_YIELD_FOR_EXIT_S = 10.0
 # not prey): raised from 70.0 (MOUSE_THRESHOLD's own default) to 80.0 -
 # a single signal now has to be more exceptional to act alone, repetition
 # (below) is the primary, more robust path.
-REOLINK_PREY_SIGNAL_MIN_CONFIDENCE = 80.0
+#
 # 02.11, Sid ("Est-ce que ça peut aussi déclencher si y a une répétition
 # de détection même en dessous de 70 ? Si y a 3x 68% par exemple ? 1x si
 # supérieur mais aussi couvrir la quantité ?") - second path alongside
-# REOLINK_PREY_SIGNAL_MIN_CONFIDENCE's single strong signal: several
-# weaker-but-repeated signals within a short window are also real
-# evidence, not noise - a cat genuinely carrying prey tends to trigger
-# more than one borderline detection across consecutive frames as it
-# approaches, even if none alone clears the main threshold. Window needs
-# to comfortably cover a few consecutive frames during an active trigger
+# the single strong signal above: several weaker-but-repeated signals
+# within a short window are also real evidence, not noise - a cat
+# genuinely carrying prey tends to trigger more than one borderline
+# detection across consecutive frames as it approaches, even if none
+# alone clears the main threshold. Window needs to comfortably cover a
+# few consecutive frames during an active trigger
 # (CHATIERE_BOOST_INTERVAL_S=0.3s in watchdog.py) without being so wide
 # it starts treating signals from genuinely separate, unrelated passages
 # as one streak.
-# 02.11 update, Sid: "80% unique et 3x45. On teste avec ça." - lowered
-# from 60.0 after confirming (zoomed x8 on a real missed-detection frame)
-# that the model can miss a genuinely visible prey on a single frame
-# (low contrast, not a distance/resolution issue) - repetition at a
-# fairly permissive floor is the primary defense against that kind of
-# single-frame miss, not just a fallback for borderline-confidence noise.
-REOLINK_PREY_SIGNAL_REPEAT_COUNT = 3
-REOLINK_PREY_SIGNAL_REPEAT_MIN_CONFIDENCE = 45.0
-REOLINK_PREY_SIGNAL_REPEAT_WINDOW_S = 15.0
+#
+# 02.11 update, Sid: "80% unique et 3x45. On teste avec ça." - repeat
+# threshold lowered from 60.0 after confirming (zoomed x8 on a real
+# missed-detection frame) that the model can miss a genuinely visible
+# prey on a single frame (low contrast, not a distance/resolution
+# issue) - repetition at a fairly permissive floor is the primary
+# defense against that kind of single-frame miss, not just a fallback
+# for borderline-confidence noise.
+#
+# 04.11, Sid ("je puisse moi-même modifier les limites... directement
+# changer les variables") - moved to CONFIG (baseconfig.py, defaults
+# match the 02.11-tuned values above) so she can tune these from the UI
+# after a real false-positive/miss instead of asking for a code change
+# each time. Read live via CONFIG['REOLINK_PREY_SIGNAL_...'] at each
+# usage site (src/backend/loop.py, src/api.py) - no constants left
+# here, CONFIG is now the only source of truth.
 CAMERA_IDLE_RESUME_HOLD_S = 20.0  # PAUSE_CAMERA_WHEN_IDLE: keep the chatiere camera model running this long after the last real PIR edge
 GLANCE_NOTIFICATION_COOLDOWN_S = 600.0  # 05.10, Sid: "a regarde" push notification - per-RFID cooldown, far more frequent than entry/exit so needs one
 # 08.10, Sid ("forcer le systeme a ecrire... en forcant l'utilisation du vrai

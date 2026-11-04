@@ -2627,6 +2627,14 @@ async def get_config_door_control(_user: str = Depends(require_session)):
             ],
             "pir_inside_threshold": float(CONFIG["PIR_INSIDE_THRESHOLD"]),
             "immediate_lock_after_passage": bool(CONFIG["IMMEDIATE_LOCK_AFTER_PASSAGE"]),
+            # 04.11, Sid ("je puisse moi-même modifier les limites... pour
+            # envoyer un signal de blocage à HK") - see REOLINK_PREY_SIGNAL_
+            # MIN_CONFIDENCE's own comment in baseconfig.py for the full
+            # incident history behind these 4 thresholds.
+            "reolink_prey_signal_min_confidence": float(CONFIG["REOLINK_PREY_SIGNAL_MIN_CONFIDENCE"]),
+            "reolink_prey_signal_repeat_count": int(CONFIG["REOLINK_PREY_SIGNAL_REPEAT_COUNT"]),
+            "reolink_prey_signal_repeat_min_confidence": float(CONFIG["REOLINK_PREY_SIGNAL_REPEAT_MIN_CONFIDENCE"]),
+            "reolink_prey_signal_repeat_window_s": float(CONFIG["REOLINK_PREY_SIGNAL_REPEAT_WINDOW_S"]),
         }
     )
 
@@ -2689,6 +2697,18 @@ async def post_config_door_control(request: Request, _user: str = Depends(requir
         CONFIG[f"ALLOWED_TO_EXIT_RANGE{i}_TO"] = str(r.get("to") or "00:00")
     CONFIG["PIR_INSIDE_THRESHOLD"] = float(body.get("pir_inside_threshold", CONFIG["PIR_INSIDE_THRESHOLD"]))
     CONFIG["IMMEDIATE_LOCK_AFTER_PASSAGE"] = bool(body.get("immediate_lock_after_passage", False))
+    CONFIG["REOLINK_PREY_SIGNAL_MIN_CONFIDENCE"] = float(
+        body.get("reolink_prey_signal_min_confidence", CONFIG["REOLINK_PREY_SIGNAL_MIN_CONFIDENCE"])
+    )
+    CONFIG["REOLINK_PREY_SIGNAL_REPEAT_COUNT"] = int(
+        body.get("reolink_prey_signal_repeat_count", CONFIG["REOLINK_PREY_SIGNAL_REPEAT_COUNT"])
+    )
+    CONFIG["REOLINK_PREY_SIGNAL_REPEAT_MIN_CONFIDENCE"] = float(
+        body.get("reolink_prey_signal_repeat_min_confidence", CONFIG["REOLINK_PREY_SIGNAL_REPEAT_MIN_CONFIDENCE"])
+    )
+    CONFIG["REOLINK_PREY_SIGNAL_REPEAT_WINDOW_S"] = float(
+        body.get("reolink_prey_signal_repeat_window_s", CONFIG["REOLINK_PREY_SIGNAL_REPEAT_WINDOW_S"])
+    )
 
     for key in (
         "MIN_THRESHOLD", "MOUSE_THRESHOLD", "CAT_THRESHOLD", "MIN_SECONDS_TO_ANALYZE",
@@ -2701,6 +2721,8 @@ async def post_config_door_control(request: Request, _user: str = Depends(requir
         "ALLOWED_TO_EXIT_RANGE2", "ALLOWED_TO_EXIT_RANGE2_FROM", "ALLOWED_TO_EXIT_RANGE2_TO",
         "ALLOWED_TO_EXIT_RANGE3", "ALLOWED_TO_EXIT_RANGE3_FROM", "ALLOWED_TO_EXIT_RANGE3_TO",
         "PIR_INSIDE_THRESHOLD", "IMMEDIATE_LOCK_AFTER_PASSAGE",
+        "REOLINK_PREY_SIGNAL_MIN_CONFIDENCE", "REOLINK_PREY_SIGNAL_REPEAT_COUNT",
+        "REOLINK_PREY_SIGNAL_REPEAT_MIN_CONFIDENCE", "REOLINK_PREY_SIGNAL_REPEAT_WINDOW_S",
     ):
         update_single_config_parameter(key)
 

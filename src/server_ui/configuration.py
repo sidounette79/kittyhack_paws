@@ -1002,6 +1002,109 @@ def register_configuration(input, output, session, ctx: SessionContext):
                             ),
                         ),
                         ui.hr(),
+                        # 04.11, Sid ("je puisse moi-même modifier les
+                        # limites que dois atteindre proie reolink pour
+                        # envoyer un signal de blocage à HK") - see
+                        # REOLINK_PREY_SIGNAL_MIN_CONFIDENCE's own comment
+                        # in baseconfig.py for the full incident history
+                        # behind these 4 thresholds (moved there from
+                        # hardcoded constants specifically for this).
+                        ui.row(
+                            ui.column(12, ui.h5(_("Reolink prey signal (outside flap camera)"))),
+                        ),
+                        ui.row(
+                            ui.column(
+                                12,
+                                ui.input_slider(
+                                    "sldReolinkPreySignalMinConfidence",
+                                    _("Minimum confidence for a single detection to lock the flap"),
+                                    min=0,
+                                    max=100,
+                                    width="90%",
+                                    value=CONFIG["REOLINK_PREY_SIGNAL_MIN_CONFIDENCE"],
+                                ),
+                            ),
+                            ui.column(
+                                12,
+                                info_toggle(
+                                    "reolink_prey_min_confidence_info",
+                                    _("Explain single-detection threshold"),
+                                    _(
+                                        "The Reolink camera at the outside flap runs its own detection model. "
+                                        "A single Reolink detection above this confidence is enough to lock the "
+                                        "flap immediately, same as the local detection above.\n"
+                                        "*(Default value: {})*"
+                                    ).format(
+                                        DEFAULT_CONFIG["Settings"][
+                                            "reolink_prey_signal_min_confidence"
+                                        ]
+                                    ),
+                                ),
+                            ),
+                        ),
+                        ui.br(),
+                        ui.row(
+                            ui.column(
+                                12,
+                                ui.input_numeric(
+                                    "numReolinkPreySignalRepeatCount",
+                                    _("Number of cumulative detections"),
+                                    CONFIG["REOLINK_PREY_SIGNAL_REPEAT_COUNT"],
+                                    min=1,
+                                    max=20,
+                                    step=1,
+                                ),
+                            ),
+                            ui.column(
+                                12,
+                                ui.input_slider(
+                                    "sldReolinkPreySignalRepeatMinConfidence",
+                                    _("Minimum confidence per cumulative detection"),
+                                    min=0,
+                                    max=100,
+                                    width="90%",
+                                    value=CONFIG["REOLINK_PREY_SIGNAL_REPEAT_MIN_CONFIDENCE"],
+                                ),
+                            ),
+                        ),
+                        ui.br(),
+                        ui.row(
+                            ui.column(
+                                12,
+                                ui.input_numeric(
+                                    "numReolinkPreySignalRepeatWindowS",
+                                    _("Time window for cumulative detections (in s)"),
+                                    CONFIG["REOLINK_PREY_SIGNAL_REPEAT_WINDOW_S"],
+                                    min=1,
+                                    max=120,
+                                    step=1,
+                                ),
+                            ),
+                            ui.column(
+                                12,
+                                info_toggle(
+                                    "reolink_prey_repeat_info",
+                                    _("Explain cumulative detections"),
+                                    _(
+                                        "If this many Reolink detections, each at or above the confidence set "
+                                        "above, happen within this time window, the flap locks too - even if "
+                                        "no single detection alone was confident enough.\n"
+                                        "*(Default values: {} detections, {}% each, within {}s)*"
+                                    ).format(
+                                        DEFAULT_CONFIG["Settings"][
+                                            "reolink_prey_signal_repeat_count"
+                                        ],
+                                        DEFAULT_CONFIG["Settings"][
+                                            "reolink_prey_signal_repeat_min_confidence"
+                                        ],
+                                        DEFAULT_CONFIG["Settings"][
+                                            "reolink_prey_signal_repeat_window_s"
+                                        ],
+                                    ),
+                                ),
+                            ),
+                        ),
+                        ui.hr(),
                         ui.row(
                             ui.column(
                                 12,
@@ -3086,6 +3189,18 @@ def register_configuration(input, output, session, ctx: SessionContext):
             CONFIG["WLAN_TX_POWER"] = int(input.sldWlanTxPower())
         CONFIG["LOCK_DURATION_AFTER_PREY_DETECTION"] = int(
             input.sldLockAfterPreyDetect()
+        )
+        CONFIG["REOLINK_PREY_SIGNAL_MIN_CONFIDENCE"] = float(
+            input.sldReolinkPreySignalMinConfidence()
+        )
+        CONFIG["REOLINK_PREY_SIGNAL_REPEAT_COUNT"] = int(
+            input.numReolinkPreySignalRepeatCount()
+        )
+        CONFIG["REOLINK_PREY_SIGNAL_REPEAT_MIN_CONFIDENCE"] = float(
+            input.sldReolinkPreySignalRepeatMinConfidence()
+        )
+        CONFIG["REOLINK_PREY_SIGNAL_REPEAT_WINDOW_S"] = float(
+            input.numReolinkPreySignalRepeatWindowS()
         )
         CONFIG["BLOCK_EXIT_AFTER_PREY_ENTRY_ENABLED"] = input.btnBlockExitAfterPreyEntry()
         CONFIG["BLOCK_EXIT_AFTER_PREY_ENTRY_DURATION"] = int(

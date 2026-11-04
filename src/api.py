@@ -434,7 +434,7 @@ async def reolink_prey_signal(request: Request):
         pass
 
     from src.backend.loop import backend_main
-    from src.backend.constants import REOLINK_PREY_SIGNAL_REPEAT_WINDOW_S
+    from src.baseconfig import CONFIG
     from src.clock import monotonic_time
 
     now_mono = monotonic_time()
@@ -446,7 +446,9 @@ async def reolink_prey_signal(request: Request):
         backend_main.reolink_prey_signal_history = history
     if probability is not None:
         history.append((now_mono, probability))
-    cutoff = now_mono - REOLINK_PREY_SIGNAL_REPEAT_WINDOW_S
+    # 04.11: read live from CONFIG, not an import-time constant - see
+    # REOLINK_PREY_SIGNAL_MIN_CONFIDENCE's own comment in baseconfig.py.
+    cutoff = now_mono - CONFIG['REOLINK_PREY_SIGNAL_REPEAT_WINDOW_S']
     while history and history[0][0] < cutoff:
         history.pop(0)
     prob_str = f"{probability:.0f}%" if probability is not None else "?"

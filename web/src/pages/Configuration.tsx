@@ -52,6 +52,10 @@ interface DoorControlConfig {
   exit_ranges: ExitRange[];
   pir_inside_threshold: number;
   immediate_lock_after_passage: boolean;
+  reolink_prey_signal_min_confidence: number;
+  reolink_prey_signal_repeat_count: number;
+  reolink_prey_signal_repeat_min_confidence: number;
+  reolink_prey_signal_repeat_window_s: number;
 }
 
 interface ModelOption {
@@ -1288,6 +1292,65 @@ export default function ConfigurationPage() {
                 unit="s"
                 onChange={(v) => setDoorControl({ ...doorControl, lock_duration_after_prey_detection: v })}
               />
+
+              <h4 className="mb-2 mt-5 text-sm font-semibold text-white/80">
+                Signal de proie Reolink (chatière extérieure)
+              </h4>
+              <p className="mb-3 -mt-1 text-xs text-white/60">
+                La caméra Reolink de la chatière a son propre modèle de détection ; quand il voit une proie, il peut aussi déclencher le verrouillage ci-dessus, en plus de la détection locale.
+              </p>
+
+              <Slider
+                label="Confiance minimum pour bloquer sur une seule détection"
+                value={doorControl.reolink_prey_signal_min_confidence}
+                min={0}
+                max={100}
+                unit="%"
+                onChange={(v) => setDoorControl({ ...doorControl, reolink_prey_signal_min_confidence: v })}
+              />
+              <p className="mb-3 -mt-2 text-xs text-white/60">
+                Une seule détection Reolink au-dessus de ce seuil suffit à bloquer immédiatement.
+              </p>
+
+              <Field label="Nombre de détections cumulées">
+                <input
+                  type="number"
+                  min={1}
+                  max={20}
+                  step={1}
+                  value={doorControl.reolink_prey_signal_repeat_count}
+                  onChange={(e) =>
+                    setDoorControl({ ...doorControl, reolink_prey_signal_repeat_count: Number(e.target.value) })
+                  }
+                  className={inputClass}
+                />
+              </Field>
+
+              <Slider
+                label="Confiance minimum par détection cumulée"
+                value={doorControl.reolink_prey_signal_repeat_min_confidence}
+                min={0}
+                max={100}
+                unit="%"
+                onChange={(v) => setDoorControl({ ...doorControl, reolink_prey_signal_repeat_min_confidence: v })}
+              />
+
+              <Field label="Fenêtre de cumul (secondes)">
+                <input
+                  type="number"
+                  min={1}
+                  max={120}
+                  step={1}
+                  value={doorControl.reolink_prey_signal_repeat_window_s}
+                  onChange={(e) =>
+                    setDoorControl({ ...doorControl, reolink_prey_signal_repeat_window_s: Number(e.target.value) })
+                  }
+                  className={inputClass}
+                />
+              </Field>
+              <p className="mb-3 -mt-2 text-xs text-white/60">
+                Si ce nombre de détections dépasse le seuil ci-dessus dans cette fenêtre de temps, la porte se bloque aussi, même si aucune détection seule n'était assez confiante.
+              </p>
 
               <label className="mb-3 flex items-center gap-2 text-sm">
                 <input
