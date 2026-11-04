@@ -249,7 +249,14 @@ YAML
 # élargit un peu la marge d'angles vus à l'entraînement sans prétendre
 # recréer l'angle Kittyflap - gratuit, aucun downside identifié, pas
 # d'attente de miracle dessus non plus.
-yolo train data=data.yaml model={YOLO_BASE_MODEL} epochs={TRAIN_EPOCHS} imgsz={IMAGE_SIZE} project=/workspace/runs name=train device=0 degrees=15 perspective=0.0005
+# 04.11, Sid ("trop long, on a fait les 9000 du modèle 2 en 30 minutes") -
+# run réel observé : ~140s/epoch (223 batches + validation complète), donc
+# 100 epochs par défaut = ~3h50 pour ce dataset de détection, alors que la
+# mAP50 de validation était déjà à ~0.79-0.80 dès l'epoch 8-9 (log
+# 59155858, coupé). patience=15 arrête dès que la métrique de validation
+# stagne 15 epochs de suite, au lieu d'aller systématiquement jusqu'au bout
+# - absent avant ce soir sur ce run (le classifieur identité l'avait déjà).
+yolo train data=data.yaml model={YOLO_BASE_MODEL} epochs={TRAIN_EPOCHS} patience=15 imgsz={IMAGE_SIZE} project=/workspace/runs name=train device=0 degrees=15 perspective=0.0005
 yolo export model=/workspace/runs/train/weights/best.pt format=ncnn
 mkdir -p /workspace/result/best_ncnn_model
 cp /workspace/runs/train/weights/best.pt /workspace/result/model.pt
