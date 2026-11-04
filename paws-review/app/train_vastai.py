@@ -235,7 +235,14 @@ train: images
 val: images
 names: {names_yaml}
 YAML
-yolo train data=data.yaml model={YOLO_BASE_MODEL} epochs={TRAIN_EPOCHS} imgsz={IMAGE_SIZE} project=/workspace/runs name=train device=0
+# 04.11, Sid ("comment en créer qui auraient l'angle HK ?") - un vrai
+# changement de point de vue 3D ne se simule pas par transformation 2D,
+# mais une rotation/perspective légère (absentes des défauts Ultralytics
+# en mode detect, degrees/perspective valent 0.0 sauf réglage explicite)
+# élargit un peu la marge d'angles vus à l'entraînement sans prétendre
+# recréer l'angle Kittyflap - gratuit, aucun downside identifié, pas
+# d'attente de miracle dessus non plus.
+yolo train data=data.yaml model={YOLO_BASE_MODEL} epochs={TRAIN_EPOCHS} imgsz={IMAGE_SIZE} project=/workspace/runs name=train device=0 degrees=15 perspective=0.0005
 yolo export model=/workspace/runs/train/weights/best.pt format=ncnn
 mkdir -p /workspace/result/best_ncnn_model
 cp /workspace/runs/train/weights/best.pt /workspace/result/model.pt
