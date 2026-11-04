@@ -172,7 +172,14 @@ TIMEOUT_S = 80 * 60  # au-delà, quelque chose s'est mal passé - on arrête les
 # aux deux horodatages). exclude_host_ids (en mémoire, par run) ne protège
 # pas contre ça puisque chaque appel à /app-api/train/start repart d'un
 # set vide - seule cette liste persiste entre deux runs séparés.
-PERMANENTLY_EXCLUDED_HOSTS = {85323, 155385, 135723}
+# 03.11 puis 04.11, Sid ("exclus d'office ceux qui marchent pas") : hôte
+# 102063 vu échouer 2 fois à des sessions différentes (instance 58985616
+# le 03.11, instance 59155167 le 04.11) - gpu_util=0.0 figé du début à la
+# fin malgré status_msg="success", instance finissant actual_status=
+# "exited"/cur_state="stopped" sans jamais produire de résultat. Même
+# symptôme les deux fois, deux runs séparés à un jour d'écart - pas une
+# coïncidence isolée.
+PERMANENTLY_EXCLUDED_HOSTS = {85323, 155385, 135723, 102063}
 
 # 19.10, Sid ("si on peut, par principe, exclure chine, russie, israel etc
 # ca m'arrange") - préférence personnelle, pas une question de fiabilité :
