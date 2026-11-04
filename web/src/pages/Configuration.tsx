@@ -56,6 +56,8 @@ interface DoorControlConfig {
   reolink_prey_signal_repeat_count: number;
   reolink_prey_signal_repeat_min_confidence: number;
   reolink_prey_signal_repeat_window_s: number;
+  mouse_consensus_threshold: number;
+  mouse_consensus_min_frames: number;
 }
 
 interface ModelOption {
@@ -1269,6 +1271,40 @@ export default function ConfigurationPage() {
               />
               <p className="mb-3 -mt-2 text-xs text-white/60">
                 Si dépassé, la chatière reste fermée.
+              </p>
+
+              {/* 04.11, Sid ("comment éviter qu'un bout de patte déclenche
+                  une alarme ?") - existait déjà dans CONFIG depuis le 19.10
+                  (sur sa propre demande à l'époque) mais jamais exposé nulle
+                  part, désactivé par défaut (0 frame). Même principe que le
+                  cumul Reolink plus bas sur cette page : au lieu d'une seule
+                  frame à haute confiance, exiger plusieurs frames
+                  consécutives à une confiance plus modérée - un flash
+                  isolé (patte, ombre) ne suffit alors plus seul. */}
+              <Field label="Nombre de frames consécutives pour confirmer (0 = désactivé)">
+                <input
+                  type="number"
+                  min={0}
+                  max={20}
+                  step={1}
+                  value={doorControl.mouse_consensus_min_frames}
+                  onChange={(e) =>
+                    setDoorControl({ ...doorControl, mouse_consensus_min_frames: Number(e.target.value) })
+                  }
+                  className={inputClass}
+                />
+              </Field>
+
+              <Slider
+                label="Confiance minimum par frame consécutive"
+                value={doorControl.mouse_consensus_threshold}
+                min={0}
+                max={100}
+                unit="%"
+                onChange={(v) => setDoorControl({ ...doorControl, mouse_consensus_threshold: v })}
+              />
+              <p className="mb-3 -mt-2 text-xs text-white/60">
+                Si ce nombre de frames consécutives dépasse cette confiance (plus basse que le seuil principal ci-dessus), la porte se bloque aussi - même si aucune frame seule n'a atteint le seuil principal. Laisser à 0 frame pour garder le comportement actuel (une seule frame à haute confiance suffit).
               </p>
 
               <Slider

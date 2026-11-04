@@ -2604,6 +2604,10 @@ async def get_config_door_control(_user: str = Depends(require_session)):
         {
             "min_threshold": float(CONFIG["MIN_THRESHOLD"]),
             "mouse_threshold": float(CONFIG["MOUSE_THRESHOLD"]),
+            # 04.11, Sid ("comment éviter qu'un bout de patte déclenche une
+            # alarme ?") - existed in CONFIG since 19.10, never exposed.
+            "mouse_consensus_threshold": float(CONFIG["MOUSE_CONSENSUS_THRESHOLD"]),
+            "mouse_consensus_min_frames": int(CONFIG["MOUSE_CONSENSUS_MIN_FRAMES"]),
             "cat_threshold": float(CONFIG["CAT_THRESHOLD"]),
             "min_seconds_to_analyze": float(CONFIG.get("MIN_SECONDS_TO_ANALYZE", 1.5) or 1.5),
             "lock_duration_after_prey_detection": int(CONFIG["LOCK_DURATION_AFTER_PREY_DETECTION"]),
@@ -2679,6 +2683,12 @@ async def post_config_door_control(request: Request, _user: str = Depends(requir
 
     CONFIG["MIN_THRESHOLD"] = float(body.get("min_threshold", CONFIG["MIN_THRESHOLD"]))
     CONFIG["MOUSE_THRESHOLD"] = float(body.get("mouse_threshold", CONFIG["MOUSE_THRESHOLD"]))
+    CONFIG["MOUSE_CONSENSUS_THRESHOLD"] = float(
+        body.get("mouse_consensus_threshold", CONFIG["MOUSE_CONSENSUS_THRESHOLD"])
+    )
+    CONFIG["MOUSE_CONSENSUS_MIN_FRAMES"] = int(
+        body.get("mouse_consensus_min_frames", CONFIG["MOUSE_CONSENSUS_MIN_FRAMES"])
+    )
     CONFIG["CAT_THRESHOLD"] = float(body.get("cat_threshold", CONFIG["CAT_THRESHOLD"]))
     CONFIG["MIN_SECONDS_TO_ANALYZE"] = float(body.get("min_seconds_to_analyze", 1.5))
     CONFIG["LOCK_DURATION_AFTER_PREY_DETECTION"] = int(body.get("lock_duration_after_prey_detection", 60))
@@ -2711,7 +2721,8 @@ async def post_config_door_control(request: Request, _user: str = Depends(requir
     )
 
     for key in (
-        "MIN_THRESHOLD", "MOUSE_THRESHOLD", "CAT_THRESHOLD", "MIN_SECONDS_TO_ANALYZE",
+        "MIN_THRESHOLD", "MOUSE_THRESHOLD", "MOUSE_CONSENSUS_THRESHOLD", "MOUSE_CONSENSUS_MIN_FRAMES",
+        "CAT_THRESHOLD", "MIN_SECONDS_TO_ANALYZE",
         "LOCK_DURATION_AFTER_PREY_DETECTION", "MOUSE_CHECK_ENABLED",
         "BLOCK_EXIT_AFTER_PREY_ENTRY_ENABLED", "BLOCK_EXIT_AFTER_PREY_ENTRY_DURATION",
         "TFLITE_MODEL_VERSION", "YOLO_MODEL", "USE_CAMERA_FOR_CAT_DETECTION",
