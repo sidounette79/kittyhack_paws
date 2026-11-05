@@ -117,16 +117,17 @@ const TRAIN_STEP_LABELS = {
   training: 'Entraînement en cours',
 };
 
-// 29.10, plan de scission détection/identité - deux modes d'entraînement
-// possibles côté train_vastai.py (collapse_identity=0|1), même verrou/
-// état partagé (un seul run à la fois, peu importe le mode - même budget
-// Vast.ai). Deux boutons distincts tant qu'il n'y a pas de modèle 2 à
-// proprement parler : le modèle combiné actuel (5 classes, inchangé) et
-// le nouveau modèle 1 (détection pure Cat+Prey, voir export_training.py).
+// 29.10, plan de scission détection/identité - train_vastai.py gardait
+// deux modes (collapse_identity=0|1) le temps que le Modèle 2 existe
+// vraiment. 05.11, Sid ("retire-le") - le Modèle 2 est en prod depuis le
+// 02.11, le mode "modèle combiné 5 classes" (collapse_identity=0) n'a
+// plus de raison d'être appelé depuis l'UI - seul le bouton a été retiré,
+// `startTraining(false)`/`/app-api/train/start?collapse_identity=0` côté
+// serveur restent inchangés (pas de régression à risquer pour un bouton
+// qui n'existe plus).
 function renderTrainBar(state) {
   const bar = document.getElementById('train-bar');
   const bothButtons = `
-    <button onclick="startTraining(false)">Lancer un entraînement (modèle actuel, 5 classes)</button>
     <button onclick="startTraining(true)" title="Classes réduites à Cat+Prey - voir le plan de scission détection/identité">Lancer un entraînement Modèle 1 (détection Cat+Prey)</button>`;
   if (state.status === 'running') {
     const label = TRAIN_STEP_LABELS[state.step] || 'En cours';
@@ -150,8 +151,22 @@ function renderTrainBar(state) {
 // --- Entraînement identité (Modèle 2) -----------------------------------
 // 29.10, plan de scission détection/identité (Phase 2) - entraînement
 // complètement indépendant du Modèle 1 (état séparé côté serveur, voir
-// train_vastai_identity.py), peut tourner en même temps ou pas.
+// train_vastai_yolo_identity.py), peut tourner en même temps ou pas.
+// 05.11, Sid ("reconstruire le vrai pipeline") - ce bouton pointait avant
+// sur l'ancienne approche embeddings/ArcFace (train_vastai_identity.py,
+// jamais activée en prod, plafonnait à ~58-64%) alors que le modèle
+// réellement actif (92.8%) est un classificateur YOLO26-cls entraîné sur
+// un dataset RFID bien plus large - rebranché sur le bon pipeline
+// (train_vastai_yolo_identity.py + build_large_rfid_training_set.py),
+// mêmes étapes de progression que le Modèle 1.
 let identityTrainPollTimer = null;
+
+const IDENTITY_TRAIN_STEP_LABELS = {
+  export: 'Construction du dataset (RFID réel, jusqu\'à 1800/chat)',
+  searching_offer: 'Recherche d\'une machine GPU',
+  health_check: 'Vérification de la machine',
+  training: 'Entraînement en cours',
+};
 
 async function checkIdentityTrainStatus() {
   const state = await api('/app-api/identity-train/status');
@@ -175,14 +190,16 @@ async function startIdentityTraining() {
 
 function renderIdentityTrainBar(state) {
   const bar = document.getElementById('identity-train-bar');
-  const button = `<button onclick="startIdentityTraining()" title="Backbone MobileNetV3 + tête ArcFace sur les crops recadrés, voir le plan de scission détection/identité - pas encore testé sur une vraie machine louée">Lancer un entraînement Modèle 2 (identité)</button>`;
+  const button = `<button onclick="startIdentityTraining()" title="Classificateur YOLO26 (task=classify) sur un dataset tiré directement des vrais événements RFID de production (jusqu'à 1800 crops/chat) - c'est ce pipeline qui a produit le modèle à 92.8% actif aujourd'hui">Lancer un entraînement Modèle 2 (identité)</button>`;
   if (state.status === 'running') {
-    bar.innerHTML = `<span class="export-msg">🧠 Entraînement identité en cours (${state.elapsed ?? 0}s)...</span>
+    const label = IDENTITY_TRAIN_STEP_LABELS[state.step] || 'En cours';
+    const price = state.price ? ` - ${state.price.toFixed(3)}$/h` : '';
+    bar.innerHTML = `<span class="export-msg">🧠 ${label}${price}...</span>
       <button onclick="resetStuckState('identity_train', checkIdentityTrainStatus)" title="Si ça semble bloqué après un redéploiement">Réinitialiser</button>`;
   } else if (state.status === 'success') {
     const when = state.finished_at ? new Date(state.finished_at * 1000).toLocaleString('fr-CH') : '';
     bar.innerHTML = `
-      <span class="export-msg">✓ Modèle identité entraîné (${state.crops} crops, ${when}) - pas encore branché à Kittyhack (Phase 3 du plan)</span>
+      <span class="export-msg">✓ Modèle identité entraîné (${state.images} images, ${when}) - sélectionne-le dans Kittyhack</span>
       ${button}`;
   } else if (state.status === 'error') {
     bar.innerHTML = `

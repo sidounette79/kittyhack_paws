@@ -32,11 +32,13 @@ import json
 import logging
 import os
 import sys
+import threading
 import time
 import zipfile
 
 import requests
 
+from app.build_large_rfid_training_set import build_large_rfid_training_zip
 from app.config import STORAGE_ROOT
 from app.export_identity_training import build_identity_training_zip
 from app.train_vastai import (
@@ -54,6 +56,32 @@ from app.train_vastai import (
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [train_vastai_yolo_identity] %(message)s")
 log = logging.getLogger(__name__)
+
+# 05.11, Sid ("reconstruire le vrai pipeline") - état propre à CE module,
+# distinct de train_identity_state.json (train_vastai_identity.py, ancienne
+# approche embeddings/ArcFace jamais activée en prod) - c'est désormais ce
+# fichier-ci que main.py's /app-api/identity-train/start branche, voir plus
+# bas run_large_rfid_identity_training()/start_large_rfid_identity_training_async().
+STATE_PATH = os.path.join(STORAGE_ROOT, "train_yolo_identity_state.json")
+_run_lock = threading.Lock()
+
+
+def _write_state(state: dict):
+    tmp = STATE_PATH + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(state, f)
+    os.replace(tmp, STATE_PATH)
+
+
+def read_state() -> dict:
+    if not os.path.isfile(STATE_PATH):
+        return {"status": "idle"}
+    try:
+        with open(STATE_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {"status": "idle"}
+
 
 # Même répertoire/endpoint que train_vastai_identity.py (voir le marqueur
 # de distinction dans wait_for_result ci-dessous - aucun risque de
@@ -241,14 +269,23 @@ def wait_for_result(started_after: float, api_key: str | None = None, instance_i
     return None
 
 
-def _rent_train_and_wait(api_key: str) -> dict:
+def _rent_train_and_wait(api_key: str, images: int | None = None) -> dict:
     """Shared tail of both training entry points below - rents the
     cheapest healthy GPU, waits for OUR result (see _is_my_result's
-    marker), always destroys the instance even on timeout/error."""
+    marker), always destroys the instance even on timeout/error.
+
+    05.11 : write_state ajouté à chaque étape (même patron que
+    train_vastai.py's run_training()) pour que le bouton web puisse
+    suivre la progression - n'affecte pas l'usage CLI historique
+    (run_yolo_identity_training), juste un fichier JSON en plus."""
     excluded_hosts: set = set()
     instance_id = None
     started_at = time.time()
     for attempt in range(1, 4):
+        _write_state({
+            "status": "running", "step": "searching_offer", "attempt": attempt,
+            "started_at": started_at, "images": images,
+        })
         offer = find_cheapest_offer(api_key, exclude_host_ids=excluded_hosts)
         try:
             instance_id = create_instance(api_key, offer["id"])
@@ -257,6 +294,12 @@ def _rent_train_and_wait(api_key: str) -> dict:
             excluded_hosts.add(offer.get("host_id"))
             continue
 
+        _write_state({
+            "status": "running", "step": "health_check", "attempt": attempt,
+            "started_at": started_at, "images": images,
+            "instance_id": instance_id, "host_id": offer.get("host_id"),
+            "price": offer.get("dph_total"),
+        })
         healthy, host_id, status_msg = check_instance_health(api_key, instance_id)
         if not healthy:
             log.warning("Instance %s en echec immediat (%s), destruction et nouvel essai.", instance_id, status_msg[:150])
@@ -270,9 +313,14 @@ def _rent_train_and_wait(api_key: str) -> dict:
     if instance_id is None:
         msg = "Impossible de louer une machine GPU fonctionnelle apres 3 tentatives."
         log.error(msg)
+        _write_state({"status": "error", "message": msg})
         return {"status": "error", "message": msg}
 
     try:
+        _write_state({
+            "status": "running", "step": "training", "started_at": started_at,
+            "images": images, "instance_id": instance_id,
+        })
         result_path = wait_for_result(started_at, api_key=api_key, instance_id=instance_id)
     finally:
         destroy_instance(api_key, instance_id)
@@ -280,9 +328,14 @@ def _rent_train_and_wait(api_key: str) -> dict:
     if result_path is None:
         msg = f"Timeout ({TIMEOUT_S}s) sans resultat - verifier l'instance manuellement avant de la perdre."
         log.error(msg)
+        _write_state({"status": "error", "message": msg})
         return {"status": "error", "message": msg}
 
     log.info("Entrainement YOLO-classification identite termine : %s", result_path)
+    _write_state({
+        "status": "success", "finished_at": time.time(),
+        "result_path": result_path, "images": images,
+    })
     return {"status": "success", "result_path": result_path}
 
 
@@ -309,15 +362,18 @@ def run_yolo_identity_training_from_zip(api_key: str, zip_path: str) -> dict:
     """02.11, Sid ("explore les possibilites d'autres approches") - au
     lieu du pool curé Paws Review (~400/cat), un jeu BEAUCOUP plus large
     tire directement des vrais evenements RFID de Kittyflap (161k+
-    disponibles, voir data/identity_eval_scripts/
-    build_large_rfid_training_set.py - exclut explicitement tout
-    event_id deja dans le jeu de test fige pour eviter toute
-    contamination). zip_path doit deja exister (construit a part, pas ici
-    - ce module n'a pas acces a la vraie DB Kittyflap/aux fichiers image,
+    disponibles). zip_path doit deja exister (construit a part, pas ici -
+    ce module n'a pas acces a la vraie DB Kittyflap/aux fichiers image,
     seulement paws-review/VAST_API_KEY). Copie simplement ce zip vers
     IDENTITY_TRAINING_DATA_PATH (meme chemin que l'autre entree, servi
     tel quel par /app-api/identity-model/training-data) puis reutilise
-    EXACTEMENT la meme location/attente/destruction."""
+    EXACTEMENT la meme location/attente/destruction.
+
+    05.11 : utilisé en interne par run_large_rfid_identity_training()
+    ci-dessous, qui construit lui-même le zip (voir
+    app/build_large_rfid_training_set.py, reconstruit après la perte du
+    script original du 02.11) - gardé comme point d'entrée séparé pour un
+    usage CLI avec un zip déjà construit ailleurs."""
     if not UPLOAD_TOKEN:
         msg = "MODEL_UPLOAD_TOKEN non configure cote serveur, abandon."
         log.error(msg)
@@ -332,6 +388,61 @@ def run_yolo_identity_training_from_zip(api_key: str, zip_path: str) -> dict:
     log.info("Zip de dataset large copie vers %s (depuis %s).", IDENTITY_TRAINING_DATA_PATH, zip_path)
 
     return _rent_train_and_wait(api_key)
+
+
+# 05.11, Sid ("reconstruire le vrai pipeline") - point d'entrée désormais
+# branché au bouton web "Modèle 2" (main.py:/app-api/identity-train/start),
+# remplace l'ancien branchement sur train_vastai_identity.py (approche
+# embeddings/ArcFace abandonnée, plafonnait à ~58-64% sur le jeu de test
+# figé). target_per_cat=1800 reproduit le run du 02.11 qui a produit le
+# 92.8% actuellement en prod - voir build_large_rfid_training_set.py pour
+# le détail de la sélection (cap par bloc/visite, exclusion du jeu de
+# test, exclusion proie-coexistante).
+def run_large_rfid_identity_training(api_key: str, target_per_cat: int = 1800) -> dict:
+    if not UPLOAD_TOKEN:
+        msg = "MODEL_UPLOAD_TOKEN non configure cote serveur, abandon."
+        log.error(msg)
+        _write_state({"status": "error", "message": msg})
+        return {"status": "error", "message": msg}
+
+    _write_state({"status": "running", "step": "export", "started_at": time.time()})
+    log.info("Construction du zip de crops identite (dataset RFID large, cible %d/chat)...", target_per_cat)
+    stats = build_large_rfid_training_zip(IDENTITY_TRAINING_DATA_PATH, target_per_cat=target_per_cat)
+    log.info("Zip pret : %s", stats)
+    if stats["included"] == 0:
+        msg = "Aucun crop a entrainer, abandon."
+        log.error(msg)
+        _write_state({"status": "error", "message": msg})
+        return {"status": "error", "message": msg}
+
+    return _rent_train_and_wait(api_key, images=stats["included"])
+
+
+_run_large_rfid_lock = threading.Lock()
+
+
+def start_large_rfid_identity_training_async(api_key: str, target_per_cat: int = 1800) -> bool:
+    """Même patron que start_training_async()/start_identity_training_async
+    - verrou propre à ce pipeline précis (n'empêche ni le Modèle 1 ni
+    l'ancienne entrée identité CLI de tourner en parallèle, budgets Vast.ai
+    séparés)."""
+    if not _run_large_rfid_lock.acquire(blocking=False):
+        return False
+    thread = threading.Thread(
+        target=_run_large_rfid_identity_training_locked, args=(api_key, target_per_cat), daemon=True,
+    )
+    thread.start()
+    return True
+
+
+def _run_large_rfid_identity_training_locked(api_key: str, target_per_cat: int):
+    try:
+        run_large_rfid_identity_training(api_key, target_per_cat=target_per_cat)
+    except Exception as e:
+        log.exception("Entrainement identite (dataset RFID large) echoue")
+        _write_state({"status": "error", "message": str(e)})
+    finally:
+        _run_large_rfid_lock.release()
 
 
 def main():
