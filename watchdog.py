@@ -622,6 +622,19 @@ _PREY_LABELS = ("prey", "beute")
 IDENTITY_SMOOTHING_WINDOW = 8
 IDENTITY_SMOOTHING_RESET_GAP_S = 6.0
 
+# 05.11, Sid ("faudrait faire un truc pour que watchdog se recharge tout
+# seul aussi ?") - trouvé en testant côte à côte avec Kittyhack's own
+# live-reload (voir reload_model_handler_runtime() côté src/backend) :
+# watchdog ne relit jamais config.ini après son démarrage, donc un modèle
+# activé depuis Kittyhack's "Gestion des modèles" (Modèle 1 ou Modèle 2)
+# n'était appliqué ici qu'après un redémarrage manuel du conteneur -
+# reproduit deux fois de suite dans ce test. Pas besoin d'être instantané
+# comme côté Kittyflap (pas de bouton "appliquer maintenant" ici) : un
+# polling à cet intervalle, depuis le même thread que la détection
+# elle-même (voir CameraWatcher._run_continuous()), suffit et évite tout
+# risque de concurrence sur l'état du modèle en cours d'usage.
+RELOAD_CHECK_INTERVAL_S = 60.0
+
 
 class MouseDetector:
     """Loads the active model once; run() takes a BGR frame, returns prey% (0-100).
@@ -632,8 +645,6 @@ class MouseDetector:
     """
 
     def __init__(self):
-        self.kind, self.model_path, self.imgsz = _resolve_active_model()
-        self.identity = None
         # 01.11, Sid ("on peut lisser aussi?") - même principe que le vote
         # majoritaire déjà existant côté caméra interne (loop.py, RECENT_
         # WINDOW=8) qu'une rafale isolée (1-2 frames) ne peut pas faire
@@ -652,45 +663,97 @@ class MouseDetector:
         # frame happened to detect before smoothing.
         self._recent_identity_scores: list[float] = []
         self._last_identity_detection_wall: float = 0.0
-        if self.kind == "yolo":
+        self._last_reload_check: float = time.monotonic()
+        self._loaded_yolo_model_id: str = ""
+        self._loaded_identity_model_id: str = ""
+        self._load_model()
+
+    def _load_model(self):
+        """(Re)loads the active model into this instance. Every step that
+        can fail (YOLO(..), Interpreter(..)) runs into LOCAL variables
+        first - self.* is only touched once everything succeeded, so a
+        failed reload (bad/missing export, OOM, ...) leaves the
+        previously-working model fully intact instead of half-swapped."""
+        kind, model_path, imgsz = _resolve_active_model()
+        yolo_model_id = (CONFIG.get("YOLO_MODEL") or "").strip()
+        identity_model_id = (CONFIG.get("IDENTITY_MODEL") or "").strip()
+        if kind == "yolo":
             from ultralytics import YOLO
-            self.yolo = YOLO(self.model_path, task="detect", verbose=False)
+            yolo = YOLO(model_path, task="detect", verbose=False)
             # 02.11, Sid ("Ca doit tout tourner en GPU") - without an
             # explicit device=, Ultralytics 8.4.126 always loads OpenVINO
             # on CPU even with the GPU visible (same fix as
             # model_handler.py's direct_inference, see its own comment for
             # the measurement that found this). 'cpu' stays unset so a
             # plain CPU setup behaves exactly as before.
-            self._yolo_device = str(CONFIG.get("INFERENCE_DEVICE", "cpu") or "cpu").strip().lower()
-            log.info("Loaded custom YOLO model for prey detection: %s (imgsz=%d, device=%s)",
-                     self.model_path, self.imgsz, self._yolo_device)
+            yolo_device = str(CONFIG.get("INFERENCE_DEVICE", "cpu") or "cpu").strip().lower()
             # 01.11, scission détection/identité - même modèle 2 que côté
             # Kittyflap, chargé indépendamment ici (process séparé, aucun
             # partage possible). None (no-op) tant qu'aucun Modèle 2 n'est
             # activé, ou si son chargement échoue - jamais fatal pour le
             # watchdog (load_identity_model() avale déjà ses erreurs).
-            self.identity = load_identity_model(
+            identity = load_identity_model(
                 _resolve_active_identity_model(),
                 inference_device=str(CONFIG.get("INFERENCE_DEVICE", "cpu") or "cpu"),
             )
+            self.kind, self.model_path, self.imgsz = kind, model_path, imgsz
+            self.yolo, self._yolo_device, self.identity = yolo, yolo_device, identity
+            self._loaded_yolo_model_id, self._loaded_identity_model_id = yolo_model_id, identity_model_id
+            log.info("Loaded custom YOLO model for prey detection: %s (imgsz=%d, device=%s)",
+                     self.model_path, self.imgsz, self._yolo_device)
         else:
             with open(LABELS_PATH, "r", encoding="utf-8") as f:
-                self.labels = [line.strip() for line in f if line.strip()]
-            self.interpreter = Interpreter(model_path=MODEL_PATH, num_threads=2)
-            self.interpreter.allocate_tensors()
-            self.input_details = self.interpreter.get_input_details()
-            self.output_details = self.interpreter.get_output_details()
-            self.height = self.input_details[0]["shape"][1]
-            self.width = self.input_details[0]["shape"][2]
-            self.floating_model = self.input_details[0]["dtype"] == np.float32
-            out_name = self.output_details[0]["name"]
+                labels = [line.strip() for line in f if line.strip()]
+            interpreter = Interpreter(model_path=MODEL_PATH, num_threads=2)
+            interpreter.allocate_tensors()
+            input_details = interpreter.get_input_details()
+            output_details = interpreter.get_output_details()
+            height = input_details[0]["shape"][1]
+            width = input_details[0]["shape"][2]
+            floating_model = input_details[0]["dtype"] == np.float32
+            out_name = output_details[0]["name"]
             if "StatefulPartitionedCall" in out_name:
-                self.boxes_idx, self.classes_idx, self.scores_idx = 1, 3, 0
+                boxes_idx, classes_idx, scores_idx = 1, 3, 0
             elif "detected_scores:0" in out_name:
-                self.boxes_idx, self.classes_idx, self.scores_idx = 1, 2, 0
+                boxes_idx, classes_idx, scores_idx = 1, 2, 0
             else:
-                self.boxes_idx, self.classes_idx, self.scores_idx = 0, 1, 2
+                boxes_idx, classes_idx, scores_idx = 0, 1, 2
+            self.kind, self.model_path, self.imgsz = kind, model_path, imgsz
+            self.identity = None
+            self.labels = labels
+            self.interpreter = interpreter
+            self.input_details, self.output_details = input_details, output_details
+            self.height, self.width, self.floating_model = height, width, floating_model
+            self.boxes_idx, self.classes_idx, self.scores_idx = boxes_idx, classes_idx, scores_idx
+            self._loaded_yolo_model_id, self._loaded_identity_model_id = yolo_model_id, identity_model_id
             log.info("Loaded default TFLite model for prey detection: %s", self.model_path)
+
+    def maybe_reload(self):
+        """Call from the SAME thread that calls run() on this instance,
+        right before it (see CameraWatcher._run_continuous()) - never from
+        another thread, this instance has no lock protecting its model
+        attributes against concurrent use. No-op unless
+        RELOAD_CHECK_INTERVAL_S has elapsed since the last check, and
+        config.ini turns out to actually name a different model than what's
+        loaded - config.ini is only re-read when this throttle allows it,
+        not on every frame."""
+        now = time.monotonic()
+        if now - self._last_reload_check < RELOAD_CHECK_INTERVAL_S:
+            return
+        self._last_reload_check = now
+        load_config()
+        new_yolo_id = (CONFIG.get("YOLO_MODEL") or "").strip()
+        new_identity_id = (CONFIG.get("IDENTITY_MODEL") or "").strip()
+        if new_yolo_id == self._loaded_yolo_model_id and new_identity_id == self._loaded_identity_model_id:
+            return
+        log.info(
+            "Active model changed (YOLO_MODEL %r->%r, IDENTITY_MODEL %r->%r), reloading.",
+            self._loaded_yolo_model_id, new_yolo_id, self._loaded_identity_model_id, new_identity_id,
+        )
+        try:
+            self._load_model()
+        except Exception as e:
+            log.error("Model reload failed, keeping the previous model loaded: %s", e)
 
     def run(self, frame: np.ndarray) -> tuple[float, bool, list[dict]]:
         """Returns (prey_probability, any_detection, detections) - the
@@ -1509,14 +1572,6 @@ class CameraWatcher(threading.Thread):
                         log.warning("[%s] Corrupted/blank frame (decode error concealment), skipping.", self.cam_name)
                         continue
                     _save_frame_snapshot(self.cam_name, frame)
-                    # 08.10, Sid ("elle s'active au PIR..."): chatiere's own
-                    # model only actually runs within a trigger window (PIR
-                    # or, as a backup, a peripheral Reolink detection) - CPU
-                    # cost stays near zero the rest of the time, not just
-                    # slower (CAMERA_POLL_INTERVAL_S's 8s idle rate above
-                    # still governs the snapshot cadence, unaffected).
-                    if time.monotonic() >= _chatiere_boost_until[0]:
-                        continue
                     # 09.10: chatiere_int has no REOLINK_HTTP entry (older
                     # camera model, RTSP/ONVIF only - see REOLINK_HTTP's own
                     # comment above) and no local model either
@@ -1527,6 +1582,25 @@ class CameraWatcher(threading.Thread):
                     # single frame, burning real CPU on the watchdog
                     # container for no purpose.
                     if self.detector is None:
+                        continue
+                    # 05.11, Sid ("faudrait faire un truc pour que watchdog
+                    # se recharge tout seul aussi ?") - MUST run before the
+                    # boost-window gate just below: a first attempt placed
+                    # it after that gate, so it only ever ran during an
+                    # active PIR/Reolink trigger window - a model changed
+                    # during a calm period (no cat passing by) was never
+                    # picked up at all, found live in a real side-by-side
+                    # test (2+ minutes of total silence, zero reload logs).
+                    # Same thread as .run() just below, so no concurrency
+                    # risk on the model attributes either way.
+                    self.detector.maybe_reload()
+                    # 08.10, Sid ("elle s'active au PIR..."): chatiere's own
+                    # model only actually runs within a trigger window (PIR
+                    # or, as a backup, a peripheral Reolink detection) - CPU
+                    # cost stays near zero the rest of the time, not just
+                    # slower (CAMERA_POLL_INTERVAL_S's 8s idle rate above
+                    # still governs the snapshot cadence, unaffected).
+                    if time.monotonic() >= _chatiere_boost_until[0]:
                         continue
                     try:
                         mouse_probability, any_detection, detections = self.detector.run(frame)

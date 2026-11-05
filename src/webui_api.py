@@ -1195,6 +1195,75 @@ async def post_remote_reconnect(_user: str = Depends(require_session)):
     return JSONResponse({"ok": True})
 
 
+# 05.11, Sid ("on peut faire remonter les infos dans kittyhack ?") - résumé
+# du log brut des lectures RFID créé côté Pi (magnets_rfid.py,
+# RFID_RAW_LOG_PATH), distingue vraie détection de tag (TAG) de bruit série
+# (NOISE), remonté via le canal de contrôle WebSocket existant
+# (kittyhack_control.py _handle_rfid_raw_log_request / control_client.py
+# request_target_rfid_raw_log). Format d'une ligne du fichier source :
+# "2026-11-05 09:57:14.123 TAG '0123456789ABCDEF'" ou "... NOISE '...'".
+_RFID_RAW_LOG_LINE_RE = re.compile(
+    r"^(?P<ts>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}) (?P<kind>TAG|NOISE) '(?P<payload>.*)'$"
+)
+
+
+def _parse_rfid_raw_log(text: str) -> dict:
+    tag_count = 0
+    noise_count = 0
+    first_read_at = None
+    last_read_at = None
+    unique_tags = set()
+    for line in text.splitlines():
+        m = _RFID_RAW_LOG_LINE_RE.match(line.strip())
+        if not m:
+            continue
+        ts = m.group("ts")
+        if first_read_at is None:
+            first_read_at = ts
+        last_read_at = ts
+        if m.group("kind") == "TAG":
+            tag_count += 1
+            unique_tags.add(m.group("payload"))
+        else:
+            noise_count += 1
+    total = tag_count + noise_count
+    return {
+        "total_reads": total,
+        "tag_count": tag_count,
+        "noise_count": noise_count,
+        "success_rate": round(tag_count / total, 4) if total > 0 else None,
+        "unique_tag_count": len(unique_tags),
+        "first_read_at": first_read_at,
+        "last_read_at": last_read_at,
+    }
+
+
+@webui_app.get("/app-api/v1/system/rfid-raw-log-summary")
+async def get_rfid_raw_log_summary(_user: str = Depends(require_session)):
+    if not is_remote_mode():
+        raise HTTPException(status_code=409, detail="not in remote mode")
+    try:
+        from src.remote.control_client import RemoteControlClient
+
+        client = RemoteControlClient.instance()
+        client.ensure_started()
+        resp = client.request_target_rfid_raw_log(timeout=15.0)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Échec de la requête : {e}")
+
+    if resp is None:
+        raise HTTPException(status_code=504, detail="Timeout en attendant la réponse de la chatière.")
+
+    text = resp.get("text") or ""
+    if not resp.get("ok") and not text:
+        return JSONResponse({"ok": False, "reason": resp.get("reason") or "Aucune lecture RFID enregistrée pour l'instant."})
+
+    summary = _parse_rfid_raw_log(text)
+    summary["ok"] = True
+    summary["truncated"] = bool(resp.get("truncated", False))
+    return JSONResponse(summary)
+
+
 @webui_app.get("/app-api/v1/live/status")
 async def get_live_status(_user: str = Depends(require_session)):
     from src.backend import backend_main, motion_state, motion_state_lock

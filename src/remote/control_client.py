@@ -130,6 +130,19 @@ class RemoteControlClient:
             "truncated": False,
             "received_at": 0.0,
         }
+        # 05.11, Sid ("on peut faire remonter les infos dans kittyhack ?") -
+        # même patron exact que _target_journal_* ci-dessus, pour le nouveau
+        # fichier de log RFID brut créé sur le Pi (voir magnets_rfid.py
+        # RFID_RAW_LOG_PATH, kittyhack_control.py _handle_rfid_raw_log_request).
+        self._target_rfid_raw_log_event = threading.Event()
+        self._target_rfid_raw_log_lock = threading.Lock()
+        self._target_rfid_raw_log_response: dict[str, Any] = {
+            "ok": False,
+            "text": "",
+            "reason": "",
+            "truncated": False,
+            "received_at": 0.0,
+        }
 
     @classmethod
     def instance(cls) -> "RemoteControlClient":
@@ -390,6 +403,33 @@ class RemoteControlClient:
     def get_target_journal_response(self) -> dict[str, Any]:
         with self._target_journal_lock:
             return dict(self._target_journal_response)
+
+    def request_target_rfid_raw_log(self, timeout: float = 15.0) -> dict[str, Any] | None:
+        """Request the target's raw RFID read log via the control channel -
+        same pattern as request_target_journal() above. Returns response
+        dict on success (or remote failure), None on timeout/not-ready."""
+        if not self.wait_until_ready(timeout=max(0.0, min(3.0, float(timeout or 0.0)))):
+            return None
+
+        with self._target_rfid_raw_log_lock:
+            self._target_rfid_raw_log_response = {
+                "ok": False,
+                "text": "",
+                "reason": "",
+                "truncated": False,
+                "received_at": 0.0,
+            }
+
+        self._target_rfid_raw_log_event.clear()
+        self._send_async({"type": "rfid_raw_log_request"})
+        got = self._target_rfid_raw_log_event.wait(timeout=max(0.0, float(timeout or 0.0)))
+        if not got:
+            return None
+        return self.get_target_rfid_raw_log_response()
+
+    def get_target_rfid_raw_log_response(self) -> dict[str, Any]:
+        with self._target_rfid_raw_log_lock:
+            return dict(self._target_rfid_raw_log_response)
 
     def abort_initial_sync(self, reason: str = "aborted by user") -> None:
         tmp_path = None
@@ -769,6 +809,30 @@ class RemoteControlClient:
                     "received_at": time.time(),
                 }
             self._target_journal_event.set()
+            return
+
+        elif t == "rfid_raw_log_response":
+            text_value = ""
+            encoding = str(data.get("encoding") or "").strip().lower()
+            if encoding == "gzip+base64":
+                try:
+                    payload_b64 = str(data.get("text_b64") or "")
+                    compressed = base64.b64decode(payload_b64.encode("ascii"), validate=True)
+                    text_value = gzip.decompress(compressed).decode("utf-8", errors="replace")
+                except Exception as e:
+                    text_value = f"ERROR: Failed to decode compressed rfid raw log payload: {e}"
+            else:
+                text_value = str(data.get("text") or "")
+
+            with self._target_rfid_raw_log_lock:
+                self._target_rfid_raw_log_response = {
+                    "ok": bool(data.get("ok", False)),
+                    "text": text_value,
+                    "reason": str(data.get("reason") or ""),
+                    "truncated": bool(data.get("truncated", False)),
+                    "received_at": time.time(),
+                }
+            self._target_rfid_raw_log_event.set()
             return
 
     async def _handle_binary(self, payload: bytes) -> None:

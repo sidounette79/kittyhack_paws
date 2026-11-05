@@ -151,6 +151,22 @@ interface ApiToken {
   last_used_at: string | null;
 }
 
+// 05.11, Sid ("on peut faire remonter les infos dans kittyhack ?") - résumé
+// du log brut des lectures RFID créé côté Pi (magnets_rfid.py), remonté via
+// GET /app-api/v1/system/rfid-raw-log-summary.
+interface RfidRawLogSummary {
+  ok: boolean;
+  reason?: string;
+  total_reads?: number;
+  tag_count?: number;
+  noise_count?: number;
+  success_rate?: number | null;
+  unique_tag_count?: number;
+  first_read_at?: string | null;
+  last_read_at?: string | null;
+  truncated?: boolean;
+}
+
 interface AddCatState {
   entry_mode_per_cat: boolean;
   exit_mode_per_cat: boolean;
@@ -673,6 +689,21 @@ export default function ConfigurationPage() {
       .then(setConnectionLog)
       .catch(() => {});
   }, []);
+
+  // Pas de chargement automatique : interroge la chatière en direct via le
+  // canal de contrôle (jusqu'à 15s), seulement sur demande explicite.
+  const [rfidSummary, setRfidSummary] = useState<RfidRawLogSummary | null>(null);
+  const [loadingRfidSummary, setLoadingRfidSummary] = useState(false);
+  const [rfidSummaryError, setRfidSummaryError] = useState("");
+
+  const loadRfidSummary = () => {
+    setLoadingRfidSummary(true);
+    setRfidSummaryError("");
+    fetchJson<RfidRawLogSummary>("/app-api/v1/system/rfid-raw-log-summary")
+      .then(setRfidSummary)
+      .catch((e) => setRfidSummaryError(String(e?.message || e || "Échec de la requête.")))
+      .finally(() => setLoadingRfidSummary(false));
+  };
 
   const loadTokens = () => {
     fetchJson<{ tokens: ApiToken[] }>("/app-api/v1/system/api-tokens")
@@ -2137,6 +2168,54 @@ cards:
                 Pour le dépannage matériel uniquement. Si activé, seule "Ouvrir pour tous les chats" ou la
                 détection par caméra permettra l'entrée.
               </p>
+
+              <hr className="my-4 border-white/10" />
+              <h3 className="mb-2 font-medium">Diagnostic lecteur RFID</h3>
+              <p className="mb-3 text-xs text-white/60">
+                Interroge la chatière en direct pour résumer les lectures RFID brutes (tag détecté vs. bruit
+                série) depuis le dernier redémarrage de ce service.
+              </p>
+              <button
+                onClick={loadRfidSummary}
+                disabled={loadingRfidSummary}
+                className="mb-3 w-full rounded-lg border border-white/15 py-2 text-center text-sm disabled:opacity-50"
+              >
+                {loadingRfidSummary ? "Interrogation de la chatière…" : "🔍 Charger le résumé"}
+              </button>
+              {rfidSummaryError && (
+                <p className="mb-3 text-sm text-red-300">{rfidSummaryError}</p>
+              )}
+              {rfidSummary && !rfidSummary.ok && (
+                <p className="mb-3 text-sm text-white/50">
+                  {rfidSummary.reason || "Aucune donnée disponible."}
+                </p>
+              )}
+              {rfidSummary?.ok && (
+                <>
+                  <div className="mb-3 grid grid-cols-3 gap-2">
+                    <div className="rounded-xl bg-white/5 p-3 text-center">
+                      <div className="text-xl font-semibold">{rfidSummary.tag_count}</div>
+                      <div className="text-xs text-white/60">Tags détectés</div>
+                    </div>
+                    <div className="rounded-xl bg-white/5 p-3 text-center">
+                      <div className="text-xl font-semibold">{rfidSummary.noise_count}</div>
+                      <div className="text-xs text-white/60">Bruit série</div>
+                    </div>
+                    <div className="rounded-xl bg-white/5 p-3 text-center">
+                      <div className="text-xl font-semibold">
+                        {rfidSummary.success_rate != null ? `${Math.round(rfidSummary.success_rate * 100)}%` : "—"}
+                      </div>
+                      <div className="text-xs text-white/60">Taux de lecture</div>
+                    </div>
+                  </div>
+                  <p className="mb-3 text-xs text-white/60">
+                    {rfidSummary.unique_tag_count} puce(s) distincte(s) vue(s)
+                    {rfidSummary.first_read_at ? ` · depuis le ${rfidSummary.first_read_at}` : ""}
+                    {rfidSummary.last_read_at ? ` · dernière lecture le ${rfidSummary.last_read_at}` : ""}
+                    {rfidSummary.truncated ? " · journal tronqué (trop volumineux)" : ""}
+                  </p>
+                </>
+              )}
 
               <button
                 onClick={saveAdvanced}
