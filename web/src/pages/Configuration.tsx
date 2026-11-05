@@ -75,6 +75,19 @@ interface YoloModelInfo {
   variant_letter: string;
 }
 
+// 05.11, Sid ("il faut que la distinction entre modèle 1 et modèle 2 soit
+// bien claire") - jusqu'ici le backend avait bien GET/activate/delete pour
+// les modèles identité (voir webui_api.py) mais jamais d'UI branchée
+// dessus - seul moyen de l'activer était un script à la main. Format plus
+// simple que YoloModelInfo : pas de rename côté backend pour ce type de
+// modèle, pas de fps/résolution/variante YOLO (architecture différente).
+interface IdentityModelInfo {
+  unique_id: string;
+  display_name: string;
+  creation_date: string;
+  is_active: boolean;
+}
+
 interface WallpaperImage {
   filename: string;
   url: string;
@@ -427,6 +440,53 @@ export default function ConfigurationPage() {
       setAiModelActionMsg(err instanceof Error ? err.message : "Échec de la suppression.");
     } finally {
       setAiModelActionBusy(false);
+    }
+  };
+
+  // 05.11 - même patron que les modèles YOLO ci-dessus, état/handlers
+  // séparés (endpoints et type de modèle différents, voir IdentityModelInfo).
+  const [aiIdentityModels, setAiIdentityModels] = useState<IdentityModelInfo[] | null>(null);
+  const [aiIdentityModelActionMsg, setAiIdentityModelActionMsg] = useState<string | null>(null);
+  const [aiIdentityModelActionBusy, setAiIdentityModelActionBusy] = useState(false);
+
+  const loadAiIdentityModels = () => {
+    fetchJson<{ models: IdentityModelInfo[] }>("/app-api/v1/ai-training/identity-models")
+      .then((d) => setAiIdentityModels(d.models))
+      .catch(() => {});
+  };
+
+  useEffect(loadAiIdentityModels, []);
+
+  const activateAiIdentityModel = async (unique_id: string) => {
+    setAiIdentityModelActionBusy(true);
+    setAiIdentityModelActionMsg(null);
+    try {
+      const result = await fetchJson<{ ok: boolean; already_active?: boolean; live_reload?: boolean }>(
+        `/app-api/v1/ai-training/identity-models/${unique_id}/activate`,
+        { method: "POST" }
+      );
+      if (result.already_active) setAiIdentityModelActionMsg("Ce modèle est déjà actif.");
+      else if (result.live_reload) setAiIdentityModelActionMsg("Modèle changé avec succès.");
+      else setAiIdentityModelActionMsg("Modèle sélectionné, mais le rechargement à chaud a échoué — redémarre pour l'appliquer.");
+      loadAiIdentityModels();
+    } catch (err) {
+      setAiIdentityModelActionMsg(err instanceof Error ? err.message : "Échec de l'activation.");
+    } finally {
+      setAiIdentityModelActionBusy(false);
+    }
+  };
+
+  const deleteAiIdentityModel = async (unique_id: string) => {
+    if (!confirm("Supprimer définitivement ce modèle ?")) return;
+    setAiIdentityModelActionBusy(true);
+    setAiIdentityModelActionMsg(null);
+    try {
+      await fetchJson(`/app-api/v1/ai-training/identity-models/${unique_id}`, { method: "DELETE" });
+      loadAiIdentityModels();
+    } catch (err) {
+      setAiIdentityModelActionMsg(err instanceof Error ? err.message : "Échec de la suppression.");
+    } finally {
+      setAiIdentityModelActionBusy(false);
     }
   };
 
@@ -1603,7 +1663,7 @@ export default function ConfigurationPage() {
             <span className="rounded-md border border-white/20 px-3 py-1.5">Ouvrir ↗</span>
           </a>
 
-          <h3 className="mb-2 text-sm font-medium">Gestion des modèles</h3>
+          <h3 className="mb-2 text-sm font-medium">Modèle 1 — Détection (Cat + Prey)</h3>
           {aiModels && aiModels.length === 0 && (
             <p className="text-sm text-white/65">Rien ici pour l'instant. Entraîne d'abord un modèle sur Paws Review.</p>
           )}
@@ -1700,6 +1760,58 @@ export default function ConfigurationPage() {
               </div>
             </div>
           )}
+
+          {/* 05.11, Sid ("il faut que la distinction entre modèle 1 et
+              modèle 2 soit bien claire") - section séparée, jamais mélangée
+              visuellement avec celle du Modèle 1 ci-dessus. Le backend
+              (GET/activate/delete identity-models, voir webui_api.py)
+              existait déjà mais n'était branché à aucune UI - c'était la
+              vraie lacune, pas un bug ici. */}
+          <h3 className="mb-2 mt-5 text-sm font-medium">Modèle 2 — Identité (Pookie / Patoune / Nala / Boubou)</h3>
+          {aiIdentityModels && aiIdentityModels.length === 0 && (
+            <p className="text-sm text-white/65">Rien ici pour l'instant. Entraîne d'abord un modèle sur Paws Review.</p>
+          )}
+          {aiIdentityModels && aiIdentityModels.length > 0 && (
+            <div className="flex flex-col gap-2">
+              {aiIdentityModels.map((m) => (
+                <div
+                  key={m.unique_id}
+                  className="flex items-center justify-between gap-2 rounded-lg bg-white/5 p-3"
+                >
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      {m.is_active && (
+                        <span className="rounded bg-green-500/20 px-1.5 py-0.5 text-xs text-green-300">
+                          Actif
+                        </span>
+                      )}
+                      <span className="truncate font-medium">{m.display_name}</span>
+                    </div>
+                    <div className="mt-1 text-xs text-white/65">{m.creation_date}</div>
+                  </div>
+                  <div className="flex shrink-0 gap-1">
+                    <button
+                      onClick={() => activateAiIdentityModel(m.unique_id)}
+                      disabled={aiIdentityModelActionBusy || m.is_active}
+                      title="Utiliser ce modèle maintenant"
+                      className="rounded-md border border-white/20 px-2 py-1.5 text-sm hover:bg-white/10 disabled:opacity-40"
+                    >
+                      {aiIdentityModelActionBusy ? "…" : "✓"}
+                    </button>
+                    <button
+                      onClick={() => deleteAiIdentityModel(m.unique_id)}
+                      disabled={aiIdentityModelActionBusy || m.is_active}
+                      title={m.is_active ? "Ce modèle est actif, impossible à supprimer" : "Supprimer ce modèle"}
+                      className="rounded-md border border-red-400/40 px-2 py-1.5 text-sm text-red-300 hover:bg-red-400/10 disabled:opacity-40"
+                    >
+                      🗑️
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+          {aiIdentityModelActionMsg && <p className="mt-2 text-sm text-white/70">{aiIdentityModelActionMsg}</p>}
         </Section>
         <Section title="Réglages Live view" description="Intervalle de rafraîchissement de la caméra en direct.">
           {liveView && (
