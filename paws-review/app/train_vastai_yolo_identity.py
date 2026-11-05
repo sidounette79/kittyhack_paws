@@ -38,6 +38,7 @@ import zipfile
 
 import requests
 
+from app.build_combined_identity_training_set import build_combined_identity_training_zip
 from app.build_large_rfid_training_set import build_large_rfid_training_zip
 from app.config import STORAGE_ROOT
 from app.export_identity_training import build_identity_training_zip
@@ -61,7 +62,7 @@ log = logging.getLogger(__name__)
 # distinct de train_identity_state.json (train_vastai_identity.py, ancienne
 # approche embeddings/ArcFace jamais activée en prod) - c'est désormais ce
 # fichier-ci que main.py's /app-api/identity-train/start branche, voir plus
-# bas run_large_rfid_identity_training()/start_large_rfid_identity_training_async().
+# bas run_combined_identity_training()/start_combined_identity_training_async().
 STATE_PATH = os.path.join(STORAGE_ROOT, "train_yolo_identity_state.json")
 _run_lock = threading.Lock()
 
@@ -369,11 +370,11 @@ def run_yolo_identity_training_from_zip(api_key: str, zip_path: str) -> dict:
     tel quel par /app-api/identity-model/training-data) puis reutilise
     EXACTEMENT la meme location/attente/destruction.
 
-    05.11 : utilisé en interne par run_large_rfid_identity_training()
+    05.11 : utilisé en interne par run_combined_identity_training()
     ci-dessous, qui construit lui-même le zip (voir
-    app/build_large_rfid_training_set.py, reconstruit après la perte du
-    script original du 02.11) - gardé comme point d'entrée séparé pour un
-    usage CLI avec un zip déjà construit ailleurs."""
+    app/build_combined_identity_training_set.py, reconstruit après la
+    perte des scripts originaux du 02.11/04.11) - gardé comme point
+    d'entrée séparé pour un usage CLI avec un zip déjà construit ailleurs."""
     if not UPLOAD_TOKEN:
         msg = "MODEL_UPLOAD_TOKEN non configure cote serveur, abandon."
         log.error(msg)
@@ -390,15 +391,21 @@ def run_yolo_identity_training_from_zip(api_key: str, zip_path: str) -> dict:
     return _rent_train_and_wait(api_key)
 
 
-# 05.11, Sid ("reconstruire le vrai pipeline") - point d'entrée désormais
-# branché au bouton web "Modèle 2" (main.py:/app-api/identity-train/start),
-# remplace l'ancien branchement sur train_vastai_identity.py (approche
-# embeddings/ArcFace abandonnée, plafonnait à ~58-64% sur le jeu de test
-# figé). target_per_cat=1800 reproduit le run du 02.11 qui a produit le
-# 92.8% actuellement en prod - voir build_large_rfid_training_set.py pour
-# le détail de la sélection (cap par bloc/visite, exclusion du jeu de
-# test, exclusion proie-coexistante).
-def run_large_rfid_identity_training(api_key: str, target_per_cat: int = 1800) -> dict:
+# 05.11, Sid ("reconstruire le vrai pipeline", puis "quid de toutes celles
+# de reolink qu'on a rajoutée ?") - point d'entrée désormais branché au
+# bouton web "Modèle 2" (main.py:/app-api/identity-train/start), remplace
+# l'ancien branchement sur train_vastai_identity.py (approche embeddings/
+# ArcFace abandonnée, plafonnait à ~58-64% sur le jeu de test figé). Une
+# première reconstruction (RFID Kittyflap seul) a raté la moitié du
+# dataset réel : le modèle actif aujourd'hui combine RFID Kittyflap
+# (jusqu'à rfid_target_per_cat/chat) ET le pool Reolink/manuel validé à la
+# main dans Paws Review (dupliqué reolink_duplication fois) - voir
+# build_combined_identity_training_set.py pour le détail, reconstruit par
+# inspection directe du zip réel du run actif (toujours sur disque au
+# moment de cette correction).
+def run_combined_identity_training(
+    api_key: str, rfid_target_per_cat: int = 1800, reolink_duplication: int = 3,
+) -> dict:
     if not UPLOAD_TOKEN:
         msg = "MODEL_UPLOAD_TOKEN non configure cote serveur, abandon."
         log.error(msg)
@@ -406,8 +413,15 @@ def run_large_rfid_identity_training(api_key: str, target_per_cat: int = 1800) -
         return {"status": "error", "message": msg}
 
     _write_state({"status": "running", "step": "export", "started_at": time.time()})
-    log.info("Construction du zip de crops identite (dataset RFID large, cible %d/chat)...", target_per_cat)
-    stats = build_large_rfid_training_zip(IDENTITY_TRAINING_DATA_PATH, target_per_cat=target_per_cat)
+    log.info(
+        "Construction du zip combine (RFID %d/chat + Reolink/manuel x%d)...",
+        rfid_target_per_cat, reolink_duplication,
+    )
+    stats = build_combined_identity_training_zip(
+        IDENTITY_TRAINING_DATA_PATH,
+        rfid_target_per_cat=rfid_target_per_cat,
+        reolink_duplication=reolink_duplication,
+    )
     log.info("Zip pret : %s", stats)
     if stats["included"] == 0:
         msg = "Aucun crop a entrainer, abandon."
@@ -418,31 +432,36 @@ def run_large_rfid_identity_training(api_key: str, target_per_cat: int = 1800) -
     return _rent_train_and_wait(api_key, images=stats["included"])
 
 
-_run_large_rfid_lock = threading.Lock()
+_run_combined_lock = threading.Lock()
 
 
-def start_large_rfid_identity_training_async(api_key: str, target_per_cat: int = 1800) -> bool:
+def start_combined_identity_training_async(
+    api_key: str, rfid_target_per_cat: int = 1800, reolink_duplication: int = 3,
+) -> bool:
     """Même patron que start_training_async()/start_identity_training_async
     - verrou propre à ce pipeline précis (n'empêche ni le Modèle 1 ni
     l'ancienne entrée identité CLI de tourner en parallèle, budgets Vast.ai
     séparés)."""
-    if not _run_large_rfid_lock.acquire(blocking=False):
+    if not _run_combined_lock.acquire(blocking=False):
         return False
     thread = threading.Thread(
-        target=_run_large_rfid_identity_training_locked, args=(api_key, target_per_cat), daemon=True,
+        target=_run_combined_identity_training_locked,
+        args=(api_key, rfid_target_per_cat, reolink_duplication), daemon=True,
     )
     thread.start()
     return True
 
 
-def _run_large_rfid_identity_training_locked(api_key: str, target_per_cat: int):
+def _run_combined_identity_training_locked(api_key: str, rfid_target_per_cat: int, reolink_duplication: int):
     try:
-        run_large_rfid_identity_training(api_key, target_per_cat=target_per_cat)
+        run_combined_identity_training(
+            api_key, rfid_target_per_cat=rfid_target_per_cat, reolink_duplication=reolink_duplication,
+        )
     except Exception as e:
-        log.exception("Entrainement identite (dataset RFID large) echoue")
+        log.exception("Entrainement identite (dataset combine RFID+Reolink) echoue")
         _write_state({"status": "error", "message": str(e)})
     finally:
-        _run_large_rfid_lock.release()
+        _run_combined_lock.release()
 
 
 def main():

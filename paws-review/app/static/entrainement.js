@@ -152,17 +152,19 @@ function renderTrainBar(state) {
 // 29.10, plan de scission détection/identité (Phase 2) - entraînement
 // complètement indépendant du Modèle 1 (état séparé côté serveur, voir
 // train_vastai_yolo_identity.py), peut tourner en même temps ou pas.
-// 05.11, Sid ("reconstruire le vrai pipeline") - ce bouton pointait avant
-// sur l'ancienne approche embeddings/ArcFace (train_vastai_identity.py,
-// jamais activée en prod, plafonnait à ~58-64%) alors que le modèle
-// réellement actif (92.8%) est un classificateur YOLO26-cls entraîné sur
-// un dataset RFID bien plus large - rebranché sur le bon pipeline
-// (train_vastai_yolo_identity.py + build_large_rfid_training_set.py),
-// mêmes étapes de progression que le Modèle 1.
+// 05.11, Sid ("reconstruire le vrai pipeline", puis "quid de toutes
+// celles de reolink qu'on a rajoutée ?") - ce bouton pointait avant sur
+// l'ancienne approche embeddings/ArcFace (train_vastai_identity.py,
+// jamais activée en prod, plafonnait à ~58-64%). Rebranché sur le vrai
+// pipeline (train_vastai_yolo_identity.py +
+// build_combined_identity_training_set.py) : le modèle actif (92.8%)
+// combine le RFID réel Kittyflap (jusqu'à 1800/chat) ET le pool
+// Reolink/manuel validé à la main dans Paws Review (dupliqué x3) - une
+// première version de ce rebranchement oubliait cette seconde moitié.
 let identityTrainPollTimer = null;
 
 const IDENTITY_TRAIN_STEP_LABELS = {
-  export: 'Construction du dataset (RFID réel, jusqu\'à 1800/chat)',
+  export: 'Construction du dataset (RFID réel + Reolink/manuel validé)',
   searching_offer: 'Recherche d\'une machine GPU',
   health_check: 'Vérification de la machine',
   training: 'Entraînement en cours',
@@ -190,7 +192,7 @@ async function startIdentityTraining() {
 
 function renderIdentityTrainBar(state) {
   const bar = document.getElementById('identity-train-bar');
-  const button = `<button onclick="startIdentityTraining()" title="Classificateur YOLO26 (task=classify) sur un dataset tiré directement des vrais événements RFID de production (jusqu'à 1800 crops/chat) - c'est ce pipeline qui a produit le modèle à 92.8% actif aujourd'hui">Lancer un entraînement Modèle 2 (identité)</button>`;
+  const button = `<button onclick="startIdentityTraining()" title="Classificateur YOLO26 (task=classify) sur RFID réel Kittyflap (jusqu'à 1800 crops/chat) + pool Reolink/manuel validé dans Paws Review (dupliqué x3) - c'est ce pipeline qui a produit le modèle à 92.8% actif aujourd'hui">Lancer un entraînement Modèle 2 (identité)</button>`;
   if (state.status === 'running') {
     const label = IDENTITY_TRAIN_STEP_LABELS[state.step] || 'En cours';
     const price = state.price ? ` - ${state.price.toFixed(3)}$/h` : '';

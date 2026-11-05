@@ -28,10 +28,11 @@ from app.train_vastai import STATE_PATH as TRAIN_STATE_PATH
 # pointait sur train_vastai_identity.py (approche embeddings/ArcFace,
 # plafonnait à ~58-64% sur le jeu de test figé, jamais activée en prod) au
 # lieu du pipeline qui a réellement produit le classificateur à 92.8% en
-# prod aujourd'hui (train_vastai_yolo_identity.py + dataset RFID large,
-# voir build_large_rfid_training_set.py) - rebranché ici.
+# prod aujourd'hui (train_vastai_yolo_identity.py + dataset combiné RFID
+# Kittyflap + Reolink/manuel, voir build_combined_identity_training_set.py)
+# - rebranché ici.
 from app.train_vastai_yolo_identity import read_state as read_identity_training_state
-from app.train_vastai_yolo_identity import start_large_rfid_identity_training_async
+from app.train_vastai_yolo_identity import start_combined_identity_training_async
 from app.train_vastai_yolo_identity import STATE_PATH as IDENTITY_TRAIN_STATE_PATH
 
 app = FastAPI(title="Paws Review")
@@ -778,19 +779,23 @@ async def identity_model_upload(file: UploadFile = File(...), x_upload_token: st
 @app.post("/app-api/identity-train/start")
 def identity_train_start():
     # 29.10 - même garde-fou que /train/start (Modèle 1) : verrou propre
-    # (start_large_rfid_identity_training_async a son propre _run_lock,
+    # (start_combined_identity_training_async a son propre _run_lock,
     # voir train_vastai_yolo_identity.py), jamais le même que le Modèle 1 -
     # les deux peuvent en théorie tourner en parallèle (budgets Vast.ai
     # séparés, résultats dans des répertoires séparés), pas une nécessité
     # de les rendre mutuellement exclusifs comme c'est le cas pour les 2
     # modes du Modèle 1 (qui partagent le même script/état).
-    # 05.11 : construit le dataset RFID large (1800 crops/chat tirés du
-    # RFID réel) + lance le classificateur YOLO26-cls - voir le commentaire
-    # sur l'import de train_vastai_yolo_identity plus haut dans ce fichier
-    # pour pourquoi ce n'est plus train_vastai_identity.py (ArcFace).
+    # 05.11 : construit le dataset COMBINÉ (RFID Kittyflap, 1800/chat, +
+    # pool Reolink/manuel validé dans Paws Review, dupliqué x3 - voir
+    # build_combined_identity_training_set.py) + lance le classificateur
+    # YOLO26-cls - voir le commentaire sur l'import de
+    # train_vastai_yolo_identity plus haut dans ce fichier pour pourquoi ce
+    # n'est plus train_vastai_identity.py (ArcFace). Une première version
+    # de ce branchement (toujours le 05.11) oubliait la moitié du dataset
+    # réel (RFID seul, sans Reolink) - corrigé après que Sid l'ait signalé.
     if not VAST_API_KEY:
         raise HTTPException(500, "VAST_API_KEY non configurée côté serveur")
-    started = start_large_rfid_identity_training_async(VAST_API_KEY)
+    started = start_combined_identity_training_async(VAST_API_KEY)
     if not started:
         raise HTTPException(409, "Un entraînement identité est déjà en cours")
     return {"ok": True}
