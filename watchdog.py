@@ -57,7 +57,7 @@ from src.mqtt import MQTTConfig
 from src.paths import kittyhack_root
 from src.model.yolo_model import YoloModel
 from src.model.identity_model import IdentityModel
-from src.model.identity import load_identity_model, MIN_CROP_AREA_PCT, UNKNOWN_CAT_LABEL
+from src.model.identity import load_identity_model, UNKNOWN_CAT_LABEL
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [WATCHDOG] %(message)s")
 log = logging.getLogger("watchdog")
@@ -818,10 +818,12 @@ class MouseDetector:
                     # (vrai bug en prod : Nala sort du cadre, un bout de
                     # queue confiant "Boubou" devient la seule identité vue
                     # ensuite). % de l'aire de l'image, pas un nombre de
-                    # pixels absolu - MIN_CROP_AREA_PCT importé directement,
+                    # pixels absolu. 05.11 : lu depuis CONFIG (réglable
+                    # depuis Configuration) au lieu d'une constante
+                    # importée - même clé que identity.py côté Kittyflap,
                     # une seule valeur de référence entre les deux chemins.
                     area_pct = ((cx2 - cx1) / frame_w * 100) * ((cy2 - cy1) / frame_h * 100) / 100
-                    if cx2 - cx1 >= 8 and cy2 - cy1 >= 8 and area_pct >= MIN_CROP_AREA_PCT:
+                    if cx2 - cx1 >= 8 and cy2 - cy1 >= 8 and area_pct >= float(CONFIG.get("IDENTITY_MIN_CROP_AREA_PCT", 2.0)):
                         label_cased, score = self.identity.identify_crop(
                             frame[cy1:cy2, cx1:cx2],
                         )

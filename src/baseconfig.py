@@ -249,6 +249,14 @@ SETTINGS_SCHEMA: list[Setting] = [
     # inchangée par rapport à aujourd'hui) sans jamais forcer les deux à
     # avancer de concert. Voir src/model/identity.py.
     _S("IDENTITY_MODEL", ""),
+    # 05.11, Sid ("le filtre à 2% pour chat inconnu, 2% c'est trop, il faut
+    # baisser à 1%... mais ptet que je reviendrais à 2%") - remplace la
+    # constante MIN_CROP_AREA_PCT jusqu'ici figée en dur dans
+    # src/model/identity.py (lue aussi par watchdog.py côté Reolink) :
+    # aire minimale (% de l'image) d'une boîte "Cat" pour qu'elle soit
+    # envoyée au Modèle 2 plutôt que de retomber directement sur
+    # UNKNOWN_CAT_LABEL (un bout de queue/patte trop petit).
+    _S("IDENTITY_MIN_CROP_AREA_PCT", 2.0, "float"),
     _S("INFERENCE_DEVICE", "cpu"),
     _S("STARTUP_SHUTDOWN_FLAG", False, "bool"),
     _S("NOT_GRACEFUL_SHUTDOWNS", 0, "int"),

@@ -374,6 +374,38 @@ export default function ConfigurationPage() {
     }
   };
 
+  // 05.11, Sid ("le filtre à 2% pour chat inconnu... il me faut un truc
+  // par palier de 0.5") - seuil d'aire minimale (% image) d'une boîte
+  // "Cat" en-dessous duquel elle retombe sur "Chat inconnu" sans même
+  // interroger le Modèle 2 (voir src/model/identity.py).
+  const [identityConfig, setIdentityConfig] = useState<{ min_crop_area_pct: number } | null>(null);
+  const [savingIdentityConfig, setSavingIdentityConfig] = useState(false);
+  const [identityConfigMsg, setIdentityConfigMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetchJson<{ min_crop_area_pct: number }>("/app-api/v1/config/identity")
+      .then(setIdentityConfig)
+      .catch(() => {});
+  }, []);
+
+  const saveIdentityConfig = async () => {
+    if (!identityConfig) return;
+    setSavingIdentityConfig(true);
+    setIdentityConfigMsg(null);
+    try {
+      await fetchJson("/app-api/v1/config/identity", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(identityConfig),
+      });
+      setIdentityConfigMsg("Enregistré.");
+    } catch (err) {
+      setIdentityConfigMsg(err instanceof Error ? err.message : "Échec de l'enregistrement.");
+    } finally {
+      setSavingIdentityConfig(false);
+    }
+  };
+
   const setExitRange = (idx: number, patch: Partial<ExitRange>) => {
     if (!doorControl) return;
     const ranges = doorControl.exit_ranges.map((r, i) => (i === idx ? { ...r, ...patch } : r));
@@ -1843,6 +1875,33 @@ export default function ConfigurationPage() {
             </div>
           )}
           {aiIdentityModelActionMsg && <p className="mt-2 text-sm text-white/70">{aiIdentityModelActionMsg}</p>}
+
+          {identityConfig && (
+            <>
+              <hr className="my-4 border-white/10" />
+              <Slider
+                label="Taille minimale de boîte pour tenter une identité"
+                value={identityConfig.min_crop_area_pct}
+                min={0}
+                max={10}
+                step={0.5}
+                unit="%"
+                onChange={(v) => setIdentityConfig({ ...identityConfig, min_crop_area_pct: v })}
+              />
+              <p className="mb-3 -mt-2 text-xs text-white/65">
+                Une boîte "Cat" plus petite que ce pourcentage de l'image (ex. un bout de queue ou de patte)
+                devient directement "Chat inconnu" sans solliciter le Modèle 2.
+              </p>
+              <button
+                onClick={saveIdentityConfig}
+                disabled={savingIdentityConfig}
+                className="w-full rounded-lg bg-white py-3 text-center font-medium text-black disabled:opacity-50"
+              >
+                💾 Enregistrer
+              </button>
+              {identityConfigMsg && <p className="mt-2 text-center text-sm text-white/70">{identityConfigMsg}</p>}
+            </>
+          )}
         </Section>
         <Section title="Réglages Live view" description="Intervalle de rafraîchissement de la caméra en direct.">
           {liveView && (

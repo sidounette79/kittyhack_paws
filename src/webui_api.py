@@ -2956,6 +2956,25 @@ async def post_config_advanced(request: Request, _user: str = Depends(require_se
     return JSONResponse({"ok": True})
 
 
+# 05.11, Sid ("le filtre à 2% pour chat inconnu, 2% c'est trop, il faut
+# baisser à 1%... mais ptet que je reviendrais à 2% alors il me faut un
+# truc par palier de 0.5") - voir src/model/identity.py pour l'usage réel
+# (CONFIG["IDENTITY_MIN_CROP_AREA_PCT"], lu aussi par watchdog.py côté
+# Reolink, même clé pour les deux chemins).
+@webui_app.get("/app-api/v1/config/identity")
+async def get_config_identity(_user: str = Depends(require_session)):
+    return JSONResponse({"min_crop_area_pct": float(CONFIG.get("IDENTITY_MIN_CROP_AREA_PCT", 2.0))})
+
+
+@webui_app.post("/app-api/v1/config/identity")
+async def post_config_identity(request: Request, _user: str = Depends(require_session)):
+    body = await request.json()
+    value = max(0.0, min(10.0, float(body.get("min_crop_area_pct", 2.0))))
+    CONFIG["IDENTITY_MIN_CROP_AREA_PCT"] = round(value * 2) / 2  # force les paliers de 0.5
+    update_single_config_parameter("IDENTITY_MIN_CROP_AREA_PCT")
+    return JSONResponse({"ok": True})
+
+
 # Add new cat - 09.09, Sid: moved here (from its own top-level nav tab) on
 # the Shiny side too, since adding a cat is a rare, one-off action.
 @webui_app.get("/app-api/v1/config/add-cat-state")
