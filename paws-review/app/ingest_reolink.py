@@ -39,13 +39,23 @@ from PIL import Image
 
 from app.cat_labels import recompute_cat_labels
 from app.catalog_db import get_conn, init_db
-from app.config import ORIGINALS_DIR, SOURCE_REOLINK_SAMPLES_DIR, THUMBNAILS_DIR
+from app.config import (
+    ORIGINALS_DIR,
+    SOURCE_REOLINK_EVENT_FRAMES_DIR,
+    SOURCE_REOLINK_SAMPLES_DIR,
+    THUMBNAILS_DIR,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [ingest_reolink] %(message)s")
 log = logging.getLogger(__name__)
 
 # Même format que journeys.py côté Kittyhack (_SAMPLE_RE) - {cam}_{date}_{heure}.jpg
 FILENAME_RE = re.compile(r"^(?P<cam>[a-z_]+)_(?P<date>\d{8})_(?P<time>\d{6})\.jpg$")
+# 05.11 - format DIFFÉRENT des training samples ci-dessus : les frames
+# d'événement côté Kittyhack (_EVENT_FRAME_RE, webui_api.py) portent les
+# millisecondes en plus, nécessaires pour distinguer les frames denses
+# (~1/s) d'un même passage.
+EVENT_FRAME_FILENAME_RE = re.compile(r"^(?P<cam>[a-z_]+)_(?P<date>\d{8})_(?P<time>\d{6})_(?P<ms>\d{3})\.jpg$")
 THUMB_SIZE = (320, 240)
 
 # 18.10, Sid ("ne garder que la caméra chatière pour l'import/le tri") -
@@ -210,6 +220,88 @@ def _backfill_missing_boxes() -> int:
                 recompute_cat_labels(conn, row["id"])
                 backfilled += 1
         return backfilled
+
+
+# 05.11, Sid ("je corrige dans parcours, j'envoie vers paws review et hop
+# j'envoie à l'entrainement en 4 clics") - miroir de
+# ingest.py:ingest_kittyflap_single pour le côté Reolink. Appelé depuis
+# kittyhack-remote (POST .../events/{block_id}/reolink-send-to-paws-
+# review), qui a déjà reconstruit les boîtes effectives (reviewedAs
+# appliqué, fausses détections exclues) de son côté. source_event_id
+# dérivé du MÊME nom de fichier avec _stable_event_id : si cette frame a
+# déjà été ingérée (improbable - les event frames ne passent normalement
+# jamais par le cycle automatique, qui ne lit que le sous-échantillon
+# TRAINING_SAMPLES_DIR), renvoyer la même photo après une nouvelle
+# correction met à jour la capture existante plutôt que d'en créer un
+# doublon, même logique que kittyflap.
+def ingest_reolink_single(payload: dict) -> dict:
+    filename = str(payload["filename"])
+    m = EVENT_FRAME_FILENAME_RE.match(filename)
+    if not m or os.path.basename(filename) != filename:
+        raise ValueError(f"nom de fichier invalide : {filename}")
+    boxes = payload.get("boxes") or []
+    already_confirmed = bool(payload.get("confirmed"))
+
+    os.makedirs(ORIGINALS_DIR, exist_ok=True)
+    os.makedirs(THUMBNAILS_DIR, exist_ok=True)
+    init_db()
+
+    src_path = os.path.join(SOURCE_REOLINK_EVENT_FRAMES_DIR, filename)
+    if not os.path.isfile(src_path):
+        raise FileNotFoundError(f"frame Reolink {filename} introuvable (déjà purgée ?)")
+
+    source_event_id = _stable_event_id(filename)
+    with open(src_path, "rb") as f:
+        img_bytes = f.read()
+    thumb_bytes = _make_thumbnail(img_bytes)
+
+    dst_original = os.path.join(ORIGINALS_DIR, f"reolink_{source_event_id}.jpg")
+    dst_thumb = os.path.join(THUMBNAILS_DIR, f"reolink_{source_event_id}.jpg")
+    with open(dst_original, "wb") as f:
+        f.write(img_bytes)
+    with open(dst_thumb, "wb") as f:
+        f.write(thumb_bytes)
+
+    created_at = payload.get("created_at") or _parse_created_at(m.group("date"), m.group("time"))
+    detected_objects_json = json.dumps(boxes)
+
+    with get_conn() as catalog:
+        existing = catalog.execute(
+            "SELECT id, review_status FROM captures WHERE source = 'reolink' AND source_event_id = ?",
+            (source_event_id,),
+        ).fetchone()
+        if existing is not None:
+            capture_id = existing["id"]
+            if already_confirmed:
+                new_status = "confirmed"
+            else:
+                new_status = "pending" if existing["review_status"] == "skipped_dedup" else existing["review_status"]
+            catalog.execute("DELETE FROM box_annotations WHERE capture_id = ?", (capture_id,))
+            catalog.execute(
+                """UPDATE captures SET
+                       created_at = ?, detected_objects_json = ?,
+                       dedup_of_id = NULL, review_status = ?
+                   WHERE id = ?""",
+                (created_at, detected_objects_json, new_status, capture_id),
+            )
+            action = "updated"
+        else:
+            cursor = catalog.execute(
+                """INSERT INTO captures (
+                       source, source_event_id, created_at,
+                       detected_objects_json, original_path, thumbnail_path,
+                       review_status
+                   ) VALUES ('reolink', ?, ?, ?, ?, ?, ?)""",
+                (
+                    source_event_id, created_at, detected_objects_json,
+                    dst_original, dst_thumb,
+                    "confirmed" if already_confirmed else "pending",
+                ),
+            )
+            capture_id = cursor.lastrowid
+            action = "inserted"
+        recompute_cat_labels(catalog, capture_id, None)
+    return {"ok": True, "capture_id": capture_id, "action": action}
 
 
 if __name__ == "__main__":

@@ -406,6 +406,29 @@ export default function EventModal({
     }
   };
 
+  // 05.11, Sid ("tant coté HK que reo") - miroir côté Reolink, pas de pid
+  // DB ici (voir correctReolink) donc on passe le filename, le serveur lit
+  // le sidecar JSON directement.
+  const sendReolinkToPawsReview = async () => {
+    if (!reolinkFrame) return;
+    setBusy(true);
+    try {
+      const result = await fetchJson<{ action: string }>(
+        `/app-api/v1/events/${blockId}/reolink-send-to-paws-review?filename=${encodeURIComponent(reolinkFrame.filename)}&confirmed=true`,
+        { method: "POST" }
+      );
+      setMessage(
+        result.action === "updated"
+          ? "Mise à jour envoyée vers Paws Review (validée)."
+          : "Envoyée vers Paws Review (validée)."
+      );
+    } catch {
+      setMessage("Échec de l'envoi vers Paws Review.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const pctFromEvent = (e: React.PointerEvent) => {
     const rect = imgWrapRef.current?.getBoundingClientRect();
     if (!rect) return { x: 0, y: 0 };
@@ -1018,6 +1041,14 @@ export default function EventModal({
                 title="Corriger tout le bloc (Reolink)"
               >
                 📦
+              </button>
+              <button
+                onClick={sendReolinkToPawsReview}
+                disabled={!reolinkFrame || busy}
+                className="rounded-md bg-white/10 px-3 py-2 text-sm disabled:opacity-30"
+                title="Envoyer cette frame, déjà corrigée, vers Paws Review (validée)"
+              >
+                📤
               </button>
             </div>
           </div>

@@ -14,6 +14,17 @@ SOURCE_REOLINK_SAMPLES_DIR = os.environ.get(
     "SOURCE_REOLINK_SAMPLES_DIR", "/source/reolink_samples"
 )
 
+# 05.11, Sid ("je corrige dans parcours, j'envoie vers paws review") -
+# DIFFÉRENT de SOURCE_REOLINK_SAMPLES_DIR ci-dessus : celui-là ne contient
+# qu'un sous-échantillon sparse/filtré (TRAINING_SAMPLES_DIR côté
+# watchdog.py), une frame vue/corrigée dans Parcours n'y est presque
+# jamais. Montage dédié en lecture seule sur EVENT_FRAMES_DIR côté
+# Kittyhack (watchdog_event_frames - TOUTES les frames de chaque
+# événement), voir ingest_reolink.py:ingest_reolink_single.
+SOURCE_REOLINK_EVENT_FRAMES_DIR = os.environ.get(
+    "SOURCE_REOLINK_EVENT_FRAMES_DIR", "/source/reolink_event_frames"
+)
+
 # Stockage propre à Paws Review, découplé du plafond interne de Kittyhack (~20000 photos)
 STORAGE_ROOT = os.environ.get("STORAGE_ROOT", "/storage")
 ORIGINALS_DIR = os.path.join(STORAGE_ROOT, "originals")

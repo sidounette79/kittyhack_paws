@@ -897,6 +897,24 @@ def ingest_kittyflap_single_route(payload: dict = Body(...), x_upload_token: str
     return result
 
 
+# 05.11, Sid ("je corrige dans parcours, j'envoie vers paws review") -
+# miroir de /app-api/ingest/kittyflap ci-dessus, pour le côté Reolink
+# (voir ingest_reolink.py:ingest_reolink_single pour l'upsert).
+@app.post("/app-api/ingest/reolink")
+def ingest_reolink_single_route(payload: dict = Body(...), x_upload_token: str = Header(default="")):
+    if MODEL_UPLOAD_TOKEN and x_upload_token != MODEL_UPLOAD_TOKEN:
+        raise HTTPException(403, "jeton invalide")
+    from app.ingest_reolink import ingest_reolink_single
+
+    try:
+        result = ingest_reolink_single(payload)
+    except FileNotFoundError as e:
+        raise HTTPException(404, str(e))
+    except (KeyError, TypeError, ValueError) as e:
+        raise HTTPException(400, f"payload invalide : {e}")
+    return result
+
+
 # 19.10, Sid ("crée le bouton et on teste ensuite en live") - la clé API
 # vast.ai vit ici en variable d'env (même frontière de confiance que
 # MODEL_UPLOAD_TOKEN, même conteneur) plutôt que saisie à la main à chaque

@@ -671,6 +671,54 @@ async def post_reolink_add_detection(block_id: int, request: Request, _user: str
     return JSONResponse({"idx": idx})
 
 
+# 05.11, Sid ("je corrige dans parcours, j'envoie vers paws reviews et hop
+# j'envoie à l'entrainement en 4 clics") - miroir de
+# post_picture_send_to_paws_review (boîtes Kittyflap) pour le côté
+# Reolink : même reconstruction (reviewedAs appliqué, fausses détections
+# exclues), mais depuis le sidecar JSON (pas de pid DB) plutôt que
+# _serialize_picture. Paws Review lit l'image elle-même directement
+# depuis EVENT_FRAMES_DIR (nouveau montage dédié sur le conteneur
+# paws-review, voir compose.yaml - différent du sous-échantillon sparse
+# TRAINING_SAMPLES_DIR que son cycle d'ingestion automatique lit déjà).
+@webui_app.post("/app-api/v1/events/{block_id}/reolink-send-to-paws-review")
+async def post_reolink_send_to_paws_review(block_id: int, filename: str, confirmed: bool = False, _user: str = Depends(require_session)):
+    m = _EVENT_FRAME_RE.match(filename)
+    json_path = _reolink_json_path(filename)
+    if not m or not json_path or not os.path.exists(json_path):
+        raise HTTPException(status_code=404, detail="frame introuvable")
+    with open(json_path, "r", encoding="utf-8") as f:
+        detections = json.load(f)
+
+    boxes = []
+    for det in detections:
+        label = det.get("reviewed_as") if det.get("reviewed") else det.get("name")
+        if not label or str(label).lower() == "none":
+            continue  # fausse détection écartée, jamais envoyée
+        boxes.append({
+            "object_name": label,
+            "probability": det.get("probability", 0),
+            "x": det.get("x", 0), "y": det.get("y", 0),
+            "width": det.get("width", 0), "height": det.get("height", 0),
+        })
+
+    created_at = f"{m.group('date')[:4]}-{m.group('date')[4:6]}-{m.group('date')[6:]} {m.group('time')[:2]}:{m.group('time')[2:4]}:{m.group('time')[4:]}"
+    payload = {
+        "filename": filename,
+        "created_at": created_at,
+        "boxes": boxes,
+        "confirmed": confirmed,
+    }
+    try:
+        resp = requests.post(
+            "http://192.168.178.127:8082/app-api/ingest/reolink", json=payload, timeout=15,
+            headers={"X-Upload-Token": os.environ.get("PAWS_REVIEW_UPLOAD_TOKEN", "")},
+        )
+        resp.raise_for_status()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Échec de l'envoi vers Paws Review : {e}")
+    return JSONResponse(resp.json())
+
+
 # 10.10, Sid ("l'image en live date d'hier"): the live camera-preview
 # snapshot watchdog.py's _save_frame_snapshot overwrites every poll (see
 # FRAME_SNAPSHOT_DIR there) - real FastAPI route now, see the dispatch
