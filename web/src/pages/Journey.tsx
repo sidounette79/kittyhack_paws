@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import BottomNav from "../components/BottomNav";
 import EventModal from "../components/EventModal";
@@ -11,6 +11,8 @@ import { fetchJson } from "../lib/api";
 import { shiftDate, todayLocalIso } from "../lib/date";
 import { useBackButton } from "../lib/useBackButton";
 import { usePageTitle } from "../lib/usePageTitle";
+
+const JOURNEY_POLL_MS = 15000;
 
 interface Capture {
   filename: string;
@@ -137,6 +139,27 @@ export default function JourneyPage() {
   useEffect(() => {
     load(date);
   }, [date, load]);
+
+  // 05.11, Sid ("si je suis sur la page parcours et qu'un nouvel événement
+  // arrive, je suis obligée de recharger la page... c'est possible ?") -
+  // même patron que Activity.tsx (POLL_MS)/Live.tsx (loadLastEvent) :
+  // rafraîchissement silencieux (ne vide pas `items` avant, pas de reload
+  // brutal sur erreur réseau passagère - juste la prochaine tentative dans
+  // JOURNEY_POLL_MS). Seulement pour le jour affiché = aujourd'hui : une
+  // date passée ne change plus, inutile de la repoller.
+  const dateRef = useRef(date);
+  dateRef.current = date;
+
+  useEffect(() => {
+    if (date !== todayLocalIso()) return;
+    const id = window.setInterval(() => {
+      if (dateRef.current !== todayLocalIso()) return;
+      fetchJson<{ items: TimelineItem[] }>(`/app-api/v1/journey?date=${dateRef.current}`)
+        .then((data) => setItems(data.items))
+        .catch(() => {});
+    }, JOURNEY_POLL_MS);
+    return () => window.clearInterval(id);
+  }, [date]);
 
   const captureAction = async (filename: string, action: "send" | "delete") => {
     setBusyFile(filename);
