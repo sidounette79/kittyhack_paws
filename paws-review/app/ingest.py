@@ -300,6 +300,12 @@ def ingest_kittyflap_single(payload: dict) -> dict:
     mouse_probability = payload.get("mouse_probability")
     own_cat_probability = payload.get("own_cat_probability")
     boxes = payload.get("boxes") or []
+    # 05.11, Sid ("je corrige dans parcours, j'envoie vers paws review et
+    # hop j'envoie à l'entrainement en 4 clics") - un envoi déclenché après
+    # une correction déjà faite dans Parcours (EventModal.tsx) porte ce
+    # drapeau explicite pour atterrir direct en "confirmed", sans repasser
+    # par la file "pending" qu'elle devrait de nouveau trier à la main.
+    already_confirmed = bool(payload.get("confirmed"))
 
     os.makedirs(ORIGINALS_DIR, exist_ok=True)
     os.makedirs(THUMBNAILS_DIR, exist_ok=True)
@@ -349,7 +355,10 @@ def ingest_kittyflap_single(payload: dict) -> dict:
         ).fetchone()
         if existing is not None:
             capture_id = existing["id"]
-            new_status = "pending" if existing["review_status"] == "skipped_dedup" else existing["review_status"]
+            if already_confirmed:
+                new_status = "confirmed"
+            else:
+                new_status = "pending" if existing["review_status"] == "skipped_dedup" else existing["review_status"]
             # Remplace detected_objects_json en entier (nouvelle liste de
             # boîtes, nouveaux indices) - toute correction déjà faite DANS
             # Paws Review (box_annotations, indexée sur l'ancien
@@ -393,7 +402,7 @@ def ingest_kittyflap_single(payload: dict) -> dict:
                     mouse_probability, own_cat_probability, int(is_prey_candidate), 0,
                     int(low_cat_confidence),
                     dst_original, dst_thumb, detected_objects_json,
-                    "pending",
+                    "confirmed" if already_confirmed else "pending",
                 ),
             )
             capture_id = cursor.lastrowid

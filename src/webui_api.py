@@ -1047,7 +1047,7 @@ async def post_picture_add_detection(pid: int, request: Request, _user: str = De
 # même (même volume partagé en lecture seule que son ingestion habituelle,
 # voir compose.yaml) et upsert la capture avec ces boîtes.
 @webui_app.post("/app-api/v1/pictures/{pid}/send-to-paws-review")
-async def post_picture_send_to_paws_review(pid: int, _user: str = Depends(require_session)):
+async def post_picture_send_to_paws_review(pid: int, confirmed: bool = False, _user: str = Depends(require_session)):
     database = CONFIG["KITTYHACK_DATABASE_PATH"]
     df = DatabaseCore.read_df_from_database(
         database,
@@ -1083,6 +1083,11 @@ async def post_picture_send_to_paws_review(pid: int, _user: str = Depends(requir
         "mouse_probability": None if pd.isna(row.get("mouse_probability")) else float(row["mouse_probability"]),
         "own_cat_probability": None if pd.isna(row.get("own_cat_probability")) else float(row["own_cat_probability"]),
         "boxes": boxes,
+        # 05.11, Parcours ("je corrige dans parcours, j'envoie vers paws
+        # review et hop j'envoie à l'entrainement") - seul EventModal.tsx
+        # passe ?confirmed=true ; PictureDetail.tsx (Photos) ne le passe
+        # pas, comportement "pending" inchangé là-bas.
+        "confirmed": confirmed,
     }
     try:
         # 25.10 : même constat que compose.yaml côté Paws Review

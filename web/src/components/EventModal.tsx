@@ -378,6 +378,34 @@ export default function EventModal({
     }
   };
 
+  // 05.11, Sid ("je corrige dans parcours, j'envoie vers paws reviews et
+  // hop j'envoie à l'entrainement en 4 clics") - même endpoint que
+  // PictureDetail.tsx (Photos), mais confirmed=true : une frame envoyée
+  // depuis Parcours a déjà été regardée et corrigée ici, elle n'a plus
+  // besoin de repasser par la file "pending" de Paws Review. Pas
+  // d'équivalent côté Reolink pour l'instant (pas de photo_id en base
+  // pour ces frames, mécanisme d'ingestion séparé) - bouton visible côté
+  // Pi uniquement.
+  const sendToPawsReview = async () => {
+    if (!frame) return;
+    setBusy(true);
+    try {
+      const result = await fetchJson<{ action: string }>(
+        `/app-api/v1/pictures/${frame.pid}/send-to-paws-review?confirmed=true`,
+        { method: "POST" }
+      );
+      setMessage(
+        result.action === "updated"
+          ? "Mise à jour envoyée vers Paws Review (validée)."
+          : "Envoyée vers Paws Review (validée)."
+      );
+    } catch {
+      setMessage("Échec de l'envoi vers Paws Review.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const pctFromEvent = (e: React.PointerEvent) => {
     const rect = imgWrapRef.current?.getBoundingClientRect();
     if (!rect) return { x: 0, y: 0 };
@@ -798,6 +826,14 @@ export default function EventModal({
               title="Corriger tout le bloc (caméra Pi)"
             >
               📦
+            </button>
+            <button
+              onClick={sendToPawsReview}
+              disabled={!frame || busy}
+              className="rounded-md bg-white/10 px-3 py-2 text-sm disabled:opacity-30"
+              title="Envoyer cette photo, déjà corrigée, vers Paws Review (validée)"
+            >
+              📤
             </button>
           </div>
         </div>
