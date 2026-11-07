@@ -770,7 +770,7 @@ def _capture_card_html(sample: dict) -> str:
         <div class="kh-journey-capture-label">{cam} &middot; {time_str}</div>
         <div class="kh-journey-capture-actions">
             <button type="button" class="kh-journey-action-btn" data-journey-action="send"
-                data-filename="{filename}" title="{html_module.escape(_("Send to Label Studio"))}">
+                data-filename="{filename}" title="{html_module.escape(_("Send to Paws Review"))}">
                 {icon_svg("upload", margin_left="0", margin_right="0")}
             </button>
             <button type="button" class="kh-journey-action-btn kh-journey-action-delete" data-journey-action="delete"

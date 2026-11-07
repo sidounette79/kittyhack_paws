@@ -353,7 +353,7 @@ def register_ai_training(input, output, session, ctx: SessionContext):
                 ui.div(
                     ui.markdown(
                         _(
-                            "Train your own AI model: label images with Label Studio, then submit them for training."
+                            "Train your own AI model: upload a labeled dataset (zip file) and submit it for training."
                         )
                         + " "
                         + _("Read the instructions before starting:")

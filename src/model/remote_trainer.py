@@ -607,7 +607,7 @@ class RemoteModelTrainer:
                         header=_("Model Training Aborted"),
                         message=_(
                             "The model training was aborted. This can happen if the provided training data was not correct. "
-                            "Please ensure you have exported the data from Label Studio as **'YOLO with Images'** and that your labels are set correctly in the images."
+                            "Please ensure your zip file is in **YOLO format with images** and that your labels are set correctly in the images."
                         ),
                         type="error",
                         id="model_training_aborted",

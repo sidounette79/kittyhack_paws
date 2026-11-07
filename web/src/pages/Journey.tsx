@@ -83,7 +83,7 @@ function CaptureThumb({
         <button
           onClick={onSend}
           disabled={busy}
-          title="Envoyer à Label Studio"
+          title="Envoyer à Paws Review"
           className="flex-1 rounded bg-white/10 py-1 text-xs hover:bg-white/20 disabled:opacity-40"
         >
           ⬆️
@@ -184,7 +184,7 @@ export default function JourneyPage() {
         );
         setMessage("Capture supprimée.");
       } else {
-        setMessage("Envoyé à Label Studio.");
+        setMessage("Envoyé à Paws Review.");
       }
     } catch (err) {
       setMessage(err instanceof Error ? err.message : "Échec de l'action.");
