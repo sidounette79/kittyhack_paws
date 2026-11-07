@@ -372,7 +372,8 @@ def ingest_kittyflap_single(payload: dict) -> dict:
                        prey_probability = ?, own_cat_probability = ?,
                        is_prey_candidate = ?, low_cat_confidence = ?,
                        detected_objects_json = ?, dedup_of_id = NULL,
-                       review_status = ?
+                       review_status = ?,
+                       reviewed_at = CASE WHEN ? THEN datetime('now') ELSE reviewed_at END
                    WHERE id = ?""",
                 (
                     cat_name, cat_source, rfid,
@@ -380,6 +381,7 @@ def ingest_kittyflap_single(payload: dict) -> dict:
                     mouse_probability, own_cat_probability,
                     int(is_prey_candidate), int(low_cat_confidence),
                     detected_objects_json, new_status,
+                    int(already_confirmed),
                     capture_id,
                 ),
             )
@@ -393,8 +395,8 @@ def ingest_kittyflap_single(payload: dict) -> dict:
                        prey_probability, own_cat_probability, is_prey_candidate, model_disagreement,
                        low_cat_confidence,
                        original_path, thumbnail_path, detected_objects_json,
-                       review_status
-                   ) VALUES (?,?,?,?, ?,?,?, ?,?, ?,?,?,?, ?, ?,?,?, ?)""",
+                       review_status, reviewed_at
+                   ) VALUES (?,?,?,?, ?,?,?, ?,?, ?,?,?,?, ?, ?,?,?, ?, CASE WHEN ? THEN datetime('now') END)""",
                 (
                     "kittyflap", event_id, block_id, created_at,
                     cat_name, cat_source, rfid,
@@ -403,6 +405,7 @@ def ingest_kittyflap_single(payload: dict) -> dict:
                     int(low_cat_confidence),
                     dst_original, dst_thumb, detected_objects_json,
                     "confirmed" if already_confirmed else "pending",
+                    int(already_confirmed),
                 ),
             )
             capture_id = cursor.lastrowid

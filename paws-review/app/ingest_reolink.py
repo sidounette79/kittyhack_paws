@@ -280,9 +280,10 @@ def ingest_reolink_single(payload: dict) -> dict:
             catalog.execute(
                 """UPDATE captures SET
                        created_at = ?, detected_objects_json = ?,
-                       dedup_of_id = NULL, review_status = ?
+                       dedup_of_id = NULL, review_status = ?,
+                       reviewed_at = CASE WHEN ? THEN datetime('now') ELSE reviewed_at END
                    WHERE id = ?""",
-                (created_at, detected_objects_json, new_status, capture_id),
+                (created_at, detected_objects_json, new_status, int(already_confirmed), capture_id),
             )
             action = "updated"
         else:
@@ -290,12 +291,13 @@ def ingest_reolink_single(payload: dict) -> dict:
                 """INSERT INTO captures (
                        source, source_event_id, created_at,
                        detected_objects_json, original_path, thumbnail_path,
-                       review_status
-                   ) VALUES ('reolink', ?, ?, ?, ?, ?, ?)""",
+                       review_status, reviewed_at
+                   ) VALUES ('reolink', ?, ?, ?, ?, ?, ?, CASE WHEN ? THEN datetime('now') END)""",
                 (
                     source_event_id, created_at, detected_objects_json,
                     dst_original, dst_thumb,
                     "confirmed" if already_confirmed else "pending",
+                    int(already_confirmed),
                 ),
             )
             capture_id = cursor.lastrowid
