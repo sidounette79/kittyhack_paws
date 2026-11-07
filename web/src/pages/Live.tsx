@@ -193,9 +193,19 @@ export default function LivePage() {
     }
   };
 
-  const updateMode = async (patch: Partial<ModeState>) => {
-    const next = { ...(mode ?? { entry: "known", exit: "allow" }), ...patch };
-    setMode(next);
+  // 07.11, Sid ("les chats ne peuvent plus sortir depuis ce matin", 8h de
+  // blocage): le 07.11 à 08:26 ce menu est passé en "configuration
+  // individuelle par chat" sans que Sid le veuille - en per-cat, la sortie
+  // exige une lecture RFID depuis l'intérieur, qui a échoué 71 fois sur 78.
+  // Un <select> natif sur mobile peut changer de valeur en faisant défiler
+  // la page avec le doigt posé dessus. Rien ne confirmait, et rien ne
+  // signalait ensuite que la sortie n'était plus simplement autorisée.
+  const [pendingMode, setPendingMode] = useState<Partial<ModeState> | null>(null);
+
+  const applyMode = async (patch: Partial<ModeState>) => {
+    setPendingMode(null);
+    const previous = mode;
+    setMode({ ...(mode ?? { entry: "known", exit: "allow" }), ...patch });
     try {
       const result = await fetchJson<ModeState>("/app-api/v1/live/mode", {
         method: "POST",
@@ -204,6 +214,7 @@ export default function LivePage() {
       });
       setMode(result);
     } catch {
+      setMode(previous);
       setMessage("Échec de la mise à jour du mode.");
     }
   };
@@ -409,13 +420,18 @@ export default function LivePage() {
           <div className="mb-2 text-center text-sm font-semibold text-white/80">
             Réglages rapides
           </div>
+          {/* Tant que le vrai réglage n'est pas chargé, ne rien afficher qui
+              ressemble à une valeur: la page montrait "Autoriser la sortie"
+              par défaut, donc elle pouvait dire l'inverse du serveur. */}
           <label className="mb-2 block text-sm">
             <span className="mb-1 block text-white/60">Direction entrée</span>
             <select
-              value={mode?.entry ?? "known"}
-              onChange={(e) => updateMode({ entry: e.target.value })}
-              className="w-full rounded-md border border-white/15 bg-neutral-900 px-2 py-2"
+              value={mode ? mode.entry : "__loading__"}
+              disabled={!mode}
+              onChange={(e) => setPendingMode({ entry: e.target.value })}
+              className="w-full rounded-md border border-white/15 bg-neutral-900 px-2 py-2 disabled:opacity-50"
             >
+              {!mode && <option value="__loading__">Chargement…</option>}
               {ENTRY_OPTIONS.map((o) => (
                 <option key={o.value} value={o.value}>
                   {o.label}
@@ -426,10 +442,12 @@ export default function LivePage() {
           <label className="block text-sm">
             <span className="mb-1 block text-white/60">Direction sortie</span>
             <select
-              value={mode?.exit ?? "allow"}
-              onChange={(e) => updateMode({ exit: e.target.value })}
-              className="w-full rounded-md border border-white/15 bg-neutral-900 px-2 py-2"
+              value={mode ? mode.exit : "__loading__"}
+              disabled={!mode}
+              onChange={(e) => setPendingMode({ exit: e.target.value })}
+              className="w-full rounded-md border border-white/15 bg-neutral-900 px-2 py-2 disabled:opacity-50"
             >
+              {!mode && <option value="__loading__">Chargement…</option>}
               {EXIT_OPTIONS.map((o) => (
                 <option key={o.value} value={o.value}>
                   {o.label}
@@ -437,7 +455,55 @@ export default function LivePage() {
               ))}
             </select>
           </label>
+
+          {mode && mode.exit !== "allow" && (
+            <div className="mt-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-200">
+              <span className="font-semibold">La sortie n'est pas simplement autorisée.</span>{" "}
+              {mode.exit === "deny"
+                ? "Aucun chat ne peut sortir."
+                : "Un chat ne peut sortir que si sa puce est lue depuis l'intérieur, ce qui échoue souvent."}
+              <button
+                onClick={() => applyMode({ exit: "allow" })}
+                className="mt-2 block w-full rounded-md bg-amber-500/20 px-3 py-1.5 font-semibold text-amber-100"
+              >
+                Réautoriser la sortie
+              </button>
+            </div>
+          )}
         </div>
+
+        {pendingMode && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+            <div className="w-full max-w-sm rounded-xl border border-white/15 bg-neutral-900 p-4">
+              <p className="mb-1 font-semibold">
+                Changer la direction {pendingMode.entry ? "entrée" : "sortie"} ?
+              </p>
+              <p className="mb-4 text-sm text-white/70">
+                {(pendingMode.entry
+                  ? ENTRY_OPTIONS.find((o) => o.value === pendingMode.entry)
+                  : EXIT_OPTIONS.find((o) => o.value === pendingMode.exit)
+                )?.label ?? ""}
+                {pendingMode.exit === "configure_per_cat" &&
+                  " — un chat ne pourra sortir que si sa puce est lue depuis l'intérieur, ce qui échoue souvent."}
+                {pendingMode.exit === "deny" && " — plus aucun chat ne pourra sortir."}
+              </p>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setPendingMode(null)}
+                  className="flex-1 rounded-md border border-white/15 px-3 py-2"
+                >
+                  Annuler
+                </button>
+                <button
+                  onClick={() => applyMode(pendingMode)}
+                  className="flex-1 rounded-md bg-white/15 px-3 py-2 font-semibold"
+                >
+                  Confirmer
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         <div className="mb-2 text-center text-sm font-semibold text-white/80">
           Caméras extérieures
