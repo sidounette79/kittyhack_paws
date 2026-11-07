@@ -120,6 +120,16 @@ export default function EventModal({
   const [activeObject, setActiveObject] = useState<DetectedObject | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  // 07.11, Sid ("ca doit juste être le text... quand je clique sur prey ca
+  // met le message de l'image") - un message de confirmation/erreur restait
+  // affiché indéfiniment tant qu'aucune autre action ne le remplaçait,
+  // donnant l'impression trompeuse qu'un simple clic sur une boîte avait
+  // redéclenché l'envoi. S'efface tout seul après quelques secondes.
+  useEffect(() => {
+    if (!message) return;
+    const t = window.setTimeout(() => setMessage(null), 4000);
+    return () => window.clearTimeout(t);
+  }, [message]);
   const [drawing, setDrawing] = useState(false);
   const [draft, setDraft] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
   const playTimerRef = useRef<number | null>(null);
@@ -714,6 +724,7 @@ export default function EventModal({
                         if (drawing) return;
                         setPlaying(false);
                         setActiveObject(obj);
+                        setMessage(null);
                       }}
                       className="absolute text-left"
                       style={{
@@ -909,6 +920,7 @@ export default function EventModal({
                             if (reolinkDrawing) return;
                             setReolinkPlaying(false);
                             setActiveReolinkObject(obj);
+                            setMessage(null);
                           }}
                           className="absolute text-left"
                           style={{
