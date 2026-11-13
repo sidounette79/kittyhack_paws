@@ -188,7 +188,26 @@ TIMEOUT_S = 20 * 60 + TRAIN_EPOCHS * 250  # au-delà, quelque chose s'est mal pa
 # "exited"/cur_state="stopped" sans jamais produire de résultat. Même
 # symptôme les deux fois, deux runs séparés à un jour d'écart - pas une
 # coïncidence isolée.
-PERMANENTLY_EXCLUDED_HOSTS = {85323, 155385, 135723, 102063}
+# 13.11, Sid (faux positifs de proie, réentraînement) : hôte 1647 loué
+# DEUX FOIS d'affilée en quelques minutes, échec identique les deux fois -
+# son pilote NVIDIA ne supporte que CUDA 12.2 alors que l'image
+# vastai/pytorch_latest embarque torch cu130, d'où
+# "torch.cuda.is_available(): False" puis "ValueError: Invalid CUDA
+# 'device=0' requested" dès le lancement de `yolo train`. C'est la cause
+# racine que MIN_CUDA_MAX_GOOD ci-dessous règle pour de bon ; l'exclusion
+# reste par ceinture et bretelles.
+PERMANENTLY_EXCLUDED_HOSTS = {85323, 155385, 135723, 102063, 1647}
+
+# 13.11 : le vrai filtre, plutôt que d'exclure les mauvais hôtes un par un
+# au fil des échecs. `cuda_max_good` est la version CUDA maximale que le
+# PILOTE de l'hôte supporte ; en dessous de 13.0, le torch cu130 de
+# l'image ne voit aucun GPU et l'entraînement meurt immédiatement en
+# laissant l'instance tourner (facturée) jusqu'au TIMEOUT_S de 45 min,
+# parce que check_instance_health() ne cherche que les erreurs OCI dans
+# status_msg et juge la machine saine. Mesuré le 13.11 sur les offres
+# réelles : 51 compatibles sur 64, donc le filtre ne coûte presque rien
+# en choix mais supprime 1 lancement perdu sur 5.
+MIN_CUDA_MAX_GOOD = 13.0
 
 # 19.10, Sid ("si on peut, par principe, exclure chine, russie, israel etc
 # ca m'arrange") - préférence personnelle, pas une question de fiabilité :
@@ -325,6 +344,7 @@ def find_cheapest_offer(api_key: str, exclude_host_ids: set | None = None) -> di
             "reliability2": {"gte": 0.98},
             "dph_total": {"lte": MAX_PRICE_PER_HOUR},
             "rentable": {"eq": True},
+            "cuda_max_good": {"gte": MIN_CUDA_MAX_GOOD},
             "order": [["reliability2", "desc"], ["dph_total", "asc"]],
         },
         timeout=30,
@@ -332,12 +352,19 @@ def find_cheapest_offer(api_key: str, exclude_host_ids: set | None = None) -> di
     resp.raise_for_status()
     offers = (resp.json() or {}).get("offers", [])
     offers = [o for o in offers if o.get("host_id") not in exclude_host_ids]
+    # Re-filtré ici en plus du corps de la requête : tous les champs ne
+    # sont pas réellement filtrables côté serveur vast.ai, et une offre
+    # au pilote trop vieux qui passerait au travers coûterait 45 min.
+    offers = [o for o in offers if float(o.get("cuda_max_good") or 0) >= MIN_CUDA_MAX_GOOD]
     offers = [
         o for o in offers
         if (o.get("geolocation") or "").split(",")[-1].strip().upper() not in EXCLUDED_COUNTRIES
     ]
     if not offers:
-        raise RuntimeError(f"Aucune offre disponible sous {MAX_PRICE_PER_HOUR}$/h pour {GPU_NAME}/RTX 4090")
+        raise RuntimeError(
+            f"Aucune offre disponible sous {MAX_PRICE_PER_HOUR}$/h pour "
+            f"{GPU_NAME}/RTX 4090 avec cuda_max_good >= {MIN_CUDA_MAX_GOOD}"
+        )
 
     preferred = [o for o in offers if o.get("host_id") in PREFERRED_HOSTS]
     best = preferred[0] if preferred else offers[0]
