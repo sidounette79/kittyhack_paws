@@ -1554,21 +1554,23 @@ export default function ConfigurationPage() {
               )}
 
               <hr className="my-4 border-white/10" />
+              {/* 16.11: AFFICHAGE SEUL. C'était une liste déroulante, et son
+                  enregistrement renvoyait la valeur chargée à l'ouverture de la
+                  page, écrasant le modèle activé entre-temps depuis
+                  « Entraînement IA ». Le modèle réentraîné du 14.11 n'a ainsi
+                  tourné que 13 minutes. Le choix du modèle vit désormais
+                  uniquement dans « Entraînement IA » (bouton Activer), qui
+                  recharge le runtime à chaud. Ne pas remettre de liste
+                  déroulante ici. */}
               <Field label="Modèle de détection d'objets">
-                <select
-                  value={doorControl.selected_model}
-                  onChange={(e) => setDoorControl({ ...doorControl, selected_model: e.target.value })}
-                  className="w-full rounded-md border border-white/15 bg-neutral-900 px-3 py-2"
-                >
-                  {models.map((m) => (
-                    <option key={m.id} value={m.id}>
-                      {m.label}
-                    </option>
-                  ))}
-                </select>
+                <div className="w-full rounded-md border border-white/10 bg-neutral-900/60 px-3 py-2 text-white/80">
+                  {models.find((m) => m.id === doorControl.selected_model)?.label ??
+                    doorControl.selected_model ??
+                    "—"}
+                </div>
               </Field>
               <p className="mb-3 text-xs text-white/60">
-                Changer ce réglage nécessite un redémarrage de la chatière pour s'appliquer.
+                Se change dans « Entraînement IA », avec le bouton Activer du modèle voulu.
               </p>
 
               <hr className="my-4 border-white/10" />

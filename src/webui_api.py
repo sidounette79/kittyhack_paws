@@ -2717,6 +2717,10 @@ async def get_config_models(_user: str = Depends(require_session)):
 async def get_config_door_control(_user: str = Depends(require_session)):
     from src.baseconfig import AllowedToEnter, AllowedToExit
 
+    # 16.11: renvoyé pour AFFICHAGE SEULEMENT (quel modèle tourne), jamais pour
+    # être réécrit par le POST ci-dessous — voir son commentaire. Ne pas en
+    # refaire un champ modifiable: le choix du modèle appartient à
+    # « Entraînement IA » et à son endpoint /activate.
     selected_model = (
         f"tflite::{CONFIG['TFLITE_MODEL_VERSION']}"
         if CONFIG.get("TFLITE_MODEL_VERSION")
@@ -2791,18 +2795,22 @@ async def post_config_door_control(request: Request, _user: str = Depends(requir
             if not _TIME_HHMM_RE.match(v):
                 raise HTTPException(status_code=400, detail=f"invalid time '{v}', expected HH:MM")
 
-    # 07.10: "ensure only one of the two is set" - same as the Shiny save
-    # handler's own comment, otherwise a stale TFLITE_MODEL_VERSION/YOLO_MODEL
-    # from a previous selection could silently win over the new one wherever
-    # the backend picks which of the two to load.
-    selected_model = str(body.get("selected_model") or "")
-    if selected_model.startswith("tflite::"):
-        CONFIG["TFLITE_MODEL_VERSION"] = selected_model.split("::", 1)[1]
-        CONFIG["YOLO_MODEL"] = ""
-    elif selected_model.startswith("yolo::"):
-        CONFIG["YOLO_MODEL"] = selected_model.split("::", 1)[1]
-        CONFIG["TFLITE_MODEL_VERSION"] = ""
-
+    # 16.11: ce formulaire NE CHOISIT PLUS LE MODÈLE. Il portait un champ
+    # `selected_model` qui réécrivait YOLO_MODEL/TFLITE_MODEL_VERSION à chaque
+    # enregistrement — avec la valeur qu'avait le sélecteur AU CHARGEMENT de la
+    # page. Conséquence mesurée dans les logs : Sid active un modèle depuis
+    # « Entraînement IA », puis touche un seuil ici, et l'enregistrement remet
+    # l'ancien modèle par-dessus. Le modèle réentraîné du 14.11 n'a ainsi
+    # tourné que 13 minutes (activé à 05:39:44 UTC, écrasé à 05:52:56), et
+    # l'écrasement s'est reproduit deux fois le 16.11 à 08:13 et 08:14 —
+    # pendant que Sid croyait observer le nouveau modèle depuis deux jours.
+    #
+    # Le choix du modèle a déjà son endpoint dédié
+    # (`POST /app-api/v1/ai-training/models/{id}/activate`), qui recharge le
+    # runtime à chaud et est le SEUL à écrire ces deux clés. Un champ
+    # `selected_model` encore envoyé par un vieux client est donc ignoré
+    # volontairement, et ni YOLO_MODEL ni TFLITE_MODEL_VERSION ne figurent
+    # plus dans la liste des clés persistées ci-dessous.
     CONFIG["MIN_THRESHOLD"] = float(body.get("min_threshold", CONFIG["MIN_THRESHOLD"]))
     CONFIG["MOUSE_THRESHOLD"] = float(body.get("mouse_threshold", CONFIG["MOUSE_THRESHOLD"]))
     CONFIG["MOUSE_CONSENSUS_THRESHOLD"] = float(
@@ -2847,7 +2855,7 @@ async def post_config_door_control(request: Request, _user: str = Depends(requir
         "CAT_THRESHOLD", "MIN_SECONDS_TO_ANALYZE",
         "LOCK_DURATION_AFTER_PREY_DETECTION", "MOUSE_CHECK_ENABLED",
         "BLOCK_EXIT_AFTER_PREY_ENTRY_ENABLED", "BLOCK_EXIT_AFTER_PREY_ENTRY_DURATION",
-        "TFLITE_MODEL_VERSION", "YOLO_MODEL", "USE_CAMERA_FOR_CAT_DETECTION",
+        "USE_CAMERA_FOR_CAT_DETECTION",
         "USE_CAMERA_FOR_MOTION_DETECTION", "COMBINE_PIR_AND_CAMERA_OUTSIDE_MOTION",
         "PAUSE_CAMERA_WHEN_IDLE", "ALLOWED_TO_ENTER", "ALLOWED_TO_EXIT",
         "ALLOWED_TO_EXIT_RANGE1", "ALLOWED_TO_EXIT_RANGE1_FROM", "ALLOWED_TO_EXIT_RANGE1_TO",
