@@ -105,6 +105,56 @@ class BackendLoopContext:
 # Capture startup state (does not change at runtime)
 DISABLE_RFID_READER_STARTUP = CONFIG.get('DISABLE_RFID_READER', False)
 
+# 16.11: deux signaux Reolink peuvent être appliqués à 0,1 s d'intervalle
+# (constaté le 10.11 : 84 % puis 82 %), et la caméra Kittyflap peut détecter
+# la même proie dans la foulée. Une seule alerte par épisode suffit — le
+# verrou, lui, dure 240 s.
+PREY_NOTIFICATION_COOLDOWN_S = 60.0
+
+
+def _notify_prey_from_reolink(probability, reason: str) -> None:
+    """Alerte quand c'est la caméra EXTÉRIEURE qui fait verrouiller.
+
+    16.11, Sid : « je reçois aussi si c'est Reolink qui donne l'ordre de
+    verrouiller ? ». La réponse était non : la notification de proie de la
+    boucle est accrochée au basculement de `no_mouse_detected`, que le chemin
+    Reolink ne touche pas — il écrit directement `prey_detection_mono`. Une
+    entrée pouvait donc être bloquée sans aucune alerte.
+
+    Pas de photo ici : le watchdog ne transmet qu'une probabilité à
+    `POST /reolink/prey-signal` (voir son docstring). Le message renvoie donc
+    vers Parcours, où l'image de la Reolink avec sa boîte est bien visible.
+    """
+    try:
+        if not CONFIG['NOTIFY_PREY_DETECTED']:
+            return
+        dernier = float(getattr(backend_main, "last_prey_notification_mono", 0.0) or 0.0)
+        if dernier > 0.0 and (_mono() - dernier) < PREY_NOTIFICATION_COOLDOWN_S:
+            logging.info(
+                "[BACKEND] Reolink prey notification skipped (une alerte proie vient de partir)."
+            )
+            return
+        backend_main.last_prey_notification_mono = _mono()
+        try:
+            prob_txt = f"{float(probability):.0f}%"
+        except (TypeError, ValueError):
+            prob_txt = "?"
+        lock_minutes = int(float(CONFIG['LOCK_DURATION_AFTER_PREY_DETECTION']) // 60)
+        body = _(
+            "Prey seen by the outside camera ({probability}) - entry blocked for "
+            "{minutes} min. False alarm? Reset the cooldown from Live view."
+        ).format(probability=prob_txt, minutes=lock_minutes)
+        send_notification_to_all(
+            _("Paws Flap"), body, url="/journey/", tag=f"kittyhack-prey-reolink-{_mono():.3f}"
+        )
+        send_fcm_notification_to_all_sync(_("Paws Flap"), body, url="/journey/")
+        logging.info(
+            f"[BACKEND] Reolink prey notification sent ({prob_txt}, {reason})."
+        )
+    except Exception as e:
+        logging.warning(f"[BACKEND] Failed to send Reolink prey push notification: {e}")
+
+
 def backend_main(
     simulate_kittyflap=None,
     *,
@@ -216,6 +266,9 @@ def backend_main(
     backend_main.prey_detection_mono = 0.0
     backend_main.reolink_prey_signal_applied_mono = 0.0
     backend_main.reolink_prey_signal_history = []
+    # 16.11: verrou anti-doublon partagé entre l'alerte proie de la Kittyflap
+    # et celle de la Reolink (PREY_NOTIFICATION_COOLDOWN_S).
+    backend_main.last_prey_notification_mono = 0.0
     # 08.10, Sid: external wake request for PAUSE_CAMERA_WHEN_IDLE, set by
     # POST /camera/wake (src/api.py) - see that block below for the read.
     backend_main.camera_external_wake_until_mono = 0.0
@@ -2239,6 +2292,16 @@ def backend_main(
                     f"extending the post-prey lock window."
                 )
                 timeline_append(motion_timeline_entries, TimelineAction.REOLINK_PREY_SIGNAL_APPLIED)
+                # 16.11, Sid : « je reçois aussi [une notification] si c'est
+                # Reolink qui donne l'ordre de verrouiller ? » — NON, jusqu'ici.
+                # La notification de proie plus bas est accrochée au
+                # basculement de `no_mouse_detected`, que ce chemin ne touche
+                # jamais : il écrit `prey_detection_mono`, donc il verrouille,
+                # en silence. Et quand `prey_mono` valait 0 (rien vu côté
+                # Kittyflap), ce signal ne PROLONGE pas une fenêtre, il la
+                # CRÉE. Cas réel : le 10.11 à 19:26, deux signaux (84 % puis
+                # 82 %) ont verrouillé sans que Sid soit prévenue.
+                _notify_prey_from_reolink(reolink_signal_prob, reolink_apply_reason)
 
         no_prey_within_timeout_effective = no_prey_within_timeout(
             per_cat_prey_detection_disabled,
@@ -2348,6 +2411,13 @@ def backend_main(
                             send_fcm_notification_to_all_sync(
                                 _("Paws Flap"), prey_body, url="/", image=prey_photo_url
                             )
+                            # 16.11: marqueur partagé avec
+                            # _notify_prey_from_reolink - la caméra extérieure
+                            # et la Kittyflap voient souvent la même chose à
+                            # quelques secondes d'écart, une seule alerte
+                            # suffit. Celle-ci a priorité: elle porte le nom du
+                            # chat et la photo.
+                            backend_main.last_prey_notification_mono = _mono()
                     except Exception as e:
                         logging.warning(f"[BACKEND] Failed to send prey push notification: {e}")
                 logging.info(
