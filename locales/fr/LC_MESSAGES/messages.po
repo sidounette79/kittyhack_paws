@@ -4140,6 +4140,12 @@ msgstr "Proie détectée ({cat}) - entrée bloquée {minutes} min. Fausse alerte
 msgid "Prey seen by the outside camera ({probability}) - entry blocked for {minutes} min. False alarm? Reset the cooldown from Live view."
 msgstr "Proie vue par la caméra extérieure ({probability}) - entrée bloquée {minutes} min. Fausse alerte ? Réinitialise le cooldown depuis Vue en direct."
 
+msgid "{cat}: prey detected"
+msgstr "{cat} : proie détectée"
+
+msgid "Prey detected (outside camera, {probability})"
+msgstr "Proie détectée (caméra extérieure, {probability})"
+
 msgid "Entry"
 msgstr "Entrée"
 

@@ -139,15 +139,19 @@ def _notify_prey_from_reolink(probability, reason: str) -> None:
             prob_txt = f"{float(probability):.0f}%"
         except (TypeError, ValueError):
             prob_txt = "?"
-        lock_minutes = int(float(CONFIG['LOCK_DURATION_AFTER_PREY_DETECTION']) // 60)
-        body = _(
-            "Prey seen by the outside camera ({probability}) - entry blocked for "
-            "{minutes} min. False alarm? Reset the cooldown from Live view."
-        ).format(probability=prob_txt, minutes=lock_minutes)
-        send_notification_to_all(
-            _("Paws Flap"), body, url="/journey/", tag=f"kittyhack-prey-reolink-{_mono():.3f}"
+        # 16.11, Sid : « le message peut être juste "Nom du chat : proie
+        # détectée" ». Côté Reolink on n'a pas de nom de chat (la caméra
+        # extérieure ne lit aucune puce), donc on nomme la source. Le lien
+        # pointe sur /live-view et non plus sur l'accueil : « en cliquant
+        # dessus, je peux direct arriver sur la page live et pouvoir, le cas
+        # échéant, direct débloquer la porte ? ».
+        body = _("Prey detected (outside camera, {probability})").format(
+            probability=prob_txt
         )
-        send_fcm_notification_to_all_sync(_("Paws Flap"), body, url="/journey/")
+        send_notification_to_all(
+            _("Paws Flap"), body, url="/live-view", tag=f"kittyhack-prey-reolink-{_mono():.3f}"
+        )
+        send_fcm_notification_to_all_sync(_("Paws Flap"), body, url="/live-view")
         logging.info(
             f"[BACKEND] Reolink prey notification sent ({prob_txt}, {reason})."
         )
@@ -2400,16 +2404,24 @@ def backend_main(
                             except Exception as e:
                                 logging.warning(f"[BACKEND] Could not attach prey photo to push notification: {e}")
 
-                            lock_minutes = int(float(CONFIG['LOCK_DURATION_AFTER_PREY_DETECTION']) // 60)
-                            prey_body = _(
-                                "Prey detected ({cat}) - entry blocked for {minutes} min. "
-                                "False alarm? Reset the cooldown from Live view."
-                            ).format(cat=prey_cat_name, minutes=lock_minutes)
+                            # 16.11, Sid : « le message peut être juste "Nom du
+                            # chat : proie détectée" » - la phrase longue
+                            # passait mal sur sa montre. Et le lien va
+                            # maintenant droit sur /live-view, où se trouve le
+                            # bouton qui annule le blocage, au lieu de
+                            # l'accueil : « en cliquant dessus, je peux direct
+                            # arriver sur la page live et pouvoir, le cas
+                            # échéant, direct débloquer la porte ? ».
+                            prey_body = (
+                                _("{cat}: prey detected").format(cat=prey_cat_name)
+                                if prey_cat_name
+                                else _("Prey detected")
+                            )
                             send_notification_to_all(
-                                _("Paws Flap"), prey_body, url="/", tag=f"kittyhack-prey-{_mono():.3f}", image=prey_photo_url
+                                _("Paws Flap"), prey_body, url="/live-view", tag=f"kittyhack-prey-{_mono():.3f}", image=prey_photo_url
                             )
                             send_fcm_notification_to_all_sync(
-                                _("Paws Flap"), prey_body, url="/", image=prey_photo_url
+                                _("Paws Flap"), prey_body, url="/live-view", image=prey_photo_url
                             )
                             # 16.11: marqueur partagé avec
                             # _notify_prey_from_reolink - la caméra extérieure

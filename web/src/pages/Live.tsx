@@ -185,9 +185,9 @@ export default function LivePage() {
     setBusy(true);
     try {
       await fetchJson("/app-api/v1/live/reset-prey-cooldown", { method: "POST" });
-      setMessage("Délai de proie réinitialisé.");
+      setMessage("Blocage proie annulé, la chatière refonctionne normalement.");
     } catch {
-      setMessage("Échec de la réinitialisation.");
+      setMessage("Échec de l'annulation.");
     } finally {
       setBusy(false);
     }
@@ -410,7 +410,12 @@ export default function LivePage() {
             disabled={busy}
             className="rounded-lg bg-white/10 py-3 text-sm font-medium hover:bg-white/20 disabled:opacity-40"
           >
-            ⏱️ Réinitialiser le délai proie
+            {/* 16.11, Sid : « la dernière fois, j'ai pas osé cliquer dessus,
+                le texte m'a fait penser que ça relancerait un cycle de
+                fermeture ». C'était bien l'inverse : l'endpoint remet
+                prey_detection_mono à 0, donc il SUPPRIME le blocage. Son
+                libellé : « annuler blocage proie ». */}
+            ✅ Annuler le blocage proie
           </button>
         </div>
 
